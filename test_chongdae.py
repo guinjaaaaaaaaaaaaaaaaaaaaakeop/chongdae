@@ -572,14 +572,17 @@ def test_a_session_task_can_be_handed_to_the_locked_implementer():
     so the locked hands could only be used from a separate plan run."""
     with Project() as pj:
         write(os.path.join(pj.dir, "hunsu.lock.json"), {"roles": {"implementer": pj.fake_provider(RESPONSE_DONE)}})
-        assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
+        write(os.path.join(pj.dir, "plan", "PLAN.md"), "# plan\n\n## Q-add\n\n`add` appends one item.\n\n## Q-list\n\nlists them.\n")
+        assert run("init", "--session", "--goal", "g", "--from", "plan/PLAN.md", "--target", pj.dir)[0] == 0
         assert run("add", "mine", "--brief", "the session does this", "--target", pj.dir)[0] == 0
-        assert run("add", "theirs", "--role", "implementer", "--brief", "a fresh process does this", "--check", sys.executable + " -c 'raise SystemExit(0)'", "--target", pj.dir)[0] == 0
+        assert run("add", "theirs", "--role", "implementer", "--brief", "a fresh process does this", "--closes", "Q-add", "--check", sys.executable + " -c 'raise SystemExit(0)'", "--target", pj.dir)[0] == 0
         code, out = run("run", "--target", pj.dir)
         assert code == 0, out
         tasks = pj.state()["tasks"]
         assert tasks["mine"]["status"] == "done" and tasks["mine"]["performed_by"]["provider"] == "session"
         assert tasks["theirs"]["status"] == "done" and tasks["theirs"]["performed_by"]["provider"] == "command" and tasks["theirs"]["response"]["status"] == "done", tasks["theirs"]
+        req = json.load(open(os.path.join(chongdae.run_dir(pj.dir), "theirs.request.json")))
+        assert req["contract"] == {"Q-add": "## Q-add\n\n`add` appends one item."}, "a session run's --from names the document whose sections are the contract"
         assert run("add", "nobody", "--role", "modeler", "--brief", "no such provider", "--target", pj.dir)[0] == 0
         code, out = run("run", "--target", pj.dir)
         assert code == chongdae.DECISION and "role 'modeler' has no provider" in out, out
@@ -625,6 +628,106 @@ def test_a_native_provider_is_dispatched_by_the_session_and_its_answer_consumed_
         assert len(ts["attempts"]) == 1 and ts["attempts"][0]["status"] == "blocked"
         assert any("native subagent" in n for n in ts.get("non-claims", [])), ts.get("non-claims")
         assert not os.path.exists(os.path.join(d, "T1.pending.json"))
+
+
+def test_people_hired_before_and_after_a_task_answer_with_findings_the_record_keeps():
+    """`before` roles (a quibbler) run before any hands move: findings are plan questions, so the task waits until a human
+    `accept`s them; an empty answer lets the work through. `after` roles (a newbie) run once the checks pass, before the
+    gate; their findings go to the record and the report, never a verdict. A role with no provider is a non-claim."""
+    QUIBBLE = {"status": "done", "summary": "two open", "non-claims": [],
+               "findings": [{"kind": "undecided", "where": "Q-add", "quote": "`add` appends.", "why": "empty text?"},
+                            {"kind": "unchecked", "where": "brief", "quote": "every test passes", "why": "no check selects all"}]}
+    NEWBIE = {"status": "done", "summary": "tried it", "non-claims": [], "tried": [],
+              "findings": [{"kind": "unclear", "quote": "# todo", "observed": "nothing to type", "why": "the README has no command"}]}
+    with Project() as pj:
+        write(os.path.join(pj.dir, "hunsu.lock.json"), {"roles": {"quibble": pj.fake_provider(QUIBBLE, name="sibi"), "newbie": pj.fake_provider(NEWBIE, name="chojja")}})
+        assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
+        assert run("add", "T1", "--brief", "b", "--check", sys.executable + " -c 'raise SystemExit(0)'", "--before", "quibble", "modeler", "--after", "newbie", "--target", pj.dir)[0] == 0
+        code, out = run("run", "--target", pj.dir)
+        assert code == chongdae.DECISION and "quibble found 2 thing(s)" in out and "undecided @ Q-add: empty text? — “`add` appends.”" in out, out
+        ts = pj.state()["tasks"]["T1"]
+        assert ts["stages"]["quibble"]["response"]["findings"][0]["kind"] == "undecided" and ts["stages"]["quibble"]["by"]["provider"] == "command" and ts["stages"]["quibble"]["when"] == "before"
+        assert ts["status"] == "todo" and "response" not in ts, "the hands did not move"
+        assert os.path.exists(os.path.join(chongdae.run_dir(pj.dir), "T1.quibble.request.json"))
+        assert json.load(open(os.path.join(chongdae.run_dir(pj.dir), "T1.quibble.request.json")))["role"] == "quibble"
+        code2, out2 = run("run", "--target", pj.dir)
+        assert code2 == chongdae.DECISION and "quibble found 2" in out2, "asked again: still waiting, not re-run"
+        assert run("accept", "T1", "--target", pj.dir)[0] != 0, "who accepted?"
+        code, out = run("accept", "T1", "--by", "kim", "--target", pj.dir)
+        assert code == 0 and "accepted 2 finding(s) from quibble on T1" in out, out
+        code, out = run("run", "--target", pj.dir)
+        assert code == 0, out
+        ts = pj.state()["tasks"]["T1"]
+        assert ts["status"] == "done" and ts["stages"]["quibble"]["accepted"]["by"] == "kim"
+        assert ts["stages"]["modeler"] == {"skipped": "no provider"} and any("no provider for role 'modeler' (before)" in n for n in ts["non-claims"]), ts
+        assert ts["stages"]["newbie"]["when"] == "after" and ts["stages"]["newbie"]["response"]["findings"][0]["kind"] == "unclear"
+        assert os.path.exists(os.path.join(chongdae.run_dir(pj.dir), "T1.newbie.request.json"))
+        req = json.load(open(os.path.join(chongdae.run_dir(pj.dir), "T1.newbie.request.json")))
+        assert req["role"] == "newbie" and "touched" in req and "built" in req
+        # the report: both stages' findings, and the acceptance if it was delegated
+        code, out = run("report", "--target", pj.dir)
+        doc = json.loads(out[out.index("{"):])
+        sf = [f for f in doc["findings"] if f["kind"] == "stage-finding"]
+        assert len(sf) == 3 and any("(quibble, before)" in f["where"] for f in sf) and any("(newbie, after)" in f["where"] and "the README has no command" in f["text"] for f in sf), sf
+    with Project() as pj:
+        # a stage answer that did not finish is not an answer: kept under `failed`, the role is asked again on the next run
+        # (seen live: every hacheong member came back `failed` on a validator that mistook its own transcript for a tree change)
+        flaky = os.path.join(pj.dir, "flaky.py")
+        write(flaky, "import json, os, sys\nn = os.path.join(os.path.dirname(sys.argv[2]), 'flaky.count')\nk = int(open(n).read()) if os.path.exists(n) else 0\nopen(n, 'w').write(str(k + 1))\n"
+                     "json.dump({'status': 'failed' if k == 0 else 'done', 'summary': 'try %d' % k, 'non-claims': ['validator x'] if k == 0 else [], 'findings': []}, open(sys.argv[2], 'w'))\n")
+        write(os.path.join(pj.dir, "hunsu.lock.json"), {"roles": {"quibble": [sys.executable, flaky, "{request}", "{response}"]}})
+        assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
+        assert run("add", "T1", "--brief", "b", "--check", sys.executable + " -c 'raise SystemExit(0)'", "--before", "quibble", "--target", pj.dir)[0] == 0
+        code, out = run("run", "--target", pj.dir)
+        assert code == chongdae.DECISION and "quibble (before) did not finish (failed: validator x)" in out and "asks again" in out, out
+        st = pj.state()["tasks"]["T1"]["stages"]["quibble"]
+        assert "response" not in st and len(st["failed"]) == 1 and st["failed"][0]["response"]["status"] == "failed"
+        code, out = run("run", "--target", pj.dir)
+        assert code == 0, out
+        st = pj.state()["tasks"]["T1"]["stages"]["quibble"]
+        assert st["response"]["status"] == "done" and len(st["failed"]) == 1, "the failed try stays in the record next to the answer"
+    with Project() as pj:
+        # an empty quibble lets the work through; a plan's `stages` are the defaults for tasks that say neither; the shape check refuses junk
+        write(os.path.join(pj.dir, "hunsu.lock.json"), {"roles": {"quibble": pj.fake_provider(dict(QUIBBLE, findings=[]), name="sibi")}})
+        plan = {"artifact-type": "chongdae/plan@1", "goal": "g", "kind": "slice", "stages": {"before": ["quibble"]}, "providers": {"builder": pj.fake_provider(RESPONSE_DONE)},
+                "tasks": [{"id": "T1", "role": "builder", "needs": [], "checks": [[sys.executable, "-c", "raise SystemExit(0)"]]},
+                          {"id": "T2", "role": "builder", "needs": ["T1"], "before": [], "checks": [[sys.executable, "-c", "raise SystemExit(0)"]]}]}
+        write(os.path.join(pj.dir, "plan.json"), plan)
+        assert run("init", "--plan", "plan.json", "--target", pj.dir)[0] == 0
+        code, out = run("run", "--target", pj.dir)
+        assert code == 0, out
+        tasks = pj.state()["tasks"]
+        assert tasks["T1"]["stages"]["quibble"]["response"]["findings"] == [] and "stages" not in tasks["T2"], "T2 opted out of the plan's default"
+        assert chongdae.plan_problems({"artifact-type": "chongdae/plan@1", "goal": "g", "stages": {"during": []}, "tasks": [{"id": "x", "role": "r", "checks": [["x"]], "before": "quibble"}]}) == [
+            "x: `before` is a list of role names (people the plan hires around this task: [\"quibble\"], [\"newbie\"])",
+            "`stages` is {\"before\": [roles], \"after\": [roles]} — the plan's defaults for tasks that say neither"]
+
+
+def test_added_tasks_run_in_the_order_added_and_a_providers_task_starts_when_spawned():
+    """Task files are read in name order; a session run's tasks must advance in the order they were added (seen live: a session
+    renamed `tests-core` to `a-tests-core` to get the tests before the build). And a provider's task takes its `start`
+    snapshot when it is spawned, not at `add` — a build added alongside its test task saw the test-writer's file as its own
+    change and was rejected for touching protected tests, twice."""
+    with Project() as pj:
+        write(os.path.join(pj.dir, "hunsu.lock.json"), {"roles": {"implementer": pj.fake_provider(RESPONSE_DONE)}})
+        assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
+        assert run("add", "z-tests", "--brief", "the session writes the tests", "--target", pj.dir)[0] == 0
+        assert run("add", "a-build", "--role", "implementer", "--brief", "build", "--check", sys.executable + " -c 'raise SystemExit(0)'", "--tests", "tests/test_x.py", "--target", pj.dir)[0] == 0
+        st = pj.state()["tasks"]
+        assert st["z-tests"]["seq"] == 1 and st["a-build"]["seq"] == 2 and "start" in st["z-tests"] and "start" not in st["a-build"]
+        assert [t["id"] for t in chongdae.all_tasks(chongdae.load(os.path.join(chongdae.run_dir(pj.dir), "plan.json")), pj.state())] == ["z-tests", "a-build"]
+        write(os.path.join(pj.dir, "tests", "test_x.py"), "# written by the tests task, before the build starts\n")
+        code, out = run("run", "--target", pj.dir)
+        assert code == 0, out
+        st = pj.state()["tasks"]
+        assert st["z-tests"]["status"] == "done" and "tests/test_x.py" in st["z-tests"]["touched"]
+        assert st["a-build"]["status"] == "done" and "tests/test_x.py" not in (st["a-build"]["touched"] or []) and "rejected" not in st["a-build"], st["a-build"]
+        # recheck leaves a record
+        assert run("close", "--target", pj.dir)[0] == 0
+        code, out = run("recheck", "--target", pj.dir)
+        assert code == 0 and "recorded -> .chongdae/rechecks/" in out, out
+        recs = os.listdir(os.path.join(pj.dir, ".chongdae", "rechecks"))
+        assert len(recs) == 1 and json.load(open(os.path.join(pj.dir, ".chongdae", "rechecks", recs[0])))["green"] == [os.path.basename(chongdae.run_dir(pj.dir)) + "/a-build"]
 
 
 def test_session_run_tasks_added_as_the_work_goes_claims_and_the_write_hook():

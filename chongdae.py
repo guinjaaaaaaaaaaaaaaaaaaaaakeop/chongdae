@@ -115,8 +115,10 @@ def save_state(d, state):
 
 
 def all_tasks(plan, state):
-    """The plan's tasks plus the ones added during a session run (each carries its own definition in its task file)."""
-    return plan.get("tasks", []) + [ts["def"] for ts in state.get("tasks", {}).values() if "def" in ts]
+    """The plan's tasks plus the ones added during a session run (each carries its own definition in its task file), the
+    added ones in the order they were added (`seq`) — task files are read in name order, and a name is not a time."""
+    added = sorted((ts for ts in state.get("tasks", {}).values() if "def" in ts), key=lambda ts: (ts.get("seq", 0), ts["def"].get("id", "")))
+    return plan.get("tasks", []) + [ts["def"] for ts in added]
 
 
 def me(target):
@@ -220,6 +222,14 @@ def cmd_recheck(args):
     if unchecked:
         print("  no checks    %s (artifact tasks — their shape held then; nothing re-decides them here)" % ", ".join(unchecked))
     print("recheck: %d green · %d red · %d without checks" % (len(green), len(red), len(unchecked)))
+    # the verdict is a record, not a line on a screen: `.chongdae/rechecks/<time>.json`, so "recheck was green" can be pointed at
+    import subprocess
+    head = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=target, capture_output=True, text=True).stdout.strip() or None
+    rec = {"artifact-type": "chongdae/recheck@1", "at": now_utc(), "head": head, "green": [n for n, _ in green],
+           "red": [{"task": n, "failed": f} for n, f in red], "unchecked": unchecked}
+    path = os.path.join(target, RUNS, "rechecks", rec["at"].replace(":", "").replace("+", "p") + ".json")
+    save(path, rec)
+    print("  recorded -> %s" % os.path.relpath(path, target).replace(os.sep, "/"))
     return 1 if red else 0
 
 
@@ -322,6 +332,8 @@ def cmd_init(args):
             raise SystemExit("plan rejected:\n  " + "\n  ".join(problems))
     elif args.session:
         plan = {"artifact-type": "chongdae/plan@1", "goal": args.goal or "session", "kind": "session", "tasks": [], "providers": {"session": "session"}}   # other roles come from the lock: `add --role implementer` hands a task to the locked implementer
+        if getattr(args, "from_doc", None):
+            plan["from"] = args.from_doc   # the plan document whose `## Q-…` sections a task `closes`: providers get those sections as the contract
     elif args.merge:
         import subprocess
         base = args.base or subprocess.run(["git", "merge-base", "HEAD^1", "HEAD^2"], cwd=target, capture_output=True, text=True).stdout.strip()[:12]
@@ -360,10 +372,16 @@ def cmd_add(args):
         raise SystemExit("task %s exists" % args.id)
     task = {"id": args.id, "role": args.role, "brief": args.brief or "", "closes": args.closes or [], "needs": [], "checks": [shlex.split(c) for c in args.check or []],
             "tests": args.tests or [], "gate": "human" if args.gate == "human" else None}
+    for when in ("before", "after"):
+        if getattr(args, when) is not None:
+            task[when] = getattr(args, when)
     problems = [x for x in plan_problems({"artifact-type": "chongdae/plan@1", "goal": "x", "tasks": [task]}) if "needs `path`" not in x]
     if problems:
         raise SystemExit("task rejected:\n  " + "\n  ".join(problems))
-    ts = {"status": "todo", "def": task, "start": dirty(args.target)}
+    ts = {"status": "todo", "def": task, "seq": 1 + max([t.get("seq", 0) for t in state["tasks"].values()] or [0]), "added": now_utc()}
+    if task["role"] == "session":
+        ts["start"] = dirty(args.target)   # the session works between `add` and `run`: what changed is measured from now
+    # a provider's task starts when `run` spawns it (`start` is taken then): a build added alongside its test task must not see the test-writer's file as its own change
     if not task["checks"]:
         ts["non-claims"] = ["no check decides this task; done means the agent said so"]
     state["tasks"][args.id] = ts
@@ -472,6 +490,18 @@ def cmd_report(args):
                     stood = " (verifier accepted)" if d.get("verifier") == "accept" else " (no verifier)" if key == "confirmed" else ""
                     findings.append({"kind": "delegated", "where": "%s/%s" % (name, tid),
                                      "text": "%s%s passed by delegation%s: %s" % (label, " (%d)" % n if n else "", stood, deleg_text(d["delegated"]))})
+            staged = [(role, rec, "") for role, rec in (ts.get("stages") or {}).items()]
+            staged += [(role, rec, " attempt %d" % i) for i, a in enumerate(ts.get("attempts", []), 1) for role, rec in (a.get("stages") or {}).items()]
+            for role, rec, att in staged:
+                resp = rec.get("response") or {}
+                for f in resp.get("findings") or []:
+                    findings.append({"kind": "stage-finding", "where": "%s/%s%s (%s, %s)" % (name, tid, att, role, rec.get("when", "?")),
+                                     "text": "%s @ %s: %s — \u201c%s\u201d" % (f.get("kind"), f.get("where", ""), f.get("why", ""), f.get("quote", ""))})
+                acc = rec.get("accepted")
+                if isinstance(acc, dict) and "delegated" in acc:
+                    stamp(acc["delegated"], "%s/%s %s" % (name, tid, role))
+                    findings.append({"kind": "delegated", "where": "%s/%s %s" % (name, tid, role),
+                                     "text": "%s findings (%d) accepted by delegation: %s" % (role, len(resp.get("findings") or []), deleg_text(acc["delegated"]))})
             for i, a in enumerate(ts.get("attempts", []), 1):
                 if "delegated" in (a.get("retried") or {}):
                     stamp(a["retried"]["delegated"], "%s/%s attempt %d" % (name, tid, i))
@@ -597,7 +627,21 @@ def plan_problems(plan):
             out.append("%s: `tests` must be a list of project-relative paths (the contract's own checks, protected from the build)" % t.get("id"))
         if t.get("gate") is not None and not (t["gate"] == "human" or isinstance(t["gate"], dict)):
             out.append("%s: `gate` is \"human\" or {\"human\": true, \"delegate\": \"after-verifier\"}" % t.get("id"))
+        for when in ("before", "after"):
+            if t.get(when) is not None and not (isinstance(t[when], list) and all(isinstance(x, str) and x for x in t[when])):
+                out.append("%s: `%s` is a list of role names (people the plan hires around this task: [\"quibble\"], [\"newbie\"])" % (t.get("id"), when))
+    st = plan.get("stages")
+    if st is not None and not (isinstance(st, dict) and all(k in ("before", "after") and isinstance(v, list) for k, v in st.items())):
+        out.append("`stages` is {\"before\": [roles], \"after\": [roles]} — the plan's defaults for tasks that say neither")
     return out
+
+
+def stage_roles(plan, task, when):
+    """The roles hired around a task: the task's own `before`/`after` list, else the plan's `stages` defaults. Not the
+    verifier — that one is chongdae's own stage with a verdict; these answer with findings the person reads."""
+    if task.get(when) is not None:
+        return list(task[when])
+    return list((plan.get("stages") or {}).get(when, []))
 
 
 def dirty(target):
@@ -744,7 +788,8 @@ def spawn(target, run, task, provider, plan, attempts=(), stage="build", extra=N
                 m = re.search(r"^## +%s\b.*?(?=^## |\Z)" % re.escape(qid), text, re.M | re.S)
                 if m:
                     sections[qid] = m.group(0).strip()
-        req = {"artifact-type": "chongdae/request@1", "stage": stage, "run": os.path.basename(run), "task": task["id"], "role": task["role"] if stage == "build" else "verifier",
+        req = {"artifact-type": "chongdae/request@1", "stage": stage, "run": os.path.basename(run), "task": task["id"],
+               "role": task["role"] if stage == "build" else ("verifier" if stage == "verify" else stage),
                "target": os.path.abspath(target).replace(os.sep, "/"), "goal": plan["goal"], "brief": task.get("brief", ""),
                "closes": task.get("closes", []), "contract": sections, "checks": task.get("checks", []),
                "response": res_path.replace(os.sep, "/")}
@@ -932,6 +977,12 @@ def cmd_run(args):
         if "start" not in ts:
             ts["start"] = dirty(target)   # what the tree already differed in: `touched` is measured from here, not from HEAD
             save_state(d, state)
+        if ts["status"] == "todo":
+            # People hired before the work: each answers with findings about the contract; a finding is a plan question, so the
+            # task waits until a human accepts them (having written the answers into the plan) — the hands do not move on an open question.
+            code = run_stage(target, d, task, ts, state, plan, prov, "before", {"tests": task.get("tests", [])})
+            if code is not None:
+                return code
         if ts["status"] == "todo" and who != "session":
             # A command provider: a fresh process gets a request file and must leave a response file. chongdae reads only the response.
             if not ts.get("response"):
@@ -1010,6 +1061,12 @@ def cmd_run(args):
                 problems = CHECKS[task["produces"]](path, state)
                 if problems:
                     return stop("%s does not pass its shape check — fix it, then `chongdae run`" % task["produces"], *problems)
+            # People hired after the work: they see the result (touched files, the builder's report) and answer with findings for
+            # the record — not a verdict; the gate stands as declared, and the reviewer's report carries what they found.
+            built = {k: (ts.get("response") or {}).get(k) for k in ("summary", "verified", "non-claims")} if ts.get("response") else None
+            code = run_stage(target, d, task, ts, state, plan, prov, "after", {"touched": touched_files(target, ts.get("start")) or [], "tests": task.get("tests", []), "built": built})
+            if code is not None:
+                return code
             ts["status"] = "produced"
             ts["checks"] = task.get("checks", [])
             ts["touched"] = touched_files(target, ts.get("start"))   # what this task changed: the reviewer joins runs to files with it
@@ -1076,16 +1133,74 @@ def cmd_delegate(args):
     return 0
 
 
+def run_stage(target, d, task, ts, state, plan, prov, when, extra):
+    """Run the roles hired `before` or `after` a task that have not answered yet. Returns a stop's exit code when the task
+    must wait (a missing answer, unaccepted `before` findings), else None. Each answer is kept under `stages[role]` with who
+    gave it; a role with no provider is a non-claim, never a substitute."""
+    for role in stage_roles(plan, task, when):
+        rec = ts.setdefault("stages", {}).get(role)
+        if rec and rec.get("response"):
+            if when == "before" and rec["response"].get("findings") and not rec.get("accepted"):
+                return stage_wait_text(task["id"], role, rec["response"])
+            continue
+        if rec and rec.get("skipped"):
+            continue
+        provider = prov.get(role)
+        if provider is None:
+            ts.setdefault("non-claims", []).append("%s: no provider for role %r (%s) — nobody %s; nothing substituted" % (task["id"], role, when, "quarrelled with the contract" if when == "before" else "looked at the result"))
+            ts.setdefault("stages", {})[role] = {"skipped": "no provider"}
+            save_state(d, state)
+            continue
+        code, response, _ = spawn(target, d, task, provider, plan, ts.get("attempts", []), stage=role, extra=extra)
+        if code == DISPATCH:
+            return stop(dispatch_text("%s (%s)" % (task["id"], role), response))
+        by = performer(provider, argv=provider if isinstance(provider, list) else [provider], response=response, target=target)
+        if response.get("status") != "done":
+            # not an answer: kept as what happened (the reviewer sees it), but the role is asked again on the next `run`
+            ts.setdefault("stages", {}).setdefault(role, {}).setdefault("failed", []).append({"response": response, "by": by, "when": when})
+            save_state(d, state)
+            return stop("%s: %s (%s) did not finish (%s: %s) — fix the provider or its argv, then `chongdae run` asks again; or drop the role from the task"
+                        % (task["id"], role, when, response.get("status"), "; ".join(response.get("non-claims") or []) or response.get("summary", "")))
+        rec = {**ts.setdefault("stages", {}).get(role, {}), "response": response, "by": by, "when": when}
+        if native_argv(target, provider):
+            ts.setdefault("non-claims", []).append("%s: %s's answer was written by the session on a native subagent's behalf; chongdae did not observe the subagent" % (task["id"], role))
+        ts["stages"][role] = rec
+        save_state(d, state)
+        if when == "before" and response.get("findings"):
+            return stage_wait_text(task["id"], role, response)
+        print("  %s %s: %d finding(s)%s" % (role, task["id"], len(response.get("findings") or []), " — in the record" if when == "after" else ""))
+    return None
+
+
+def stage_wait_text(tid, role, response):
+    lines = ["%s: %s found %d thing(s) the contract leaves open — decide each in the plan (or dismiss it there), then `chongdae accept %s --by NAME | --delegated WHY`"
+             % (tid, role, len(response.get("findings") or []), tid)]
+    for f in response.get("findings") or []:
+        lines.append("%s @ %s: %s — \u201c%s\u201d" % (f.get("kind"), f.get("where", ""), f.get("why", ""), f.get("quote", "")))
+    return stop(*lines)
+
+
 def cmd_accept(args):
     """A human accepts the decisions a provider made beyond the contract (after writing them into the plan), or rejects by resetting the tree."""
     d = run_dir(args.target)
     state = load_state(d)
     ts = state["tasks"].get(args.task, {})
-    if not (ts.get("response") or {}).get("decisions"):
-        raise SystemExit("%s has no provider decisions to accept" % args.task)
+    # a `before` role's findings wait first (they precede the work); then the provider's decisions
+    pending = [(role, rec) for role, rec in (ts.get("stages") or {}).items()
+               if rec.get("when") == "before" and (rec.get("response") or {}).get("findings") and not rec.get("accepted")]
+    if not pending and not (ts.get("response") or {}).get("decisions"):
+        raise SystemExit("%s has no provider decisions or stage findings to accept" % args.task)
     if not (args.by or args.delegated):
         raise SystemExit("say who accepted (--by) or why the human delegated it (--delegated)")
-    ts["accepted"] = {**({"by": args.by} if args.by else delegation_record(d, args.delegated, "accept")), "at": now_utc()}
+    who = {**({"by": args.by} if args.by else delegation_record(d, args.delegated, "accept")), "at": now_utc()}
+    if pending:
+        role, rec = pending[0]
+        rec["accepted"] = who
+        save_state(d, state)
+        commit_record(args.target, os.path.basename(d), "accept %s findings on %s (%s)" % (role, args.task, "by " + args.by if args.by else "delegated"))
+        print("accepted %d finding(s) from %s on %s — the plan must now decide each; the work waits on nothing else from %s" % (len(rec["response"]["findings"]), role, args.task, role))
+        return 0
+    ts["accepted"] = who
     save_state(d, state)
     commit_record(args.target, os.path.basename(d), "accept decisions on %s (%s)" % (args.task, "by " + args.by if args.by else "delegated"))
     print("accepted %d decision(s) on %s — they are now the contract's; make sure the plan says so" % (len(ts["response"]["decisions"]), args.task))
@@ -1109,7 +1224,7 @@ def cmd_retry(args):
     if not (args.by or args.delegated):
         raise SystemExit("say who sent it again (--by) or why the human delegated it (--delegated)")
     attempt = {**(ts.pop("response", None) or {"status": "session"}), "retried": {**({"by": args.by} if args.by else delegation_record(d, args.delegated, "retry")), "at": now_utc()}}
-    for key in ("review", "rejected"):
+    for key in ("review", "rejected", "stages"):
         if key in ts:
             attempt[key] = ts.pop(key)
     ts.setdefault("attempts", []).append(attempt)
@@ -1161,6 +1276,7 @@ def main(argv=None):
             p.add_argument("--plan", default=None, help="a plan the session agent wrote (chongdae/plan@1): a path, or `-` for stdin (no file to write before the run exists); without it, the bootstrap plan")
             p.add_argument("--merge", action="store_true", help="the merge plan: recheck every completed run (+ coherence when the lock declares that role)")
             p.add_argument("--session", action="store_true", help="a session run: tasks are added as the work goes")
+            p.add_argument("--from", dest="from_doc", default=None, help="session run: the plan document (plan/PLAN.md) whose `## Q-…` sections tasks `--closes`; providers receive those sections as the contract")
             p.add_argument("--base", default=None, help="with --merge: the revision the other side's relations are compared from (default: the merge base of HEAD^1 and HEAD^2)")
             p.add_argument("--worktree", action="store_true", help="the run's container is physical: its own worktree and branch under .chongdae/wt/; `close` merges it back")
         if name == "close":
@@ -1191,6 +1307,8 @@ def main(argv=None):
             p.add_argument("--check", action="append", default=None, help="a check argv (quoted); repeatable")
             p.add_argument("--tests", nargs="*", default=None, help="the contract's test files, protected from the build")
             p.add_argument("--gate", choices=["human"], default=None)
+            p.add_argument("--before", nargs="*", default=None, help="roles to run before the work (their findings must be accepted first): --before quibble")
+            p.add_argument("--after", nargs="*", default=None, help="roles to run after the checks pass, before the gate; their findings go to the record: --after newbie")
     args = ap.parse_args(argv)
     return {"init": cmd_init, "status": cmd_status, "run": cmd_run, "confirm": cmd_confirm, "recheck": cmd_recheck, "accept": cmd_accept, "retry": cmd_retry,
             "add": cmd_add, "claim": cmd_claim, "drop": cmd_drop, "close": cmd_close, "report": cmd_report, "delegate": cmd_delegate}[args.cmd](args)
