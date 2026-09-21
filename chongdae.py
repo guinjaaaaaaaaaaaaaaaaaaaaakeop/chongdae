@@ -1,0 +1,1202 @@
+"""chongdae — runs a plan: a DAG of roles that produce artifacts, with checks in code and human gates in between.
+
+  init  --goal "..." | --plan FILE     start a run: the bootstrap plan (questions -> plan document -> modeler) or a plan the session agent wrote
+  init  --merge [--base REV]            after merging branches: the merge plan — recheck (+ coherence when the lock declares that role) behind a human gate
+  init  --session [--goal "..."]        a session run: no plan, tasks added as the work goes (`add`), closed when the session ends (`close`)
+  init  ... --worktree                  the run gets its own worktree + branch under .chongdae/wt/ (the shared tree may have other workers); `close` commits and merges it back — a conflict or red recheck becomes a merge run
+  add   <id> [--brief ..] [--closes Q..] [--check ARGV]... [--tests F]... [--gate human]   a task in the session run; the start snapshot is taken now
+  claim <id> [--by NAME]                take a task (defaults to git user.name); `run` skips tasks claimed by someone else
+  drop  <id> --why WHY [--by NAME]      a session task that will not be done: leaves the open set, stays in the record with the reason
+  close [--target DIR] [--run ID]       end a session run (open tasks recorded as such); a worktree run merges back — a completed plan run too
+  report [--since REV]                  what this record says a reviewer should see, as `dwitbuk/findings@1` on stdout: changes no run
+                                        claims (outside-run), runs that recorded no `touched` (unattributed), gates/decisions/retries passed
+                                        by delegation, and every non-claim. chongdae knows its runs and git; a reviewer knows the type
+  status [--target DIR]                 the run in progress (or the newest) and its open tasks; exit 0 always — for a skill's first look
+  run   [--target DIR]                  advance one step. Exit 2 = stopped for the session agent or a human; the last line says what to do
+  confirm <task> [--by NAME | --delegated "why"] [--target DIR]   record the human's confirmation of a produced artifact
+  delegate --scope confirm,accept,... --why "..." --by NAME [--run ID]   declare a batch pre-approval once, as its own judgment; later
+                                        judgments reference it: `--delegated D-xxxx` (recorded as {ref}, not the words repeated)
+  accept  <task> [--by NAME | --delegated WHY]   a human accepts decisions a provider made beyond the contract (after writing them into the plan)
+  retry   <task> [--by NAME | --delegated WHY]   a human sends a stopped task (blocked, failed, no response) out again; the next call gets the earlier attempts
+  recheck [--target DIR]                after a merge: re-run every completed run's checks on this tree. exit 1 if any is red now
+
+A plan may declare a `verifier` role (providers.verifier — a command; never the hands that built). After a task's checks pass and
+before its gate, the verifier gets the contract, the touched files and the builder's report, and answers `dwitbuk/review@1`
+(accept | reject + quoted findings). Reject is the failed path: `retry`. A task's `tests` are the contract's: a build that changes
+them is rejected. A gate `{"human": true, "delegate": "after-verifier"}` refuses delegation until an accept.
+
+chongdae has no brain. It does not write questions, plans or code. When a task's provider is `session`, it stops and asks the
+session agent (the brain) to produce the artifact; then it checks the artifact's shape and stops again for the human.
+Roles are names; who provides them comes from hunsu.lock.json `roles` (or the plan's own `providers`). A role with no
+provider is skipped and recorded as a non-claim — never substituted.
+Artifacts a task produces live in the project (task `path` is project-relative). `.chongdae/` holds only how a run went:
+`plan.json` (the intent), `state.json` (status), `tasks/<id>.json` (one file per task, so two people's work on one run merges).
+The run is the agent's container: the plugin's PreToolUse hook refuses Edit/Write in a project with no run in progress.
+"""
+import argparse
+import io
+import json
+import os
+import re
+import shlex
+import shutil
+import sys
+
+RUNS = ".chongdae"
+DECISION = 2
+DISPATCH = 3   # spawn: a native provider — the session must run the subagent and write the answer, then `run` again
+
+BOOTSTRAP = [
+    {"id": "questions", "role": "questions", "produces": "plan/questions@1", "path": "plan/questions.json",
+     "needs": [], "gate": "human",
+     "brief": "List the questions this goal must answer for the work to count as done. Each: {\"id\": \"Q-<word>\", \"text\": \"...\"} — "
+              "name the id after the question (Q-drafts, Q-feed-order), never a bare number: numbered ids collide when parallel workers each add \"the next number\" and someone must renumber at the merge. "
+              "If the questions cannot be settled because the goal is under-shaped, say so instead: {\"under-shaped\": \"why\"} — the run then turns into an ideation plan."},
+    {"id": "plan", "role": "plan", "produces": "plan/document@1", "path": "plan/PLAN.md",
+     "needs": ["questions"], "gate": "human",
+     "brief": "Write the plan as Markdown. One `## <Q-id> ...` section per question, answering it with what will be built and a testable "
+              "acceptance criterion (a sentence a check can decide). Slices come last under `## slices`, one per line, each naming the question ids it closes."},
+    {"id": "model", "role": "modeler", "produces": "sidecar/registry@1", "path": None,
+     "needs": ["plan"], "gate": None, "optional": True,
+     "brief": "Register the plan document and its question sections in the project's semantic model; declare question<->section relations and the CQ 'every question has a section'."},
+]
+
+
+def merge_plan(target, base):
+    """The merge is a run: two branches were each right alone; this tree must be right again, and someone must say so.
+    One task — recheck and coherence are one job on one tree — behind one human gate. chongdae names its own recheck; the
+    coherence checks come from the `coherence` role (hunsu.lock.json `roles`, argv with `{base}`) — a runner never names a provider."""
+    checks = [["python3", "{plugin:chongdae}/chongdae.py", "recheck"]]   # run_checks falls back to `python` where only that exists
+    brief = "Every completed run's checks, green again on the merged tree. Red means fix the tree, not the record."
+    coherence = providers(target, {}).get("coherence")
+    non_claims = []
+    if coherence:
+        checks += [[a.replace("{base}", base) for a in argv] for argv in (coherence if isinstance(coherence[0], list) else [coherence])]
+        brief += " Relations one branch confirmed on what the other changed: re-read each; retire or re-confirm, until the coherence check is green."
+    else:
+        non_claims.append("no `coherence` role in the lock: what a semantic model would have said about this merge is not said")
+    return {"artifact-type": "chongdae/plan@1", "goal": "merge (base %s)" % base, "kind": "merge", "base": base, "providers": {"merger": "session"},
+            "non-claims": non_claims, "tasks": [{"id": "merge", "role": "merger", "needs": [], "gate": "human", "checks": checks, "brief": brief}]}
+
+
+def load(path):
+    if not os.path.exists(path):
+        return {}
+    with io.open(path, encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+def save(path, data):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with io.open(path, "w", encoding="utf-8", newline="\n") as fh:
+        json.dump(data, fh, ensure_ascii=False, indent=2)
+        fh.write("\n")
+
+
+def load_state(d):
+    """The run's state: status from state.json, tasks from tasks/<id>.json (older runs kept tasks inside state.json — read as is)."""
+    state = load(os.path.join(d, "state.json"))
+    tasks = state.get("tasks") or {}
+    folder = os.path.join(d, "tasks")
+    if os.path.isdir(folder):
+        for name in sorted(os.listdir(folder)):
+            if name.endswith(".json"):
+                tasks[name[:-5]] = load(os.path.join(folder, name))
+    state["tasks"] = tasks
+    state.setdefault("non-claims", [])
+    return state
+
+
+def save_state(d, state):
+    """One file per task, so tasks done on different branches merge as distinct files. state.json keeps only the run's own fields."""
+    for tid, ts in state.get("tasks", {}).items():
+        save(os.path.join(d, "tasks", tid + ".json"), {"artifact-type": "chongdae/task@1", **ts})
+    save(os.path.join(d, "state.json"), {"artifact-type": "chongdae/run@1", **{k: v for k, v in state.items() if k != "tasks"}})
+
+
+def all_tasks(plan, state):
+    """The plan's tasks plus the ones added during a session run (each carries its own definition in its task file)."""
+    return plan.get("tasks", []) + [ts["def"] for ts in state.get("tasks", {}).values() if "def" in ts]
+
+
+def me(target):
+    """Who is acting on this machine: CHONGDAE_USER, else git user.name. Claims are compared against it."""
+    import subprocess
+    return os.environ.get("CHONGDAE_USER") or subprocess.run(["git", "config", "user.name"], cwd=target, capture_output=True, text=True).stdout.strip() or "unknown"
+
+
+def now_utc():
+    """The moment of a judgment, in UTC with the offset written (git writes both times with offsets; ours are normalized).
+    For display and honesty only — order between machines is never decided by clocks, only by the record's own git history."""
+    import datetime
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00")
+
+
+def head_sha(target):
+    """The commit this tree stands on — a run pinned to it can be ordered by ancestry, not by anyone's clock."""
+    import subprocess
+    done = subprocess.run(["git", "rev-parse", "HEAD"], cwd=target, capture_output=True, text=True)
+    return done.stdout.strip() if done.returncode == 0 and done.stdout.strip() else None
+
+
+def commit_record(target, run_name, message):
+    """A judgment was written into the run's record: commit that record, and only it, right now. git's immutability then
+    notarizes the judgment — its content (the tree hash), its time (committer date), and any later edit (a visible diff).
+    Without this the record's durability was a habit of whoever remembered to commit; now it is the engine's.
+    The paths are pinned to the run's directory so a dirty working tree (someone else's work in flight) is never swept in.
+    Best effort by design: no repo, nothing staged, or an identity-less git config must not stop the run — the record on
+    disk is still the record; `close` and the reviewer see uncommitted records as what they are."""
+    import subprocess
+
+    def git(*a):
+        return subprocess.run(["git", *a], cwd=target, capture_output=True, text=True, encoding="utf-8", errors="replace")
+
+    rel = RUNS + "/" + run_name
+    if git("add", "--", rel).returncode:
+        return None
+    if not git("diff", "--cached", "--quiet", "--", rel).returncode:   # nothing of this run staged -> nothing to notarize
+        return None
+    done = git("commit", "-m", "%s: %s" % (run_name, message), "--", rel)
+    if done.returncode:
+        return None
+    return head_sha(target)
+
+
+def non_claims(state):
+    """Every non-claim in the run, prefixed with its task — the reader's view over the per-task files (and older runs' shared list)."""
+    out = list(state.get("non-claims", []))
+    for tid, ts in state.get("tasks", {}).items():
+        out += ["%s: %s" % (tid, n) for n in ts.get("non-claims", [])]
+    return out
+
+
+def all_runs(target):
+    root = os.path.join(target, RUNS)
+    return sorted(os.path.join(root, d) for d in os.listdir(root) if d.startswith("run-")) if os.path.isdir(root) else []
+
+
+def run_dir(target, run_id=None):
+    """The run to act on: the one named, else the one still running, else the newest by id. Never by file time (clones share none)."""
+    runs = all_runs(target)
+    if run_id:
+        match = [r for r in runs if os.path.basename(r) == run_id]
+        if not match:
+            raise SystemExit("no run %s" % run_id)
+        return match[0]
+    running = [r for r in runs if load_state(r).get("status") == "running"]
+    return (running or runs or [None])[-1]
+
+
+def is_self_recheck(argv):
+    """A check that is chongdae's own recheck. Re-running it from inside a recheck recurses without end
+    (a merge run's check is `chongdae recheck`; recheck re-runs every completed run's checks — including that one).
+    The verdict it stood for is exactly what the outer recheck is already computing, so it is skipped, not lost."""
+    return any(a == "recheck" for a in argv) and any("chongdae" in str(a) for a in argv)
+
+
+def cmd_recheck(args):
+    """After a merge: every completed run's checks, re-run on this tree. A run's `done` was true on its own branch; here it must be true again."""
+    target = args.target
+    red, green, unchecked = [], [], []
+    for r in all_runs(target):
+        plan, state = load(os.path.join(r, "plan.json")), load_state(r)
+        if state.get("status") != "complete":
+            continue
+        for task in all_tasks(plan, state):
+            if state["tasks"].get(task["id"], {}).get("status") != "done":
+                continue
+            checks = [c for c in task.get("checks", []) if not is_self_recheck(c)]
+            if not checks:
+                unchecked.append("%s/%s" % (os.path.basename(r), task["id"]))
+                continue
+            failed = run_checks(target, checks)
+            (red if failed else green).append(("%s/%s" % (os.path.basename(r), task["id"]), failed))
+    for name, _ in green:
+        print("  still green  %s" % name)
+    for name, failed in red:
+        print("  RED          %s" % name)
+        for f in failed:
+            print("      %s" % f)
+    if unchecked:
+        print("  no checks    %s (artifact tasks — their shape held then; nothing re-decides them here)" % ", ".join(unchecked))
+    print("recheck: %d green · %d red · %d without checks" % (len(green), len(red), len(unchecked)))
+    return 1 if red else 0
+
+
+def providers(target, plan):
+    """role -> provider. The lock's `roles` (a human declaration hunsu checked) first; the plan's own `providers` may add or override."""
+    lock = load(os.path.join(target, "hunsu.lock.json"))
+    out = dict(lock.get("roles", {}))
+    out.update(plan.get("providers", {}))
+    return out
+
+
+# ---------------------------------------------------------------- artifact checks (shape only; meaning is the human's)
+
+def check_questions(path, state):
+    doc = load(path)
+    if doc.get("under-shaped"):
+        return ["the goal is under-shaped: %s — this run should become an ideation plan (not implemented yet)" % doc["under-shaped"]]
+    qs = doc.get("questions")
+    if not isinstance(qs, list) or not qs:
+        return ["questions.json needs a non-empty `questions` list"]
+    bad = [q for q in qs if not (isinstance(q, dict) and re.fullmatch(r"Q[\w-]+", str(q.get("id", ""))) and str(q.get("text", "")).strip())]
+    return ["%d question(s) lack an id like Q1 or Q-drafts, or a text" % len(bad)] if bad else []
+
+
+def check_plan(path, state):
+    text = io.open(path, encoding="utf-8").read() if os.path.exists(path) else ""
+    ids = [q["id"] for q in load(os.path.join(os.path.dirname(path), "questions.json")).get("questions", [])]   # sibling: plan/questions.json
+    headings = re.findall(r"^## +(Q[\w-]+)\b", text, re.M)
+    missing = [i for i in ids if i not in headings]
+    problems = []
+    if missing:
+        problems.append("no `## <id>` section for %s" % ", ".join(missing))
+    if not re.search(r"^## +slices", text, re.M):
+        problems.append("no `## slices` section")
+    return problems
+
+
+CHECKS = {"plan/questions@1": check_questions, "plan/document@1": check_plan}
+
+
+# ---------------------------------------------------------------- the state machine
+
+def stop(msg, *lines):
+    for line in lines:
+        print("  " + line)
+    print("decision: " + msg)
+    return DECISION
+
+
+def make_worktree(main, run_name):
+    """The run's container, physically: a worktree under .chongdae/wt/<run-id> on branch run/<run-id>, branched from HEAD.
+    A tree with git history may have other workers (people, agents, other machines) — the shared tree is not this run's to
+    dirty. Machine-local files the environment needs (hunsu.local.json) are copied; everything else travels by commit."""
+    import subprocess
+    if subprocess.run(["git", "rev-parse", "HEAD"], cwd=main, capture_output=True).returncode:
+        raise SystemExit("--worktree needs a commit to branch from — commit first (or run without --worktree)")
+    path = os.path.join(main, RUNS, "wt", run_name)
+    done = subprocess.run(["git", "worktree", "add", "-b", "run/" + run_name, path], cwd=main, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    if done.returncode:
+        raise SystemExit("git worktree add failed: %s" % (done.stderr or done.stdout).strip()[-300:])
+    # ignore the wt dir from inside the worktree's own .gitignore — main's tree stays untouched; the line lands in main with the merge
+    ignore = os.path.join(path, ".gitignore")
+    lines = io.open(ignore, encoding="utf-8").read().split("\n") if os.path.exists(ignore) else []
+    if RUNS + "/wt/" not in lines:
+        io.open(ignore, "a", encoding="utf-8", newline="\n").write(("" if not lines or lines[-1] == "" else "\n") + RUNS + "/wt/\n")
+    local = os.path.join(main, "hunsu.local.json")
+    if os.path.exists(local):
+        shutil.copy(local, os.path.join(path, "hunsu.local.json"))
+    print("worktree %s (branch run/%s) — work there; `close` commits it and merges back" % (path.replace(os.sep, "/"), run_name))
+    return path
+
+
+def cmd_init(args):
+    target = args.target
+    if run_dir(target) and load_state(run_dir(target)).get("status") == "running":
+        raise SystemExit("a run is already in progress: %s — finish it or remove it" % run_dir(target))
+    # Run ids are unique across machines (date + random), so runs made on different branches merge as distinct directories.
+    # UTC, so the id's lexical order approximates creation order regardless of timezone — an approximation for humans only;
+    # real order is `based_on`/`landed` ancestry in git, never a clock (id order can still invert under clock skew).
+    import secrets, time
+    run_name = "run-%s-%s" % (time.strftime("%Y%m%d-%H%M%S", time.gmtime()), secrets.token_hex(2))
+    if getattr(args, "worktree", False):
+        target = make_worktree(args.target, run_name)   # the run's container is physical: its own worktree, its own branch
+    d = os.path.join(target, RUNS, run_name)
+    if args.plan:
+        if args.plan == "-":
+            # the plan is intent written before its run exists, so the write gate (no run -> no project write) would refuse it in the
+            # tree; stdin needs no file, and the run keeps the only copy that matters (plan.json)
+            try:
+                plan = json.loads(sys.stdin.read() or "")
+            except ValueError as err:
+                raise SystemExit("--plan -: stdin is not JSON (%s)" % err)
+        else:
+            plan_path = args.plan if os.path.exists(args.plan) else os.path.join(target, args.plan)   # relative to the target, like a task's path
+            if not os.path.exists(plan_path):
+                raise SystemExit("no plan file %s" % args.plan)
+            plan = load(plan_path)
+        problems = plan_problems(plan)
+        if problems:
+            raise SystemExit("plan rejected:\n  " + "\n  ".join(problems))
+    elif args.session:
+        plan = {"artifact-type": "chongdae/plan@1", "goal": args.goal or "session", "kind": "session", "tasks": [], "providers": {"session": "session"}}   # other roles come from the lock: `add --role implementer` hands a task to the locked implementer
+    elif args.merge:
+        import subprocess
+        base = args.base or subprocess.run(["git", "merge-base", "HEAD^1", "HEAD^2"], cwd=target, capture_output=True, text=True).stdout.strip()[:12]
+        if not base:
+            raise SystemExit("--merge needs --base REV (HEAD is not a merge commit, so no merge base can be found)")
+        plan = merge_plan(target, base)
+    else:
+        plan = {"artifact-type": "chongdae/plan@1", "goal": args.goal, "kind": "bootstrap", "tasks": BOOTSTRAP,
+                "providers": {"questions": "session", "plan": "session"}}   # the plan says who provides; chongdae assumes nothing
+    save(os.path.join(d, "plan.json"), plan)
+    state = {"status": "running", "tasks": {t["id"]: {"status": "todo"} for t in plan["tasks"]}, "non-claims": list(plan.get("non-claims", []))}
+    state["created"] = {"at": now_utc(), "based_on": head_sha(target)}   # the commit this run starts from: its place in history is ancestry, not its id's timestamp
+    if getattr(args, "worktree", False):
+        state["worktree"] = {"main": os.path.abspath(args.target).replace(os.sep, "/"), "branch": "run/" + run_name}
+    save_state(d, state)
+    commit_record(target, run_name, "init (%s)" % plan.get("kind", "?"))
+    print("run %s: goal %r — %s plan (%s). Now %s."
+          % (os.path.basename(d), plan["goal"], plan.get("kind", "?"), " -> ".join(t["id"] for t in plan["tasks"]) or "no tasks yet",
+             "`chongdae add <id> ...` for each piece of work, `chongdae run` to record it, `chongdae close` at the end" if args.session else "`chongdae run`"))
+    if getattr(args, "worktree", False):
+        print("this run lives in its worktree — every command from here on: --target %s" % target.replace(os.sep, "/"))
+    return 0
+
+
+def cmd_add(args):
+    """A task in a session run, defined when the work starts. Its start snapshot is taken now, so `touched` is this task's own."""
+    d = run_dir(args.target)
+    if not d:
+        raise SystemExit("no run in progress — `chongdae init --session`")
+    plan, state = load(os.path.join(d, "plan.json")), load_state(d)
+    if state.get("status") != "running":
+        raise SystemExit("no run in progress — `chongdae init --session`")
+    if plan.get("kind") != "session":
+        raise SystemExit("tasks are added to session runs only; a plan run's tasks are the plan's")
+    if args.id in state["tasks"] or any(t.get("id") == args.id for t in plan.get("tasks", [])):
+        raise SystemExit("task %s exists" % args.id)
+    task = {"id": args.id, "role": args.role, "brief": args.brief or "", "closes": args.closes or [], "needs": [], "checks": [shlex.split(c) for c in args.check or []],
+            "tests": args.tests or [], "gate": "human" if args.gate == "human" else None}
+    problems = [x for x in plan_problems({"artifact-type": "chongdae/plan@1", "goal": "x", "tasks": [task]}) if "needs `path`" not in x]
+    if problems:
+        raise SystemExit("task rejected:\n  " + "\n  ".join(problems))
+    ts = {"status": "todo", "def": task, "start": dirty(args.target)}
+    if not task["checks"]:
+        ts["non-claims"] = ["no check decides this task; done means the agent said so"]
+    state["tasks"][args.id] = ts
+    save_state(d, state)
+    print("added %s to %s%s. Work, then `chongdae run`." % (args.id, os.path.basename(d), " (no checks — done will be a claim, recorded as such)" if not task["checks"] else ""))
+    return 0
+
+
+def cmd_drop(args):
+    """A session task that will not be done — mis-specified, superseded, abandoned — leaves the open set with its reason, and
+    stays in the record as `dropped`. Without this the cheap way out of a task was to close the run around it (or start a
+    new run), which left it open forever and nobody looking; a drop is a decision, written down."""
+    d = run_dir(args.target)
+    plan, state = (load(os.path.join(d, "plan.json")), load_state(d)) if d else ({}, {})
+    if plan.get("kind") != "session" or state.get("status") != "running":
+        raise SystemExit("no session run in progress — only a session run's own tasks can be dropped; a plan's tasks are the plan's")
+    ts = state["tasks"].get(args.task)
+    if not ts:
+        raise SystemExit("no task %s" % args.task)
+    if ts["status"] in ("done", "skipped", "dropped"):
+        raise SystemExit("%s is %s — nothing to drop" % (args.task, ts["status"]))
+    ts["status"] = "dropped"
+    ts["dropped"] = {"why": args.why, "by": args.by if args.by is not None else me(args.target), "at": now_utc()}
+    ts["touched"] = touched_files(args.target, ts.get("start"))   # what changed in its window stays attributed to it, dropped or not
+    ts.setdefault("non-claims", []).append("dropped, not done: %s" % args.why)
+    save_state(d, state)
+    commit_record(args.target, os.path.basename(d), "drop %s: %s" % (args.task, args.why))
+    print("dropped %s: %s" % (args.task, args.why))
+    return 0
+
+
+def cmd_claim(args):
+    """A person takes a task. chongdae does not assign; `run` on other machines skips what is claimed here."""
+    d = run_dir(args.target)
+    if not d:
+        raise SystemExit("no run")
+    state = load_state(d)
+    ts = state["tasks"].get(args.task)
+    if not ts:
+        raise SystemExit("no task %s" % args.task)
+    who = args.by if args.by is not None else me(args.target)
+    if ts.get("claimed_by") and ts["claimed_by"] != who:
+        raise SystemExit("%s is claimed by %s — they release it (claim --by \"\") or you agree with them, not with chongdae" % (args.task, ts["claimed_by"]))
+    ts["claimed_by"] = who or None
+    save_state(d, state)
+    print("%s claimed by %s" % (args.task, who) if who else "%s released" % args.task)
+    return 0
+
+
+def cmd_report(args):
+    """chongdae's own findings about its record, typed `dwitbuk/finding@1` so a reviewer collects them without knowing chongdae."""
+    import subprocess
+    target = args.target
+    findings = []
+
+    def git(*a):
+        done = subprocess.run(["git", *a], cwd=target, capture_output=True, text=True, encoding="utf-8", errors="replace")
+        return done.stdout if done.returncode == 0 else None
+
+    # the tree vs the ledger: which changed files does no completed run claim?
+    changed = set()
+    if args.since:
+        for line in (git("diff", "--name-only", "%s..HEAD" % args.since, "--", ".") or "").splitlines():
+            changed.add(line.strip().replace("\\", "/"))
+    for line in (git("status", "--porcelain", "--untracked-files=all", "--", ".") or "").splitlines():
+        if len(line) > 3:
+            changed.add(line[3:].strip().replace("\\", "/"))
+    prefix = (git("rev-parse", "--show-prefix") or "").strip().replace("\\", "/")
+    changed = {p[len(prefix):] if prefix and p.startswith(prefix) else p for p in changed}
+    changed = {p for p in changed if not p.startswith((RUNS + "/", ".mangsang/", ".dwitbuk/", ".claude/", "reviews/", "hunsu")) and p != ".gitignore"}   # records, machine-local state, the host's settings, the environment (hunsu's own report covers it). Naming sibling record dirs here is chongdae's one known coupling to product names — accepted until a lock-declared record-paths convention earns its keep
+    claimed, unattributed = set(), []
+    for r in all_runs(target):
+        name, plan, state = os.path.basename(r), load(os.path.join(r, "plan.json")), load_state(r)
+        if state.get("status") != "complete":
+            continue
+        for task in all_tasks(plan, state):
+            ts = state["tasks"].get(task["id"], {})
+            if ts.get("status") in ("done", "dropped") and "touched" in ts:   # a dropped task's window is still a claim on what changed in it
+                claimed.update(ts["touched"] or [])
+            elif ts.get("status") == "done" and task.get("checks"):
+                unattributed.append("%s/%s" % (name, task["id"]))
+    for path in sorted(changed - claimed):
+        findings.append({"kind": "outside-run", "where": path, "files": [path],
+                         "text": "changed since %s; no completed run recorded touching it" % (args.since or "the beginning")})
+    if unattributed:
+        findings.append({"kind": "unattributed", "where": ", ".join(unattributed),
+                         "text": "these runs completed without recording touched files; changes they made cannot be told from work outside runs"})
+    # what no human decided, and what nobody claims
+    def deleg_text(v):
+        return "ref %s" % v.get("ref") if isinstance(v, dict) else v
+
+    for r in all_runs(target):
+        name, plan, state = os.path.basename(r), load(os.path.join(r, "plan.json")), load_state(r)
+        stamps = {}   # literal delegated reason -> where it was used, within this one run (refs are exempt: pointing at one declared judgment is their purpose)
+
+        def stamp(v, where):
+            if isinstance(v, str):
+                stamps.setdefault(v, []).append(where)
+
+        for tid, ts in state.get("tasks", {}).items():
+            for key, label in (("confirmed", "gate"), ("accepted", "provider decisions")):
+                d = ts.get(key)
+                if isinstance(d, dict) and "delegated" in d:
+                    stamp(d["delegated"], "%s/%s" % (name, tid))
+                    n = len((ts.get("response") or {}).get("decisions", [])) if key == "accepted" else None
+                    stood = " (verifier accepted)" if d.get("verifier") == "accept" else " (no verifier)" if key == "confirmed" else ""
+                    findings.append({"kind": "delegated", "where": "%s/%s" % (name, tid),
+                                     "text": "%s%s passed by delegation%s: %s" % (label, " (%d)" % n if n else "", stood, deleg_text(d["delegated"]))})
+            for i, a in enumerate(ts.get("attempts", []), 1):
+                if "delegated" in (a.get("retried") or {}):
+                    stamp(a["retried"]["delegated"], "%s/%s attempt %d" % (name, tid, i))
+                    findings.append({"kind": "delegated", "where": "%s/%s attempt %d" % (name, tid, i),
+                                     "text": "retry after %s passed by delegation: %s" % (a.get("status"), deleg_text(a["retried"]["delegated"]))})
+                # a verifier's reject outlives the attempt it stopped: the reviewer's ledger sees it, and sees it again if it recurs
+                for f in ((a.get("review") or {}).get("findings") or []):
+                    findings.append({"kind": "verifier-reject", "where": "%s/%s attempt %d: %s" % (name, tid, i, f.get("where", "")),
+                                     "text": "%s: %s — record: \u201c%s\u201d — tree: \u201c%s\u201d" % (f.get("kind"), f.get("why"), f.get("record_quote"), f.get("tree_quote"))})
+        # one reason string stamped across 3+ judgments: one judgment claiming to be many — the lie is the format's, and the format now has `delegate`
+        for reason, wheres in sorted(stamps.items()):
+            if len(wheres) >= 3:
+                findings.append({"kind": "delegation-stamp", "where": ", ".join(wheres),
+                                 "text": "the same delegated reason %r stamped on %d judgments — a repeated stamp is one judgment claiming to be many; "
+                                         "declare it once (`chongdae delegate`) and reference it (--delegated D-xxxx), or write per-judgment reasons" % (reason, len(wheres))})
+        for n in non_claims(state):
+            findings.append({"kind": "non-claim", "where": name, "text": n})
+        # a task left open when its run closed, or rejected and never retried: the cheap way past a rejection is to abandon the
+        # task and open a new run — the record keeps it visible; this line makes someone look
+        if state.get("status") == "complete":
+            for tid, ts in state.get("tasks", {}).items():
+                if ts.get("status") not in ("done", "skipped", "dropped"):
+                    rej = ts.get("rejected")
+                    findings.append({"kind": "left-open", "where": "%s/%s" % (name, tid),
+                                     "text": ("rejected by %s (%s) and never retried" % (rej["by"], rej["why"]) if rej else "left open when the run closed")
+                                             + " — `chongdae drop %s --why` if it will not be done, or a run that does it" % tid})
+    print(json.dumps({"artifact-type": "dwitbuk/findings@1", "source": "chongdae", "findings": findings}, ensure_ascii=False, indent=1))
+    return 0
+
+
+def cmd_close(args):
+    """A session run ends. Open tasks stay in the record as open; nothing is decided for them.
+    A worktree run also merges back: commit the worktree, merge into main — clean merge + green recheck ends the run;
+    a conflict or a red recheck leaves the branch for a merge run (`init --merge` in main). The worktree is removed
+    only when the merge landed; otherwise it stays, and the record says why."""
+    d = run_dir(args.target, getattr(args, "run", None))
+    plan, state = (load(os.path.join(d, "plan.json")), load_state(d)) if d else ({}, {})
+    wt = state.get("worktree")
+    if plan.get("kind") != "session":
+        # a plan/bootstrap run in a worktree ends by `run` (complete); `close` is then its way back to main
+        if not (wt and state.get("status") == "complete"):
+            raise SystemExit("no session run in progress" + (" — this %s run is %s; `chongdae run` completes it, then `close` merges its worktree back" % (plan.get("kind"), state.get("status")) if wt else ""))
+        return merge_back(args.target, wt, os.path.basename(d))
+    if state.get("status") != "running":
+        raise SystemExit("no session run in progress")
+    open_ = [tid for tid, ts in state["tasks"].items() if ts["status"] not in ("done", "skipped", "dropped")]
+    state["status"] = "complete"
+    state["open"] = open_
+    save_state(d, state)
+    commit_record(args.target, os.path.basename(d), "close (%d open)" % len(open_))
+    dropped = [tid for tid, ts in state["tasks"].items() if ts["status"] == "dropped"]
+    print("closed %s: %d task(s) done, %d open (%s)%s. non-claims: %s" % (os.path.basename(d), sum(ts["status"] == "done" for ts in state["tasks"].values()), len(open_), ", ".join(open_) or "-",
+                                                                 ", %d dropped (%s)" % (len(dropped), ", ".join(dropped)) if dropped else "", non_claims(state) or "none"))
+    if wt:
+        return merge_back(args.target, wt, os.path.basename(d))
+    return 0
+
+
+def merge_back(wt_path, wt, run_name):
+    """Commit the worktree and merge its branch into main. Exit 0: landed, worktree removed. Exit 2: a human or a
+    merge run must finish it — the branch and worktree stay."""
+    import subprocess
+    main, branch = wt["main"], wt["branch"]
+
+    def git(cwd, *a):
+        return subprocess.run(["git", *a], cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+
+    if git(wt_path, "add", "-A").returncode:
+        raise SystemExit("git add failed in the worktree")
+    if git(wt_path, "diff", "--cached", "--quiet").returncode:   # something staged -> commit it
+        done = git(wt_path, "commit", "-m", "%s: run results" % run_name)
+        if done.returncode:
+            raise SystemExit("commit failed in the worktree: %s" % (done.stderr or done.stdout).strip()[-300:])
+    if git(main, "status", "--porcelain", "--untracked-files=no").stdout.strip():
+        return stop("main tree is dirty — commit or stash it, then merge branch %s by hand (`git merge %s` + `chongdae init --merge` if recheck is needed)" % (branch, branch))
+    done = git(main, "merge", "--no-ff", branch, "-m", "Merge %s (%s)" % (branch, run_name))
+    if done.returncode:
+        git(main, "merge", "--abort")
+        return stop("merge of %s conflicts — resolve it in main (`git merge %s`, fix, commit), then `chongdae init --merge`; the worktree stays at %s" % (branch, branch, wt_path.replace(os.sep, "/")))
+    failed = []
+    for r in all_runs(main):
+        st = load_state(r)
+        if st.get("status") != "complete":
+            continue
+        for task in all_tasks(load(os.path.join(r, "plan.json")), st):
+            ts = st["tasks"].get(task["id"], {})
+            if ts.get("status") == "done" and task.get("checks"):
+                failed += run_checks(main, [c for c in task["checks"] if not is_self_recheck(c)])   # a merge run's own `chongdae recheck` would recurse here
+    if failed:
+        return stop("merged, but recheck is red on main — fix the tree there (`chongdae init --merge` makes it a run); the worktree stays at %s" % wt_path.replace(os.sep, "/"),
+                    *failed[:6])
+    git(main, "worktree", "remove", "--force", wt_path)
+    git(main, "branch", "-d", branch)
+    # the run landed: pin the merge commit into its record (in main), so completed runs order by ancestry, and commit that judgment
+    landed = (git(main, "rev-parse", "HEAD").stdout or "").strip()
+    rec = os.path.join(main, RUNS, run_name, "state.json")
+    if landed and os.path.exists(rec):
+        st = load(rec)
+        st["landed"] = {"at": now_utc(), "commit": landed}
+        save(rec, st)
+        commit_record(main, run_name, "landed as %s" % landed[:12])
+    print("merged %s into main and removed the worktree — recheck green" % branch)
+    return 0
+
+
+def plan_problems(plan):
+    """Shape of a plan the brain wrote. Content is the brain's and the human's; chongdae only refuses what it cannot run."""
+    out = []
+    if plan.get("artifact-type") != "chongdae/plan@1" or not plan.get("goal"):
+        out.append("needs artifact-type chongdae/plan@1 and a goal")
+    ids = [t.get("id") for t in plan.get("tasks", [])]
+    if not ids or len(set(ids)) != len(ids):
+        out.append("tasks need unique ids")
+    for t in plan.get("tasks", []):
+        if not t.get("role"):
+            out.append("%s: no role" % t.get("id"))
+        if not (t.get("path") or t.get("checks")):
+            out.append("%s: needs `path` (an artifact to shape-check) or `checks` (commands that must exit 0) — otherwise nothing decides it is done" % t.get("id"))
+        for n in t.get("needs", []):
+            if n not in ids:
+                out.append("%s: needs unknown task %s" % (t.get("id"), n))
+        if t.get("tests") and not (isinstance(t["tests"], list) and all(isinstance(x, str) for x in t["tests"])):
+            out.append("%s: `tests` must be a list of project-relative paths (the contract's own checks, protected from the build)" % t.get("id"))
+        if t.get("gate") is not None and not (t["gate"] == "human" or isinstance(t["gate"], dict)):
+            out.append("%s: `gate` is \"human\" or {\"human\": true, \"delegate\": \"after-verifier\"}" % t.get("id"))
+    return out
+
+
+def dirty(target):
+    """{path: content hash} of every file that differs from HEAD (tracked or untracked) under target, paths relative to target.
+    None when there is no git — then nothing can be attributed, and the record says so."""
+    import hashlib, subprocess
+    try:
+        done = subprocess.run(["git", "status", "--porcelain", "--untracked-files=all", "--", "."], cwd=target, capture_output=True, text=True, encoding="utf-8")
+    except OSError:
+        return None
+    if done.returncode:
+        return None
+    # porcelain paths are relative to the repository root; the record is relative to the target (a project can live in a subdirectory)
+    prefix = subprocess.run(["git", "rev-parse", "--show-prefix"], cwd=target, capture_output=True, text=True, encoding="utf-8").stdout.strip().replace("\\", "/")
+    out = {}
+    for line in done.stdout.splitlines():
+        path = line[3:].strip().replace("\\", "/") if len(line) > 3 else ""
+        path = path[len(prefix):] if prefix and path.startswith(prefix) else path
+        if path and not path.startswith((RUNS + "/", ".mangsang/", ".dwitbuk/", ".claude/")):   # records and machine-local state are nobody's work
+            full = os.path.join(target, path)
+            out[path] = hashlib.sha1(io.open(full, "rb").read()).hexdigest() if os.path.isfile(full) else "gone"
+    return out
+
+
+def touched_files(target, start=None):
+    """What changed since the task started: dirty now and not identical at start. Without a start snapshot, the whole dirty set."""
+    now = dirty(target)
+    if now is None:
+        return None
+    start = start or {}
+    return sorted(p for p, h in now.items() if start.get(p) != h)
+
+
+def install_entry(entries, target):
+    """The host keeps one install record per (scope, project). The one that applies to `target` is its own project-scope
+    record, else the user-scope one, else — for a project that only enabled the plugin — the first; entries[0] was the first
+    project that ever installed it, which loads a different copy once versions diverge."""
+    want = os.path.realpath(target)
+    for e in entries:
+        if e.get("scope") == "project" and e.get("projectPath") and os.path.realpath(e["projectPath"]) == want:
+            return e
+    for e in entries:
+        if e.get("scope") == "user":
+            return e
+    return entries[0] if entries else {}
+
+
+def plugin_root(target, name):
+    """Where plugin `name` lives on this machine: a local link in hunsu.local.json, else the host's installed plugins. Never a path in the plan."""
+    links = load(os.path.join(target, "hunsu.local.json")).get("links", {})
+    if name in links:
+        root = links[name]
+        return os.path.join(root, name) if os.path.isdir(os.path.join(root, name)) else root
+    if name == "chongdae":
+        return os.path.dirname(os.path.abspath(__file__))   # the one plugin this process knows the location of
+    home = os.environ.get("HUNSU_CLAUDE_DIR") or os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")
+    for key, entries in load(os.path.join(home, "plugins", "installed_plugins.json")).get("plugins", {}).items():
+        if key.split("@")[0] == name and entries:
+            return install_entry(entries, target).get("installPath")
+    raise SystemExit("plugin %r is not linked (hunsu.local.json) or installed here — a plan names plugins, never machine paths" % name)
+
+
+def native_argv(target, provider):
+    """A `native:` provider: the session dispatches the host's own subagent instead of a worker process. The prompt is the
+    worker's, obtained with `--prompt-only`; the argv comes from the lock (`{"native": [argv]}`) or from the plugin's declared
+    role (`native:plugin:role`). None when the provider is not native."""
+    if isinstance(provider, dict) and isinstance(provider.get("native"), list):
+        return list(provider["native"])
+    if isinstance(provider, str) and provider.startswith("native:") and provider.count(":") == 2:
+        _, plugin, role = provider.split(":")
+        for m in (os.path.join(".claude-plugin", "plugin.json"), os.path.join(".codex-plugin", "plugin.json"), "plugin.json"):
+            declared = (load(os.path.join(plugin_root(target, plugin), m)).get("roles") or {}).get(role)
+            if declared:
+                host = {"claude-code": "claude"}.get(os.environ.get("AGENT_HOST", "claude-code"), os.environ.get("AGENT_HOST", "claude"))
+                return [str(a).replace("{host}", host) for a in declared]
+        raise SystemExit("provider %r: plugin %s declares no role %r in its plugin.json `roles`" % (provider, plugin, role))
+    return None
+
+
+def resolve_argv(target, argv):
+    """`{plugin:NAME}` -> that plugin's root on this machine. Plans stay portable; machines resolve."""
+    out = []
+    for a in argv:
+        for m in set(re.findall(r"\{plugin:([\w.-]+)\}", a)):
+            a = a.replace("{plugin:%s}" % m, plugin_root(target, m).replace(os.sep, "/"))
+        out.append(a)
+    return out
+
+
+def run_checks(target, checks):
+    """Every check is an argv run in the target; all must exit 0. Output tails come back for the stop message.
+    `python`/`python3` in argv[0] resolves to whichever this machine has (macOS ships only `python3`) — plans stay portable."""
+    import subprocess
+    failed = []
+    for argv in checks:
+        argv = resolve_argv(target, argv)
+        if argv and argv[0] in ("python", "python3") and not shutil.which(argv[0]):
+            alt = next((c for c in ("python3", "python") if shutil.which(c)), None)
+            argv = [alt or sys.executable] + argv[1:]
+        done = subprocess.run(argv, cwd=target, capture_output=True, text=True, encoding="utf-8", errors="replace")
+        if done.returncode:
+            tail = (done.stdout + done.stderr).strip().split("\n")[-6:]
+            failed.append("%s -> exit %d\n      %s" % (" ".join(argv), done.returncode, "\n      ".join(tail)))
+    return failed
+
+
+def pid_alive(pid):
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except (OSError, ValueError, TypeError):
+        return False
+
+
+def spawn(target, run, task, provider, plan, attempts=(), stage="build", extra=None):
+    """Run a provider command with a request file; read its response file. The provider is argv with {request} and {response}.
+
+    The request carries the contract: the task, the plan sections it closes, the checks that will decide it. Nothing else —
+    the provider is a fresh process and must not need this session's context.
+
+    The provider is detached (its own session, output to <tag>.provider.log) and its pid recorded in <tag>.pending.json
+    BEFORE this call waits on it. A session that backgrounds `run` and exits kills `run` — but not the provider; the next
+    `chongdae run` finds the pending record and resumes waiting (or consumes the response that landed meanwhile) instead
+    of paying for the work twice. Returns (returncode, response, start_snapshot).
+    """
+    import subprocess
+    import time
+    tag = task["id"] + ("" if stage == "build" else "." + stage + (".%d" % (len(attempts) + 1) if attempts else ""))
+    req_path = os.path.join(run, tag + ".request.json")
+    res_path = os.path.join(run, tag + ".response.json")
+    pend_path = os.path.join(run, tag + ".pending.json")
+    log_path = os.path.join(run, tag + ".provider.log")
+    pending = load(pend_path)
+    proc = None
+    native = native_argv(target, provider)
+    if native and os.path.exists(res_path):   # the session wrote the subagent's answer: consume it like any provider's
+        pending = pending or {"start": dirty(target)}
+    elif not (pending and (os.path.exists(res_path) or pid_alive(pending.get("pid")))):
+        sections = {}
+        plan_doc = os.path.join(target, plan.get("from", ""))
+        if plan.get("from") and os.path.exists(plan_doc):
+            text = io.open(plan_doc, encoding="utf-8").read()
+            for qid in task.get("closes", []):
+                m = re.search(r"^## +%s\b.*?(?=^## |\Z)" % re.escape(qid), text, re.M | re.S)
+                if m:
+                    sections[qid] = m.group(0).strip()
+        req = {"artifact-type": "chongdae/request@1", "stage": stage, "run": os.path.basename(run), "task": task["id"], "role": task["role"] if stage == "build" else "verifier",
+               "target": os.path.abspath(target).replace(os.sep, "/"), "goal": plan["goal"], "brief": task.get("brief", ""),
+               "closes": task.get("closes", []), "contract": sections, "checks": task.get("checks", []),
+               "response": res_path.replace(os.sep, "/")}
+        if attempts:
+            # A slice that spans calls: the next call is a fresh process. It resumes from the tree as the last call left it and from
+            # these reports — not from anyone's memory. `touched` is what the tree already differs in.
+            req["attempts"] = [{k: a.get(k) for k in ("status", "summary", "verified", "decisions", "non-claims", "retried", "review") } for a in attempts]
+            req["touched"] = touched_files(target)
+        req.update(extra or {})
+        save(req_path, req)
+        if os.path.exists(res_path):
+            os.remove(res_path)
+        if native:
+            # no process: the session runs the host's subagent with the worker's prompt and writes the answer where a worker would
+            argv = resolve_argv(target, [a.replace("{request}", req_path).replace("{response}", res_path) for a in native]) + ["--prompt-only"]
+            if argv and argv[0] in ("python", "python3") and not shutil.which(argv[0]):
+                argv[0] = next((c for c in ("python3", "python") if shutil.which(c)), None) or sys.executable
+            save(pend_path, {"native": argv, "start": dirty(target)})
+            return DISPATCH, {"status": "dispatch", "prompt_argv": argv, "request": req_path, "response": res_path}, None
+        argv = resolve_argv(target, [a.replace("{request}", req_path).replace("{response}", res_path) for a in (provider if isinstance(provider, list) else provider.split())])
+        if argv and argv[0] in ("python", "python3") and not shutil.which(argv[0]):
+            argv[0] = next((c for c in ("python3", "python") if shutil.which(c)), None) or sys.executable   # a plan written on one OS names the runtime the other lacks
+        log = io.open(log_path, "w", encoding="utf-8")
+        proc = subprocess.Popen(argv, cwd=target, stdout=log, stderr=log, start_new_session=True)
+        pending = {"pid": proc.pid, "argv": argv, "start": dirty(target)}
+        save(pend_path, pending)
+    # wait for the provider to END, not for its file to appear: a worker may write the response path more than once (a host's
+    # raw last message first, its own whole answer after), and half an answer is not an answer
+    if native and not os.path.exists(res_path):   # asked again before the session answered: the same instruction
+        return DISPATCH, {"status": "dispatch", "prompt_argv": pending.get("native"), "request": req_path, "response": res_path}, None
+    while (proc.poll() is None if proc is not None else pid_alive(pending.get("pid"))):
+        time.sleep(2)   # our own child must be poll()ed — a finished child we never reap stays a zombie, and a zombie still answers kill(pid, 0)
+    response = {}
+    for _ in range(3):   # the provider may still be flushing the file when its pid vanishes
+        try:
+            response = load(res_path) if os.path.exists(res_path) else {}
+            break
+        except ValueError:
+            time.sleep(1)
+    if not isinstance(response, dict):   # a provider that wrote something other than an object wrote nothing
+        response = {}
+    code = 0 if response else 1
+    if not response:
+        tail = io.open(log_path, encoding="utf-8", errors="replace").read()[-600:] if os.path.exists(log_path) else ""
+        response = {"status": "no-response", "summary": tail}
+    start = pending.get("start")
+    if os.path.exists(pend_path):
+        os.remove(pend_path)
+    return code, response, start
+
+
+def cmd_status(args):
+    d = run_dir(args.target)
+    if not d:
+        print("no run — `init --session --goal \"...\"` for a piece of work, `init --goal \"...\"` for the bootstrap plan, `init --plan FILE`, `init --merge` after a merge")
+        return 0
+    plan, state = load(os.path.join(d, "plan.json")), load_state(d)
+    open_ = [t["id"] for t in all_tasks(plan, state) if state["tasks"][t["id"]]["status"] not in ("done", "skipped", "dropped")]
+    print("run %s (%s: %r) is %s — %d task(s), %d open: %s%s" % (os.path.basename(d), plan.get("kind", "?"), plan.get("goal", ""), state.get("status"),
+                                                                 len(state["tasks"]), len(open_), ", ".join(open_) or "-",
+                                                                 ". `run` advances it" if state.get("status") == "running" else ". Start a new run for new work"))
+    return 0
+
+
+SESSIONS = os.path.join(RUNS, "sessions")   # machine-local: session id -> where the host keeps that session's transcript (written by the SessionStart hook)
+
+
+def session_model(target, session_id):
+    """The model behind a session, from the host's own transcript. The host tells its subprocesses the session id but not the
+    model; the SessionStart hook records where the transcript is, and the transcript names the model on every assistant line.
+    (None, why) when it cannot be known — a session run with persistence off leaves no transcript."""
+    rec = load(os.path.join(target, SESSIONS, session_id + ".json")) if session_id else {}
+    path = rec.get("transcript")
+    if not path:
+        return None, "no session record (the SessionStart hook did not run for this session)"
+    if not os.path.exists(path):
+        return None, "no transcript on this host (session not persisted)"
+    model = None
+    with io.open(path, encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            if '"model"' not in line:
+                continue
+            try:
+                d = json.loads(line)
+            except ValueError:
+                continue
+            if d.get("type") == "assistant":
+                model = (d.get("message") or {}).get("model") or model
+    return (model, None) if model else (None, "transcript has no assistant line yet")
+
+
+def codex_session_model(thread_id):
+    """Codex tells its subprocesses the thread id (CODEX_THREAD_ID), not the model; the rollout it keeps for that thread
+    (~/.codex/sessions/**/rollout-*-<thread id>.jsonl) names the model on every turn_context line."""
+    home = os.environ.get("HUNSU_CODEX_DIR") or os.environ.get("CODEX_HOME") or os.path.join(os.path.expanduser("~"), ".codex")
+    for dirpath, _, files in os.walk(os.path.join(home, "sessions")):
+        for f in files:
+            if f.endswith(thread_id + ".jsonl"):
+                with io.open(os.path.join(dirpath, f), encoding="utf-8", errors="replace") as fh:
+                    for line in fh:
+                        m = re.search(r'"turn_context".*?"model":\s*"([^"]+)"', line)
+                        if m:
+                            return m.group(1), None
+                return None, "rollout has no turn_context yet"
+    return None, "no rollout for this thread on this host"
+
+
+def dispatch_text(what, d):
+    return ("session agent: dispatch %s to this host's own subagent — get the prompt with `%s`, give it to a FRESH subagent of this host "
+            "(Claude Code: the Agent tool, general-purpose, with that prompt as its task; Codex: spawn_agent), write its final JSON answer VERBATIM to %s "
+            "(no edits, no additions), then `chongdae run`. The request is %s."
+            % (what, " ".join('"%s"' % a if " " in a else a for a in d.get("prompt_argv") or []), d.get("response"), d.get("request")))
+
+
+def performer(who, argv=None, response=None, target=None):
+    """Who actually did the work, recorded like a commit's author line — a run without this cannot be replayed even loosely.
+    A session provider: the host identifies itself in the env it gives its subprocesses (AI_AGENT is host_version_kind;
+    CLAUDE_EFFORT when set; the session id), and the model comes from that session's transcript when the host kept one.
+    A command provider: the un-resolved argv (portable), plus the worker's own account of its call (`worker` in the response:
+    host, model, turns, cost, transcript) when the worker gave one."""
+    if argv is not None:
+        native = native_argv(target, who) if target is not None else None
+        out = {"provider": "native" if native else "command", "argv": native or [str(a) for a in argv]}
+        worker = (response or {}).get("worker") if isinstance(response, dict) else None
+        if isinstance(worker, dict):
+            out.update({k: v for k, v in worker.items() if v is not None})
+        if native:
+            out["relayed_by"] = performer("session", target=target)   # the session ran the subagent and wrote its answer: that much is on record
+        return out
+    # which host is this session's: the env carries every ancestor's markers (a Codex session started from a Claude Code
+    # shell sees AI_AGENT too), so the products' own AGENT_HOST decides, else the host whose session marker is present
+    host = os.environ.get("AGENT_HOST") or ("codex" if os.environ.get("CODEX_THREAD_ID") else "claude-code")
+    out = {"provider": "session", "host": host}
+    if host == "codex":
+        if os.environ.get("CODEX_VERSION"):
+            out["agent"] = "codex_" + os.environ["CODEX_VERSION"]
+        if os.environ.get("CODEX_THREAD_ID"):
+            out["session"] = os.environ["CODEX_THREAD_ID"]
+            model, why = codex_session_model(out["session"])
+        else:
+            model, why = None, "no CODEX_THREAD_ID in the environment"
+    else:
+        for key, name in (("AI_AGENT", "agent"), ("CLAUDE_EFFORT", "effort"), ("CLAUDE_CODE_SESSION_ID", "session")):
+            if os.environ.get(key):
+                out[name] = os.environ[key]
+        model, why = session_model(target, out.get("session")) if target is not None else (None, "no target")
+    if model:
+        out["model"] = model
+    else:
+        out["model-unknown"] = why
+    return out
+
+
+def cmd_run(args):
+    target = args.target
+    d = run_dir(target)
+    if not d:
+        raise SystemExit("no run — `chongdae init --goal ...`")
+    plan, state = load(os.path.join(d, "plan.json")), load_state(d)
+    if state["status"] != "running":
+        print("run %s is %s" % (os.path.basename(d), state["status"]))
+        return 0
+    prov = providers(target, plan)
+    who_am_i = me(target)
+    for task in all_tasks(plan, state):
+        ts = state["tasks"][task["id"]]
+        if ts["status"] in ("done", "skipped", "dropped"):
+            continue
+        if any(state["tasks"][n]["status"] != "done" for n in task.get("needs", [])):
+            continue
+        if ts.get("claimed_by") and ts["claimed_by"] != who_am_i:
+            print("  %s is claimed by %s — not this machine's to advance" % (task["id"], ts["claimed_by"]))
+            continue
+        who = prov.get(task["role"])
+        if who is None:
+            if task.get("optional"):
+                ts["status"] = "skipped"
+                ts["non-claims"] = ["no provider for role %r — %s not produced; nothing substituted" % (task["role"], task["produces"])]
+                save_state(d, state)
+                print("  skipped %s (role %s has no provider) — recorded as a non-claim" % (task["id"], task["role"]))
+                continue
+            return stop("role %r has no provider — declare one in hunsu.json `roles` (then lock) or in the plan's `providers`" % task["role"])
+        # task paths are project-relative: artifacts belong to the project, .chongdae holds only how the run went
+        path = os.path.join(target, task["path"]) if task.get("path") else None
+        if "start" not in ts:
+            ts["start"] = dirty(target)   # what the tree already differed in: `touched` is measured from here, not from HEAD
+            save_state(d, state)
+        if ts["status"] == "todo" and who != "session":
+            # A command provider: a fresh process gets a request file and must leave a response file. chongdae reads only the response.
+            if not ts.get("response"):
+                code, response, before = spawn(target, d, task, who, plan, ts.get("attempts", []))
+                if code == DISPATCH:
+                    return stop(dispatch_text(task["id"], response))
+                ts["response"] = response
+                ts["touched_by_provider"] = touched_files(target, before)
+                ts["performed_by"] = performer(who, argv=who if isinstance(who, list) else [who], response=response, target=target)   # the un-resolved argv: portable, names host/model without machine paths
+                if native_argv(target, who):
+                    ts.setdefault("non-claims", []).append("%s: the answer was written by the session on a native subagent's behalf; chongdae did not observe the subagent" % task["id"])
+                save_state(d, state)
+            response = ts["response"]
+            again = "then `chongdae retry %s --by NAME | --delegated WHY` sends it out again with this attempt attached" % task["id"]
+            if response.get("status") == "blocked":
+                return stop("%s: the provider stopped — it needs a decision the contract does not give: %s — write it into the plan, %s" % (task["id"], response.get("summary", ""), again),
+                            *response.get("non-claims", []))
+            if response.get("status") != "done":
+                return stop("%s: provider %r did not finish (%s) — see %s; fix what stopped it (or nothing, if it ran out of budget), %s"
+                            % (task["id"], who, response.get("status"), os.path.join(d, task["id"] + ".response.json"), again))
+            if response.get("decisions") and not ts.get("accepted"):
+                # The provider settled something the contract did not. That is a plan change: a human writes it into the plan and accepts, or rejects the work.
+                return stop("%s: the provider made %d decision(s) the contract did not — write each into the plan (or reject the work and reset the tree), "
+                            "then `chongdae accept %s --by NAME | --delegated WHY` and re-run" % (task["id"], len(response["decisions"]), task["id"]),
+                            *("%s: chose %r (alternatives: %s)" % (x["what"], x["chosen"], ", ".join(x["alternatives"]) or "-") for x in response["decisions"]))
+            if not ts.get("reported"):
+                ts["non-claims"] = ts.get("non-claims", []) + ["(provider) %s" % n for n in response.get("non-claims", [])]
+                ts["reported"] = True
+                save_state(d, state)
+        if ts["status"] == "todo":
+            if task.get("checks"):
+                # Code tasks: done means the checks pass. Not started and failing look the same — both are "not yet".
+                failed = run_checks(target, task["checks"])
+                if failed:
+                    return stop("session agent: %s — make these checks pass, then `chongdae run`" % task["id"], task.get("brief", ""), *failed)
+                touched = touched_files(target, ts.get("start")) or []
+                broken = [t for t in task.get("tests", []) if t in touched]
+                if broken:
+                    # The contract owns its checks. A build that edits them decided its own verdict — that is a reject, whoever built.
+                    ts["rejected"] = {"by": "contract", "why": "changed protected tests: %s" % ", ".join(broken)}
+                    save_state(d, state)
+                    return stop("%s: the build changed the contract's tests (%s) — restore them (the contract decides, not the builder), "
+                                "then `chongdae retry %s --by NAME | --delegated WHY`" % (task["id"], ", ".join(broken), task["id"]))
+                if prov.get("verifier") and not ts.get("review"):
+                    # Independent eyes before the gate: not the hands, and their verdict goes here, not back to the builder.
+                    built = {k: (ts.get("response") or {}).get(k) for k in ("summary", "verified", "non-claims")} if ts.get("response") else None
+                    by_provider = ts.get("touched_by_provider")
+                    extra = {"touched": by_provider if by_provider is not None else touched, "tests": task.get("tests", []), "built": built}
+                    if by_provider is not None:
+                        extra["touched_since"] = sorted(set(touched) - set(by_provider))   # changed after the builder answered: a person's plan edits, say — not the builder's
+                    code, review, _ = spawn(target, d, task, prov["verifier"], plan, ts.get("attempts", []), stage="verify", extra=extra)
+                    if code == DISPATCH:
+                        return stop(dispatch_text(task["id"] + " (verify)", review))
+                    ts["review"] = review
+                    ts["verified_by"] = performer(prov["verifier"], argv=prov["verifier"] if isinstance(prov["verifier"], list) else [prov["verifier"]], response=review, target=target)
+                    if native_argv(target, prov["verifier"]):
+                        ts.setdefault("non-claims", []).append("%s: the verdict was written by the session on a native subagent's behalf; chongdae did not observe the subagent" % task["id"])
+                    save_state(d, state)
+                if prov.get("verifier"):
+                    review = ts["review"]
+                    if review.get("verdict") not in ("accept", "reject"):
+                        ts.pop("review", None)
+                        save_state(d, state)
+                        return stop("%s: the verifier did not answer (%s) — fix the verifier or its provider argv, then `chongdae run`" % (task["id"], review.get("summary") or review.get("status") or "no verdict"))
+                    if review["verdict"] == "reject":
+                        ts["rejected"] = {"by": "verifier", "why": "%d finding(s)" % len(review.get("findings", []))}
+                        save_state(d, state)
+                        return stop("%s: the verifier rejected the slice — fix the tree (or the contract, and re-plan), then `chongdae retry %s --by NAME | --delegated WHY`" % (task["id"], task["id"]),
+                                    *("%s @ %s: %s — record: \u201c%s\u201d — tree: \u201c%s\u201d" % (f.get("kind"), f.get("where"), f.get("why"), f.get("record_quote"), f.get("tree_quote"))
+                                      for f in review.get("findings", [])))
+            elif not task.get("path"):
+                pass   # a session task with no check: the agent's word, already recorded as a non-claim when it was added
+            else:
+                if not (path and os.path.exists(path)):
+                    return stop("session agent: produce %s at %s, then `chongdae run`" % (task["produces"], path), task["brief"])
+                problems = CHECKS[task["produces"]](path, state)
+                if problems:
+                    return stop("%s does not pass its shape check — fix it, then `chongdae run`" % task["produces"], *problems)
+            ts["status"] = "produced"
+            ts["checks"] = task.get("checks", [])
+            ts["touched"] = touched_files(target, ts.get("start"))   # what this task changed: the reviewer joins runs to files with it
+            if "performed_by" not in ts:
+                ts["performed_by"] = performer(who, target=target)   # the session did the work: record which host/model/session, like a commit author
+            save_state(d, state)
+        if ts["status"] == "produced" and gate_of(task).get("human"):
+            return stop("human: review %s (%s) — then `chongdae confirm %s --by <name>` or `--delegated \"<why the human handed this off>\"`"
+                        % (task.get("produces", "task %s (checks passed: %s)" % (task["id"], "; ".join(" ".join(c) for c in task.get("checks", [])))), path or task.get("closes", ""), task["id"]))
+        ts["status"] = "done"
+        save_state(d, state)
+        print("  done %s" % task["id"])
+    if plan.get("kind") == "session":
+        open_ = [t["id"] for t in all_tasks(plan, state) if state["tasks"][t["id"]]["status"] not in ("done", "skipped", "dropped")]
+        print("session run %s: %d task(s), %d open (%s) — `chongdae add` for the next piece, `chongdae close` at the end" % (os.path.basename(d), len(state["tasks"]), len(open_), ", ".join(open_) or "-"))
+        return 0
+    if any(state["tasks"][t["id"]]["status"] not in ("done", "skipped", "dropped") for t in all_tasks(plan, state)):
+        return stop("nothing this machine can advance — the open tasks are claimed elsewhere (or blocked on them); pull and `chongdae run` again")
+    state["status"] = "complete"
+    save_state(d, state)
+    commit_record(args.target, os.path.basename(d), "complete")
+    print("run %s complete. non-claims: %s" % (os.path.basename(d), non_claims(state) or "none"))
+    return 0
+
+
+DELEGATION_REF = re.compile(r"D-[0-9a-f]+\Z")
+
+
+def delegation_record(run_d, reason, kind):
+    """What `--delegated REASON` writes into the judgment. A reason of the form D-xxxx is a reference to a delegation
+    declared once with `chongdae delegate` — resolved here (it must exist in this run and cover this judgment kind)
+    and recorded as {\"ref\": id}: one judgment, pointed at, instead of its words repeated. Any other reason is this
+    judgment's own words, recorded as given."""
+    if not DELEGATION_REF.match(reason):
+        return {"delegated": reason}
+    path = os.path.join(run_d, "delegations", reason + ".json")
+    if not os.path.exists(path):
+        raise SystemExit("no delegation %s in %s — declare it first: `chongdae delegate --run %s --scope %s --why \"...\" --by NAME`"
+                         % (reason, os.path.basename(run_d), os.path.basename(run_d), kind))
+    rec = load(path)
+    scope = rec.get("scope") or []
+    if kind not in scope:
+        raise SystemExit("delegation %s does not cover %r (its scope: %s) — declare one that does, or a person judges this one"
+                         % (reason, kind, ", ".join(scope) or "-"))
+    return {"delegated": {"ref": reason}}
+
+
+def cmd_delegate(args):
+    """An orchestrator's batch pre-approval, declared once as its own judgment (one record, one notary commit) instead of
+    the same reason string pasted into dozens of judgments — one judgment masquerading as many. Later judgments reference
+    it: `--delegated D-xxxx`."""
+    import secrets
+    d = run_dir(args.target, args.run)
+    if not d:
+        raise SystemExit("no run — a delegation belongs to a run")
+    scope = [s.strip() for s in args.scope.split(",") if s.strip()]
+    if not scope:
+        raise SystemExit("--scope needs judgment kinds, e.g. confirm,accept,retry")
+    did = "D-" + secrets.token_hex(4)
+    save(os.path.join(d, "delegations", did + ".json"),
+         {"artifact-type": "chongdae/delegation@1", "id": did, "scope": scope, "why": args.why, "by": args.by, "at": now_utc()})
+    commit_record(args.target, os.path.basename(d), "delegate %s (%s)" % (did, ",".join(scope)))
+    print(did)
+    return 0
+
+
+def cmd_accept(args):
+    """A human accepts the decisions a provider made beyond the contract (after writing them into the plan), or rejects by resetting the tree."""
+    d = run_dir(args.target)
+    state = load_state(d)
+    ts = state["tasks"].get(args.task, {})
+    if not (ts.get("response") or {}).get("decisions"):
+        raise SystemExit("%s has no provider decisions to accept" % args.task)
+    if not (args.by or args.delegated):
+        raise SystemExit("say who accepted (--by) or why the human delegated it (--delegated)")
+    ts["accepted"] = {**({"by": args.by} if args.by else delegation_record(d, args.delegated, "accept")), "at": now_utc()}
+    save_state(d, state)
+    commit_record(args.target, os.path.basename(d), "accept decisions on %s (%s)" % (args.task, "by " + args.by if args.by else "delegated"))
+    print("accepted %d decision(s) on %s — they are now the contract's; make sure the plan says so" % (len(ts["response"]["decisions"]), args.task))
+    return 0
+
+
+def gate_of(task):
+    """`gate: "human"` or `gate: {"human": true, "delegate": "after-verifier"}` -> the dict form."""
+    g = task.get("gate")
+    return g if isinstance(g, dict) else ({"human": True} if g == "human" else {})
+
+
+def cmd_retry(args):
+    """A human sends a stopped task out again. The stopped attempt (and its review) stays in the record; the next call receives it."""
+    d = run_dir(args.target)
+    state = load_state(d)
+    ts = state["tasks"].get(args.task, {})
+    stopped = (ts.get("response") or {}).get("status") not in (None, "done") or ts.get("rejected")
+    if ts.get("status") != "todo" or not stopped:
+        raise SystemExit("%s is not stopped on a provider response or a rejection (status %s, response %s)" % (args.task, ts.get("status"), (ts.get("response") or {}).get("status")))
+    if not (args.by or args.delegated):
+        raise SystemExit("say who sent it again (--by) or why the human delegated it (--delegated)")
+    attempt = {**(ts.pop("response", None) or {"status": "session"}), "retried": {**({"by": args.by} if args.by else delegation_record(d, args.delegated, "retry")), "at": now_utc()}}
+    for key in ("review", "rejected"):
+        if key in ts:
+            attempt[key] = ts.pop(key)
+    ts.setdefault("attempts", []).append(attempt)
+    ts.pop("reported", None)
+    n = len(ts["attempts"])
+    # the attempt's files move aside under their number: the next `run` must find no response (a native provider's is written
+    # by the session and would otherwise be read again as the new answer) and the record keeps what this attempt said
+    for kind in ("response", "request", "pending", "response.transcript"):   # the build stage's files (verify files are numbered by spawn already)
+        ext = "jsonl" if kind.endswith("transcript") else "json"
+        src = os.path.join(d, "%s.%s.%s" % (args.task, kind, ext))
+        if os.path.exists(src):
+            os.replace(src, os.path.join(d, "%s.%s.%d.%s" % (args.task, kind, n, ext)))
+    save_state(d, state)
+    commit_record(args.target, os.path.basename(d), "retry %s (attempt %d kept)" % (args.task, n))
+    print("retry %s: attempt %d kept in the record; `chongdae run` sends the task out again with it attached" % (args.task, n))
+    return 0
+
+
+def cmd_confirm(args):
+    d = run_dir(args.target)
+    state = load_state(d)
+    ts = state["tasks"].get(args.task)
+    if not ts or ts["status"] != "produced":
+        raise SystemExit("%s is not waiting for confirmation (status: %s)" % (args.task, ts["status"] if ts else "unknown"))
+    if not (args.by or args.delegated):
+        raise SystemExit("say who confirmed (--by) or why the human delegated it (--delegated)")
+    plan = load(os.path.join(d, "plan.json"))
+    task = next((t for t in plan.get("tasks", []) if t.get("id") == args.task), {})
+    verdict = (ts.get("review") or {}).get("verdict")
+    if args.delegated and gate_of(task).get("delegate") == "after-verifier" and verdict != "accept":
+        raise SystemExit("%s: this gate delegates only after a verifier accepts (verdict: %s) — a person must read it, or the plan must say otherwise" % (args.task, verdict or "none"))
+    # Delegation is recorded with what stood in for the reader: a verifier's accept, or nothing. The reviewer counts the two apart.
+    ts["confirmed"] = {**({"by": args.by} if args.by else {**delegation_record(d, args.delegated, "confirm"), "verifier": verdict}), "at": now_utc()}
+    ts["status"] = "done"
+    save_state(d, state)
+    commit_record(args.target, os.path.basename(d), "confirm %s (%s)" % (args.task, "by " + args.by if args.by else "delegated"))
+    print("confirmed %s (%s)" % (args.task, "by " + args.by if args.by else "delegated: " + args.delegated))
+    return 0
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(prog="chongdae", description=__doc__)
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    for name in ("init", "status", "run", "confirm", "accept", "retry", "recheck", "add", "claim", "drop", "close", "report", "delegate"):
+        p = sub.add_parser(name)
+        p.add_argument("--target", default=".")
+        if name == "init":
+            p.add_argument("--goal", default=None)
+            p.add_argument("--plan", default=None, help="a plan the session agent wrote (chongdae/plan@1): a path, or `-` for stdin (no file to write before the run exists); without it, the bootstrap plan")
+            p.add_argument("--merge", action="store_true", help="the merge plan: recheck every completed run (+ coherence when the lock declares that role)")
+            p.add_argument("--session", action="store_true", help="a session run: tasks are added as the work goes")
+            p.add_argument("--base", default=None, help="with --merge: the revision the other side's relations are compared from (default: the merge base of HEAD^1 and HEAD^2)")
+            p.add_argument("--worktree", action="store_true", help="the run's container is physical: its own worktree and branch under .chongdae/wt/; `close` merges it back")
+        if name == "close":
+            p.add_argument("--run", default=None, help="the run to close (default: the one running, else the newest) — a completed worktree run is named here to merge it back")
+        if name in ("confirm", "accept", "retry"):
+            p.add_argument("task")
+            p.add_argument("--by", default=None)
+            p.add_argument("--delegated", default=None)
+        if name == "report":
+            p.add_argument("--since", default=None, help="the revision the last review covered; changes since it are checked against the runs' `touched`")
+        if name == "delegate":
+            p.add_argument("--run", default=None, help="the run this delegation belongs to (default: the one running, else the newest)")
+            p.add_argument("--scope", required=True, help="comma-separated judgment kinds it covers, e.g. confirm,accept,retry")
+            p.add_argument("--why", required=True, help="why these judgments are handed off — the one reason, written once")
+            p.add_argument("--by", required=True, help="the person who declared the delegation")
+        if name == "drop":
+            p.add_argument("task")
+            p.add_argument("--why", required=True, help="why this task will not be done (mis-specified, superseded, abandoned)")
+            p.add_argument("--by", default=None, help="who decided (default: git user.name)")
+        if name == "claim":
+            p.add_argument("task")
+            p.add_argument("--by", default=None, help="who takes it (default: git user.name); an empty string releases")
+        if name == "add":
+            p.add_argument("id")
+            p.add_argument("--role", default="session", help="who does it: `session` (this agent, the default) or a role the lock declares a provider for (`implementer`: a fresh process builds it from the brief and checks)")
+            p.add_argument("--brief", default=None)
+            p.add_argument("--closes", nargs="*", default=None)
+            p.add_argument("--check", action="append", default=None, help="a check argv (quoted); repeatable")
+            p.add_argument("--tests", nargs="*", default=None, help="the contract's test files, protected from the build")
+            p.add_argument("--gate", choices=["human"], default=None)
+    args = ap.parse_args(argv)
+    return {"init": cmd_init, "status": cmd_status, "run": cmd_run, "confirm": cmd_confirm, "recheck": cmd_recheck, "accept": cmd_accept, "retry": cmd_retry,
+            "add": cmd_add, "claim": cmd_claim, "drop": cmd_drop, "close": cmd_close, "report": cmd_report, "delegate": cmd_delegate}[args.cmd](args)
+
+
+if __name__ == "__main__":
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.exit(main())

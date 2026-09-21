@@ -1,0 +1,8 @@
+{
+  "name": "chongdae",
+  "version": "1.0.0",
+  "engines": {
+    "python": ">=3.9"
+  },
+  "description": "The orchestrator for an era where development is split into parts done by agents. Runs a plan — a DAG of roles with checks in code and human gates in between — and records the run apart from commit history: what was decided, by whom, and what was not verified."
+}
