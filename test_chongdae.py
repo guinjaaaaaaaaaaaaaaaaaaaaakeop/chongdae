@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -528,6 +529,15 @@ def test_worktree_run_merges_back_and_a_conflict_becomes_a_decision():
         # a plan (non-session) worktree run has its way back: `run` completes it, `close` merges it
         code, out = run("close", "--target", wt3)
         assert code != 0 and "`chongdae run` completes it, then `close` merges" in out, out
+        # --base: two independent slices branch from the same commit, not from whatever HEAD is now
+        base = subprocess.run(["git", "rev-parse", "HEAD~1"], cwd=pj.dir, capture_output=True, text=True, encoding="utf-8").stdout.strip()
+        head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=pj.dir, capture_output=True, text=True, encoding="utf-8").stdout.strip()
+        assert base and base != head
+        code, out = run("init", "--session", "--goal", "from base", "--worktree", "--base", base, "--target", pj.dir)
+        assert code == 0, out
+        wt4 = out.split("--target ")[-1].strip()
+        assert chongdae.load_state(chongdae.run_dir(wt4))["created"]["based_on"] == base, "the record says what it branched from"   # HEAD itself is one record commit past it
+        assert io.open(os.path.join(wt4, "a.txt")).read() == "base\n" and io.open(os.path.join(pj.dir, "a.txt")).read() != "base\n"
 
 
 def test_a_plan_from_stdin_in_a_worktree_completes_and_close_merges_it_back():
@@ -728,6 +738,70 @@ def test_added_tasks_run_in_the_order_added_and_a_providers_task_starts_when_spa
         assert code == 0 and "recorded -> .chongdae/rechecks/" in out, out
         recs = os.listdir(os.path.join(pj.dir, ".chongdae", "rechecks"))
         assert len(recs) == 1 and json.load(open(os.path.join(pj.dir, ".chongdae", "rechecks", recs[0])))["green"] == [os.path.basename(chongdae.run_dir(pj.dir)) + "/a-build"]
+
+
+def test_run_waits_a_bounded_time_then_hands_back_and_the_next_run_resumes():
+    """A host's tool call has its own timeout; a `run` that waits longer gets backgrounded by the session and the provider dies
+    with it (three sessions did exactly that). So `run` waits WAIT_BUDGET seconds, then stops with "still working — run again";
+    the pending record lets the next `run` resume waiting for the same work and consume its answer."""
+    with Project() as pj:
+        slow = os.path.join(pj.dir, "slow.py")
+        write(slow, "import json, sys, time\ntime.sleep(4)\njson.dump(%r, open(sys.argv[2], 'w'))\n" % RESPONSE_DONE)
+        plan = {"artifact-type": "chongdae/plan@1", "goal": "g", "kind": "slice", "providers": {"builder": [sys.executable, slow, "{request}", "{response}"]},
+                "tasks": [{"id": "T1", "role": "builder", "needs": [], "checks": [[sys.executable, "-c", "raise SystemExit(0)"]]}]}
+        write(os.path.join(pj.dir, "plan.json"), plan)
+        assert run("init", "--plan", "plan.json", "--target", pj.dir)[0] == 0
+        old = chongdae.WAIT_BUDGET; chongdae.WAIT_BUDGET = 1
+        try:
+            code, out = run("run", "--target", pj.dir)
+            assert code == chongdae.DECISION and "T1: the provider is still working (pid" in out and "again keeps waiting" in out, out
+            d = chongdae.run_dir(pj.dir)
+            assert os.path.exists(os.path.join(d, "T1.pending.json")) and "response" not in pj.state()["tasks"]["T1"]
+            chongdae.WAIT_BUDGET = 30
+            code, out = run("run", "--target", pj.dir)
+            assert code == 0, out
+            assert pj.state()["tasks"]["T1"]["status"] == "done" and not os.path.exists(os.path.join(d, "T1.pending.json"))
+        finally:
+            chongdae.WAIT_BUDGET = old
+
+
+def test_a_retry_keeps_a_before_answer_whose_contract_did_not_change_and_the_budget_is_per_call():
+    """A retry for a report-format refusal used to re-hire 시비 (ten minutes) though the contract was what it was. Now a
+    `before` answer carries the contract's fingerprint; retry keeps it while the text stands and drops it when the plan
+    section or brief changed. And one `run` call has one wait budget, however many providers it starts."""
+    QUIBBLE = {"status": "done", "summary": "", "non-claims": [], "findings": []}
+    with Project() as pj:
+        write(os.path.join(pj.dir, "plan", "PLAN.md"), "# p\n\n## Q-a\n\nfirst wording.\n")
+        write(os.path.join(pj.dir, "hunsu.lock.json"), {"roles": {"quibble": pj.fake_provider(QUIBBLE, name="sibi"), "implementer": pj.fake_provider({"status": "failed", "summary": "bad report", "verified": [], "decisions": [], "non-claims": []}, name="builder")}})
+        assert run("init", "--session", "--goal", "g", "--from", "plan/PLAN.md", "--target", pj.dir)[0] == 0
+        assert run("add", "T1", "--role", "implementer", "--before", "quibble", "--closes", "Q-a", "--brief", "b", "--check", sys.executable + " -c 'raise SystemExit(0)'", "--target", pj.dir)[0] == 0
+        code, out = run("run", "--target", pj.dir)
+        assert code == chongdae.DECISION and "did not finish" in out, out
+        fp = pj.state()["tasks"]["T1"]["stages"]["quibble"]["contract-fingerprint"]
+        assert fp and len(fp) == 12
+        assert run("retry", "T1", "--delegated", "format", "--target", pj.dir)[0] == 0
+        ts = pj.state()["tasks"]["T1"]
+        assert "quibble" in ts["stages"] and "stages" not in ts["attempts"][0], "the contract did not change: 시비's answer stands"
+        # the plan section changes: the next retry drops the answer (the role is hired again by the next run)
+        write(os.path.join(pj.dir, "plan", "PLAN.md"), "# p\n\n## Q-a\n\nsecond wording.\n")
+        run("run", "--target", pj.dir)
+        assert run("retry", "T1", "--delegated", "format", "--target", pj.dir)[0] == 0
+        ts = pj.state()["tasks"]["T1"]
+        assert "stages" not in ts and "quibble" in ts["attempts"][1]["stages"], ts.get("stages")
+    with Project() as pj:
+        slow = os.path.join(pj.dir, "slow.py")
+        write(slow, "import json, sys, time\ntime.sleep(2)\njson.dump(%r, open(sys.argv[2], 'w'))\n" % QUIBBLE)
+        slow2 = os.path.join(pj.dir, "slow2.py")
+        write(slow2, "import json, sys, time\ntime.sleep(2)\njson.dump(%r, open(sys.argv[2], 'w'))\n" % RESPONSE_DONE)
+        write(os.path.join(pj.dir, "hunsu.lock.json"), {"roles": {"quibble": [sys.executable, slow, "{request}", "{response}"], "implementer": [sys.executable, slow2, "{request}", "{response}"]}})
+        assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
+        assert run("add", "T1", "--role", "implementer", "--before", "quibble", "--brief", "b", "--check", sys.executable + " -c 'raise SystemExit(0)'", "--target", pj.dir)[0] == 0
+        old = chongdae.WAIT_BUDGET; chongdae.WAIT_BUDGET = 3
+        try:
+            t0 = time.time(); code, out = run("run", "--target", pj.dir); dt = time.time() - t0
+            assert code == chongdae.DECISION and "still working" in out and dt < 6, (out, dt)   # quibble took ~2s, the builder then hit the call's remaining budget — not a fresh 3s of its own
+        finally:
+            chongdae.WAIT_BUDGET = old
 
 
 def test_session_run_tasks_added_as_the_work_goes_claims_and_the_write_hook():

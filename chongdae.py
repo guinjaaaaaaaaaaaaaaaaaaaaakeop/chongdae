@@ -45,6 +45,9 @@ import sys
 RUNS = ".chongdae"
 DECISION = 2
 DISPATCH = 3   # spawn: a native provider — the session must run the subagent and write the answer, then `run` again
+WAITING = 4    # spawn: the provider is still working past the wait budget — `run` again keeps waiting (the pending record finds it)
+WAIT_BUDGET = int(os.environ.get("CHONGDAE_WAIT", 480))   # seconds one `run` waits for providers before returning: a host's tool call has its own timeout (Claude Code: 10 min), and a run that outlives it gets backgrounded and orphaned
+_CALL_DEADLINE = None   # set once per `run` call: the budget is the call's, not each spawn's — a call that finishes one provider and starts the next does not wait twice
 
 BOOTSTRAP = [
     {"id": "questions", "role": "questions", "produces": "plan/questions@1", "path": "plan/questions.json",
@@ -279,7 +282,7 @@ def stop(msg, *lines):
     return DECISION
 
 
-def make_worktree(main, run_name):
+def make_worktree(main, run_name, base=None):
     """The run's container, physically: a worktree under .chongdae/wt/<run-id> on branch run/<run-id>, branched from HEAD.
     A tree with git history may have other workers (people, agents, other machines) — the shared tree is not this run's to
     dirty. Machine-local files the environment needs (hunsu.local.json) are copied; everything else travels by commit."""
@@ -287,7 +290,7 @@ def make_worktree(main, run_name):
     if subprocess.run(["git", "rev-parse", "HEAD"], cwd=main, capture_output=True).returncode:
         raise SystemExit("--worktree needs a commit to branch from — commit first (or run without --worktree)")
     path = os.path.join(main, RUNS, "wt", run_name)
-    done = subprocess.run(["git", "worktree", "add", "-b", "run/" + run_name, path], cwd=main, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    done = subprocess.run(["git", "worktree", "add", "-b", "run/" + run_name, path] + ([base] if base else []), cwd=main, capture_output=True, text=True, encoding="utf-8", errors="replace")
     if done.returncode:
         raise SystemExit("git worktree add failed: %s" % (done.stderr or done.stdout).strip()[-300:])
     # ignore the wt dir from inside the worktree's own .gitignore — main's tree stays untouched; the line lands in main with the merge
@@ -312,7 +315,7 @@ def cmd_init(args):
     import secrets, time
     run_name = "run-%s-%s" % (time.strftime("%Y%m%d-%H%M%S", time.gmtime()), secrets.token_hex(2))
     if getattr(args, "worktree", False):
-        target = make_worktree(args.target, run_name)   # the run's container is physical: its own worktree, its own branch
+        target = make_worktree(args.target, run_name, getattr(args, "base", None) if not getattr(args, "merge", False) else None)   # the run's container is physical: its own worktree, its own branch (from --base, else HEAD)
     d = os.path.join(target, RUNS, run_name)
     if args.plan:
         if args.plan == "-":
@@ -431,6 +434,23 @@ def cmd_claim(args):
     return 0
 
 
+def runs_since(target, rev):
+    """The runs whose record was not yet at `rev`: created after it, or still running there. Older runs were the previous review's."""
+    import subprocess
+    done = subprocess.run(["git", "ls-tree", "-r", "--name-only", rev, "--", RUNS], cwd=target, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    then = set()
+    for line in (done.stdout if done.returncode == 0 else "").splitlines():
+        parts = line.split("/")
+        if len(parts) >= 3 and parts[1].startswith("run-") and parts[2] == "state.json":
+            shown = subprocess.run(["git", "show", "%s:%s" % (rev, line)], cwd=target, capture_output=True, text=True, encoding="utf-8", errors="replace")
+            try:
+                if json.loads(shown.stdout).get("status") == "complete":
+                    then.add(parts[1])
+            except ValueError:
+                pass
+    return {os.path.basename(r) for r in all_runs(target)} - then
+
+
 def cmd_report(args):
     """chongdae's own findings about its record, typed `dwitbuk/finding@1` so a reviewer collects them without knowing chongdae."""
     import subprocess
@@ -473,8 +493,11 @@ def cmd_report(args):
     def deleg_text(v):
         return "ref %s" % v.get("ref") if isinstance(v, dict) else v
 
+    since_runs = runs_since(target, args.since) if args.since else None
     for r in all_runs(target):
         name, plan, state = os.path.basename(r), load(os.path.join(r, "plan.json")), load_state(r)
+        if since_runs is not None and name not in since_runs:
+            continue   # --since: what happened since that revision — a run whose record already existed there was reviewed then
         stamps = {}   # literal delegated reason -> where it was used, within this one run (refs are exempt: pointing at one declared judgment is their purpose)
 
         def stamp(v, where):
@@ -561,6 +584,7 @@ def cmd_close(args):
 
 
 def merge_back(wt_path, wt, run_name):
+    wt_path = os.path.abspath(wt_path)   # every git call below runs in main: a relative path (`--target .` from inside the worktree) would name main
     """Commit the worktree and merge its branch into main. Exit 0: landed, worktree removed. Exit 2: a human or a
     merge run must finish it — the branch and worktree stay."""
     import subprocess
@@ -749,10 +773,22 @@ def run_checks(target, checks):
 
 
 def pid_alive(pid):
+    """Is the provider still running? A finished child of this very process is a zombie until reaped, and a zombie still
+    answers kill(pid, 0) — so reap first (harmless when the pid is not our child), then probe."""
     try:
-        os.kill(int(pid), 0)
+        pid = int(pid)
+    except (ValueError, TypeError):
+        return False
+    try:
+        done, _ = os.waitpid(pid, os.WNOHANG)   # our child: (0, 0) while running, (pid, status) once it exited
+        if done == pid:
+            return False
+    except (ChildProcessError, OSError, AttributeError):
+        pass   # not our child (an earlier `run` started it) or no waitpid here: the probe below decides
+    try:
+        os.kill(pid, 0)
         return True
-    except (OSError, ValueError, TypeError):
+    except OSError:
         return False
 
 
@@ -814,13 +850,23 @@ def spawn(target, run, task, provider, plan, attempts=(), stage="build", extra=N
             argv[0] = next((c for c in ("python3", "python") if shutil.which(c)), None) or sys.executable   # a plan written on one OS names the runtime the other lacks
         log = io.open(log_path, "w", encoding="utf-8")
         proc = subprocess.Popen(argv, cwd=target, stdout=log, stderr=log, start_new_session=True)
-        pending = {"pid": proc.pid, "argv": argv, "start": dirty(target)}
+        pending = {"pid": proc.pid, "argv": argv, "start": dirty(target), "since": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
         save(pend_path, pending)
     # wait for the provider to END, not for its file to appear: a worker may write the response path more than once (a host's
     # raw last message first, its own whole answer after), and half an answer is not an answer
     if native and not os.path.exists(res_path):   # asked again before the session answered: the same instruction
         return DISPATCH, {"status": "dispatch", "prompt_argv": pending.get("native"), "request": req_path, "response": res_path}, None
+    global _CALL_DEADLINE
+    if _CALL_DEADLINE is None:
+        _CALL_DEADLINE = time.time() + WAIT_BUDGET
+    deadline = _CALL_DEADLINE
     while (proc.poll() is None if proc is not None else pid_alive(pending.get("pid"))):
+        if time.time() > deadline:
+            # still working: hand back to the session instead of outliving its tool call. The provider is detached and its pending
+            # record stands; the next `run` resumes waiting for the same work. A session that backgrounds `run` to wait longer
+            # ends up orphaning the provider — this is the loop that replaces that.
+            since = pending.get("since") or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            return WAITING, {"status": "waiting", "pid": pending.get("pid") or proc.pid, "since": since, "log": log_path}, pending.get("start")
         time.sleep(2)   # our own child must be poll()ed — a finished child we never reap stays a zombie, and a zombie still answers kill(pid, 0)
     response = {}
     for _ in range(3):   # the provider may still be flushing the file when its pid vanishes
@@ -897,6 +943,12 @@ def codex_session_model(thread_id):
     return None, "no rollout for this thread on this host"
 
 
+def waiting_text(what, d):
+    return ("%s: the provider is still working (pid %s, since %s; its output so far: %s) — `chongdae run` again keeps waiting for the same work; "
+            "do not background `run` and do not end the session — the provider is this session's child and dies with it"
+            % (what, d.get("pid"), d.get("since"), d.get("log")))
+
+
 def dispatch_text(what, d):
     return ("session agent: dispatch %s to this host's own subagent — get the prompt with `%s`, give it to a FRESH subagent of this host "
             "(Claude Code: the Agent tool, general-purpose, with that prompt as its task; Codex: spawn_agent), write its final JSON answer VERBATIM to %s "
@@ -944,6 +996,8 @@ def performer(who, argv=None, response=None, target=None):
 
 
 def cmd_run(args):
+    global _CALL_DEADLINE
+    _CALL_DEADLINE = None   # a fresh budget for this call
     target = args.target
     d = run_dir(target)
     if not d:
@@ -989,6 +1043,8 @@ def cmd_run(args):
                 code, response, before = spawn(target, d, task, who, plan, ts.get("attempts", []))
                 if code == DISPATCH:
                     return stop(dispatch_text(task["id"], response))
+                if code == WAITING:
+                    return stop(waiting_text(task["id"], response))
                 ts["response"] = response
                 ts["touched_by_provider"] = touched_files(target, before)
                 ts["performed_by"] = performer(who, argv=who if isinstance(who, list) else [who], response=response, target=target)   # the un-resolved argv: portable, names host/model without machine paths
@@ -1036,6 +1092,8 @@ def cmd_run(args):
                     code, review, _ = spawn(target, d, task, prov["verifier"], plan, ts.get("attempts", []), stage="verify", extra=extra)
                     if code == DISPATCH:
                         return stop(dispatch_text(task["id"] + " (verify)", review))
+                    if code == WAITING:
+                        return stop(waiting_text(task["id"] + " (verify)", review))
                     ts["review"] = review
                     ts["verified_by"] = performer(prov["verifier"], argv=prov["verifier"] if isinstance(prov["verifier"], list) else [prov["verifier"]], response=review, target=target)
                     if native_argv(target, prov["verifier"]):
@@ -1133,6 +1191,21 @@ def cmd_delegate(args):
     return 0
 
 
+def contract_fingerprint(target, d, tid):
+    """The text a `before` role answered: the task's brief and checks and the plan sections it closes, hashed."""
+    import hashlib
+    plan = load(os.path.join(d, "plan.json")); state = load_state(d)
+    task = next((t for t in all_tasks(plan, state) if t["id"] == tid), {})
+    text = json.dumps({"brief": task.get("brief"), "checks": task.get("checks"), "tests": task.get("tests")}, sort_keys=True)
+    doc = os.path.join(target, plan.get("from", ""))
+    if plan.get("from") and os.path.exists(doc):
+        body = io.open(doc, encoding="utf-8").read()
+        for qid in task.get("closes", []):
+            m = re.search(r"^## +%s\b.*?(?=^## |\Z)" % re.escape(qid), body, re.M | re.S)
+            text += "\n" + (m.group(0).strip() if m else "")
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
+
+
 def run_stage(target, d, task, ts, state, plan, prov, when, extra):
     """Run the roles hired `before` or `after` a task that have not answered yet. Returns a stop's exit code when the task
     must wait (a missing answer, unaccepted `before` findings), else None. Each answer is kept under `stages[role]` with who
@@ -1154,6 +1227,8 @@ def run_stage(target, d, task, ts, state, plan, prov, when, extra):
         code, response, _ = spawn(target, d, task, provider, plan, ts.get("attempts", []), stage=role, extra=extra)
         if code == DISPATCH:
             return stop(dispatch_text("%s (%s)" % (task["id"], role), response))
+        if code == WAITING:
+            return stop(waiting_text("%s (%s)" % (task["id"], role), response))
         by = performer(provider, argv=provider if isinstance(provider, list) else [provider], response=response, target=target)
         if response.get("status") != "done":
             # not an answer: kept as what happened (the reviewer sees it), but the role is asked again on the next `run`
@@ -1162,6 +1237,8 @@ def run_stage(target, d, task, ts, state, plan, prov, when, extra):
             return stop("%s: %s (%s) did not finish (%s: %s) — fix the provider or its argv, then `chongdae run` asks again; or drop the role from the task"
                         % (task["id"], role, when, response.get("status"), "; ".join(response.get("non-claims") or []) or response.get("summary", "")))
         rec = {**ts.setdefault("stages", {}).get(role, {}), "response": response, "by": by, "when": when}
+        if when == "before":
+            rec["contract-fingerprint"] = contract_fingerprint(target, d, task["id"])   # what this answer was about: a retry re-hires only when it changed
         if native_argv(target, provider):
             ts.setdefault("non-claims", []).append("%s: %s's answer was written by the session on a native subagent's behalf; chongdae did not observe the subagent" % (task["id"], role))
         ts["stages"][role] = rec
@@ -1224,9 +1301,25 @@ def cmd_retry(args):
     if not (args.by or args.delegated):
         raise SystemExit("say who sent it again (--by) or why the human delegated it (--delegated)")
     attempt = {**(ts.pop("response", None) or {"status": "session"}), "retried": {**({"by": args.by} if args.by else delegation_record(d, args.delegated, "retry")), "at": now_utc()}}
-    for key in ("review", "rejected", "stages"):
+    for key in ("review", "rejected"):
         if key in ts:
             attempt[key] = ts.pop(key)
+    if "stages" in ts:
+        # a `before` role answered a contract; if that contract's text is what it was, the answer stands and the role is not
+        # hired again (a retry for a report-format refusal cost a ten-minute quibble round each time). `after` roles answer
+        # the result, which the retry will redo: they go with the attempt.
+        keep, gone = {}, {}
+        for role, rec in ts["stages"].items():
+            if rec.get("when") == "before" and rec.get("contract-fingerprint") and rec["contract-fingerprint"] == contract_fingerprint(args.target, d, args.task):
+                keep[role] = rec
+            else:
+                gone[role] = rec
+        if gone:
+            attempt["stages"] = gone
+        if keep:
+            ts["stages"] = keep
+        else:
+            ts.pop("stages")
     ts.setdefault("attempts", []).append(attempt)
     ts.pop("reported", None)
     n = len(ts["attempts"])
@@ -1278,7 +1371,7 @@ def main(argv=None):
             p.add_argument("--session", action="store_true", help="a session run: tasks are added as the work goes")
             p.add_argument("--from", dest="from_doc", default=None, help="session run: the plan document (plan/PLAN.md) whose `## Q-…` sections tasks `--closes`; providers receive those sections as the contract")
             p.add_argument("--base", default=None, help="with --merge: the revision the other side's relations are compared from (default: the merge base of HEAD^1 and HEAD^2)")
-            p.add_argument("--worktree", action="store_true", help="the run's container is physical: its own worktree and branch under .chongdae/wt/; `close` merges it back")
+            p.add_argument("--worktree", action="store_true", help="the run's container is physical: its own worktree and branch under .chongdae/wt/ (from HEAD, or from --base REV: two independent slices branch from the same base); `close` merges it back")
         if name == "close":
             p.add_argument("--run", default=None, help="the run to close (default: the one running, else the newest) — a completed worktree run is named here to merge it back")
         if name in ("confirm", "accept", "retry"):
