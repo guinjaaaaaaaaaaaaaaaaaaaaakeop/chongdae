@@ -366,7 +366,7 @@ def test_performed_by_is_recorded_like_an_author_line():
             assert run("run", "--target", pj.dir)[0] == 0
             ts = pj.state()["tasks"]["T1"]
             assert ts["performed_by"] == {"provider": "session", "host": "claude-code", "agent": "claude-code_9-9-9_agent", "effort": "high", "session": "sess-123",
-                                          "model-unknown": "no session record (the SessionStart hook did not run for this session)"}, ts["performed_by"]
+                                          "model-unknown": "no transcript for this session on this host (no SessionStart record here, none under the host's projects)"}, ts["performed_by"]
         with Project() as pj:
             # a Codex session started from a Claude Code shell sees both hosts' markers: the products' AGENT_HOST decides, and the
             # model comes from the rollout Codex keeps for the thread — never from the ancestor's AI_AGENT
@@ -398,7 +398,7 @@ def test_performed_by_is_recorded_like_an_author_line():
             os.remove(transcript)
             assert run("add", "T2", "--check", sys.executable + " -c 'raise SystemExit(0)'", "--target", pj.dir)[0] == 0
             assert run("run", "--target", pj.dir)[0] == 0
-            assert pj.state()["tasks"]["T2"]["performed_by"]["model-unknown"] == "no transcript on this host (session not persisted)"
+            assert pj.state()["tasks"]["T2"]["performed_by"]["model-unknown"] .startswith("no transcript for this session on this host")
     finally:
         for k, v in saved.items():
             os.environ.pop(k, None)
@@ -764,6 +764,68 @@ def test_a_disputed_contract_test_goes_back_to_its_writer_and_the_build_goes_out
         assert open(os.path.join(pj.dir, "test_a.py")).read() == "# amended\n"
 
 
+def test_a_session_tasks_done_carries_what_the_session_did_in_its_window():
+    """A session task without a check is done on the agent's word. The host keeps a transcript; the SessionStart hook said
+    where. The task's trace is cut from it at the time the task was added: what the session actually ran and changed for it."""
+    keys = ("CLAUDE_CODE_SESSION_ID", "AGENT_HOST", "AI_AGENT", "CLAUDE_EFFORT")
+    old = {k: os.environ.get(k) for k in keys}
+    try:
+        for k in keys:
+            os.environ.pop(k, None)
+        os.environ["CLAUDE_CODE_SESSION_ID"] = "sess-1"
+        with Project() as pj:
+            tr = os.path.join(pj.dir, "sess-1.jsonl")
+            write(os.path.join(pj.dir, chongdae.RUNS, "sessions", "sess-1.json"), {"transcript": tr})
+            before = {"type": "assistant", "timestamp": "2000-01-01T00:00:00Z", "message": {"model": "m", "content": [{"type": "tool_use", "id": "t0", "name": "Bash", "input": {"command": "echo earlier work"}}]}}
+            write(tr, json.dumps(before) + "\n")
+            assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
+            assert run("add", "T1", "--brief", "b", "--target", pj.dir)[0] == 0
+            after = {"type": "assistant", "timestamp": "2999-01-01T00:00:00Z", "message": {"model": "m", "content": [
+                {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "python3 build.py"}},
+                {"type": "tool_use", "id": "t2", "name": "Write", "input": {"file_path": os.path.join(pj.dir, "NOTES.md")}}]}}
+            with open(tr, "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(after) + "\n")
+            assert run("run", "--target", pj.dir)[0] == 0
+            trace = json.load(open(os.path.join(chongdae.run_dir(pj.dir), "T1.session.trace.json"), encoding="utf-8"))
+            assert [c["command"] for c in trace["commands"]] == ["python3 build.py"] and trace["changed"] == ["write ./NOTES.md"], trace
+            assert trace["worker"]["session"] == "sess-1" and trace["worker"]["model"] == "m", trace
+    finally:
+        for k, v in old.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
+def test_a_plugin_resolves_to_the_copy_this_project_declares_not_the_first_install_record():
+    """Install records are per project. The first record with a plugin's name may be another project's old copy (a site's
+    builds once ran another project's 1.0.0 workers that way); the copy is the one from the marketplace hunsu.json declares
+    — or `hunsu dev`'s local one — installed for this project, and a directory marketplace's is its source, loaded in place."""
+    with Project() as pj:
+        home = os.path.join(pj.dir, "claude-home")
+        other = os.path.join(pj.dir, "elsewhere")
+        write(os.path.join(home, "plugins", "installed_plugins.json"), {"plugins": {
+            "w@oldmarket": [{"scope": "project", "projectPath": other, "installPath": "/old/w/1.0.0"}],
+            "w@pub": [{"scope": "project", "projectPath": pj.dir, "installPath": "/pub/w/1.2.0"}]}})
+        devsrc = os.path.join(pj.dir, "devmarket")
+        os.makedirs(os.path.join(devsrc, "w"))
+        write(os.path.join(home, "plugins", "known_marketplaces.json"), {"devm": {"source": {"source": "directory", "path": devsrc}}})
+        write(os.path.join(pj.dir, "hunsu.json"), {"plugins": {"w": {"marketplace": "pub", "version": "1.2.0"}}})
+        old = os.environ.get("HUNSU_CLAUDE_DIR"); os.environ["HUNSU_CLAUDE_DIR"] = home
+        try:
+            assert chongdae.plugin_root(pj.dir, "w") == "/pub/w/1.2.0"
+            write(os.path.join(pj.dir, "hunsu.local.json"), {"dev": {"w": "devm"}})
+            assert chongdae.plugin_root(pj.dir, "w") == os.path.join(devsrc, "w"), "in development: the source, in place"
+            write(os.path.join(pj.dir, "hunsu.local.json"), {})
+            write(os.path.join(pj.dir, "hunsu.json"), {"plugins": {"w": {"marketplace": "gone"}}})
+            try:
+                chongdae.plugin_root(pj.dir, "w"); assert False, "declared but not installed for this project must not fall back to another's"
+            except SystemExit as err:
+                assert "not installed for it here" in str(err)
+        finally:
+            os.environ.pop("HUNSU_CLAUDE_DIR") if old is None else os.environ.__setitem__("HUNSU_CLAUDE_DIR", old)
+
+
 def test_added_tasks_run_in_the_order_added_and_a_providers_task_starts_when_spawned():
     """Task files are read in name order; a session run's tasks must advance in the order they were added (seen live: a session
     renamed `tests-core` to `a-tests-core` to get the tests before the build). And a provider's task takes its `start`
@@ -843,7 +905,9 @@ def test_a_retry_keeps_a_before_answer_whose_contract_did_not_change_and_the_bud
         slow = os.path.join(pj.dir, "slow.py")
         write(slow, "import json, sys, time\ntime.sleep(2)\njson.dump(%r, open(sys.argv[2], 'w'))\n" % QUIBBLE)
         slow2 = os.path.join(pj.dir, "slow2.py")
-        write(slow2, "import json, sys, time\ntime.sleep(2)\njson.dump(%r, open(sys.argv[2], 'w'))\n" % RESPONSE_DONE)
+        # the builder outlasts the wait loop's 2-second poll past the deadline: at 2s it could finish inside that sleep and be
+        # taken as done, which is right for the engine and made this test depend on process start-up time (seen once in 22 runs)
+        write(slow2, "import json, sys, time\ntime.sleep(5)\njson.dump(%r, open(sys.argv[2], 'w'))\n" % RESPONSE_DONE)
         write(os.path.join(pj.dir, "hunsu.lock.json"), {"roles": {"quibble": [sys.executable, slow, "{request}", "{response}"], "implementer": [sys.executable, slow2, "{request}", "{response}"]}})
         assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
         assert run("add", "T1", "--role", "implementer", "--before", "quibble", "--brief", "b", "--check", sys.executable + " -c 'raise SystemExit(0)'", "--target", pj.dir)[0] == 0

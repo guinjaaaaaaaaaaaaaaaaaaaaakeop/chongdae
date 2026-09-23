@@ -186,7 +186,7 @@ def neutral_path(text, target):
     return text.replace(home, "~") if home and home != "~" else text
 
 
-def trace_of(transcript, target):
+def trace_of(transcript, target, since=None):
     """A worker's session, reduced to what a reader of the record needs: the commands it ran with their exit codes, the files
     it changed (and, where the host says so, read). Codex: `command_execution` and `file_change` items; Claude Code: tool
     calls and their results."""
@@ -198,6 +198,8 @@ def trace_of(transcript, target):
             continue
         if not isinstance(d, dict):
             continue
+        if since and d.get("timestamp") and str(d["timestamp"]).replace("Z", "+00:00") < since:
+            continue   # a session's transcript holds everything it did; a task's trace is its own window
         it = d.get("item") or {}
         if d.get("type") == "item.completed" and it.get("type") == "command_execution":
             cmd = it.get("command", "")
@@ -510,7 +512,7 @@ def cmd_add(args):
     if args.id in state["tasks"] or any(t.get("id") == args.id for t in plan.get("tasks", [])):
         raise SystemExit("task %s exists" % args.id)
     task = {"id": args.id, "role": args.role, "brief": args.brief or "", "closes": args.closes or [], "needs": [], "checks": [shlex.split(c) for c in args.check or []],
-            "tests": args.tests or [], "gate": "human" if args.gate == "human" else None}
+            "tests": args.tests or [], "gate": "human" if args.gate == "human" else None, **({"domain": args.domain} if args.domain else {})}
     for when in ("before", "after"):
         if getattr(args, when) is not None:
             task[when] = getattr(args, when)
@@ -867,9 +869,10 @@ def install_entry(entries, target):
     record, else the user-scope one, else — for a project that only enabled the plugin — the first; entries[0] was the first
     project that ever installed it, which loads a different copy once versions diverge."""
     want = os.path.realpath(target)
-    for e in entries:
-        if e.get("scope") == "project" and e.get("projectPath") and os.path.realpath(e["projectPath"]) == want:
-            return e
+    for scope in ("local", "project"):   # a local-scope install (this machine's, e.g. `hunsu dev`) is this project's too, and wins
+        for e in entries:
+            if e.get("scope") == scope and e.get("projectPath") and os.path.realpath(e["projectPath"]) == want:
+                return e
     for e in entries:
         if e.get("scope") == "user":
             return e
@@ -885,7 +888,23 @@ def plugin_root(target, name):
     if name == "chongdae":
         return os.path.dirname(os.path.abspath(__file__))   # the one plugin this process knows the location of
     home = os.environ.get("HUNSU_CLAUDE_DIR") or os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")
-    for key, entries in load(os.path.join(home, "plugins", "installed_plugins.json")).get("plugins", {}).items():
+    installed = load(os.path.join(home, "plugins", "installed_plugins.json")).get("plugins", {})
+    # the copy this project runs: from the marketplace its manifest declares (or the one `hunsu dev` put it in development
+    # from) — the first install record with a matching name belonged to whichever project installed it first, and a
+    # site's builds once ran another project's 1.0.0 that way
+    market = load(os.path.join(target, "hunsu.local.json")).get("dev", {}).get(name) \
+        or (load(os.path.join(target, "hunsu.json")).get("plugins", {}).get(name) or {}).get("marketplace")
+    if market:
+        src = (load(os.path.join(home, "plugins", "known_marketplaces.json")).get(market) or {}).get("source") or {}
+        if src.get("source") == "directory" and os.path.isdir(os.path.join(src.get("path", ""), name)):
+            return os.path.join(src["path"], name)   # a directory marketplace is loaded in place by the host: the source, not a snapshot
+        entries = installed.get("%s@%s" % (name, market)) or []
+        want = os.path.realpath(target)
+        mine = [e for e in entries if e.get("scope") == "user" or (e.get("projectPath") and os.path.realpath(e["projectPath"]) == want)]
+        if mine:
+            return install_entry(mine, target).get("installPath")
+        raise SystemExit("plugin %s@%s is declared for this project but not installed for it here — `hunsu install`" % (name, market))
+    for key, entries in installed.items():
         if key.split("@")[0] == name and entries:
             return install_entry(entries, target).get("installPath")
     raise SystemExit("plugin %r is not linked (hunsu.local.json) or installed here — a plan names plugins, never machine paths" % name)
@@ -1004,6 +1023,7 @@ def spawn(target, run, task, provider, plan, attempts=(), stage="build", extra=N
                "role": task["role"] if stage == "build" else ("verifier" if stage == "verify" else stage),
                "target": os.path.abspath(target).replace(os.sep, "/"), "goal": plan["goal"], "brief": task.get("brief", ""),
                "closes": task.get("closes", []), "contract": sections, "checks": task.get("checks", []) or checks_for_tests(all_tasks(plan, load_state(run)), task), "tests": task.get("tests", []),
+               **({"domain": task["domain"]} if task.get("domain") else {}),
                "response": res_path.replace(os.sep, "/")}
         if attempts:
             # A slice that spans calls: the next call is a fresh process. It resumes from the tree as the last call left it and from
@@ -1079,16 +1099,28 @@ def cmd_status(args):
 SESSIONS = os.path.join(RUNS, "sessions")   # machine-local: session id -> where the host keeps that session's transcript (written by the SessionStart hook)
 
 
+def session_transcript(target, session_id):
+    """Where the host keeps a session's transcript: the SessionStart hook's record for this project, else the host's own
+    layout — Claude Code keeps every session at ~/.claude/projects/<dir>/<session id>.jsonl, whichever directory it started in
+    (a session started elsewhere that works on this project has no record here)."""
+    import glob
+    rec = load(os.path.join(target, SESSIONS, session_id + ".json")) if session_id else {}
+    if rec.get("transcript") and os.path.exists(rec["transcript"]):
+        return rec["transcript"]
+    if not session_id or not re.fullmatch(r"[\w-]+", session_id):
+        return None
+    home = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")
+    found = glob.glob(os.path.join(home, "projects", "*", session_id + ".jsonl"))
+    return found[0] if len(found) == 1 else None
+
+
 def session_model(target, session_id):
     """The model behind a session, from the host's own transcript. The host tells its subprocesses the session id but not the
     model; the SessionStart hook records where the transcript is, and the transcript names the model on every assistant line.
     (None, why) when it cannot be known — a session run with persistence off leaves no transcript."""
-    rec = load(os.path.join(target, SESSIONS, session_id + ".json")) if session_id else {}
-    path = rec.get("transcript")
+    path = session_transcript(target, session_id)
     if not path:
-        return None, "no session record (the SessionStart hook did not run for this session)"
-    if not os.path.exists(path):
-        return None, "no transcript on this host (session not persisted)"
+        return None, "no transcript for this session on this host (no SessionStart record here, none under the host's projects)"
     model = None
     with io.open(path, encoding="utf-8", errors="replace") as fh:
         for line in fh:
@@ -1132,6 +1164,22 @@ def dispatch_text(what, d):
             % (what, " ".join('"%s"' % a if " " in a else a for a in d.get("prompt_argv") or []), d.get("response"), d.get("request")))
 
 
+def source_revision(root):
+    """A plugin run from its working source (a directory marketplace, `hunsu dev`) is not the release its version names: the
+    version gets the source's commit, `-dirty` when the tree has uncommitted changes — `1.2.0+g6cc62df-dirty` — so a record
+    never passes an unreleased build off as the release. An installed copy (not a git tree) is the release: "" ."""
+    import subprocess
+    try:
+        top = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=root, capture_output=True, text=True)
+        if top.returncode or os.path.realpath(top.stdout.strip()) != os.path.realpath(root):
+            return ""   # not the root of its own repository: an installed copy inside something else
+        sha = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=root, capture_output=True, text=True).stdout.strip()
+        dirty = subprocess.run(["git", "status", "--porcelain"], cwd=root, capture_output=True, text=True).stdout.strip()
+        return "+g%s%s" % (sha, "-dirty" if dirty else "") if sha else ""
+    except OSError:
+        return ""
+
+
 def plugin_versions(target, argv=()):
     """The versions a call ran with — to replay it, the skills and prompts must be those of the same versions. `used`: each
     plugin the provider's argv names, as installed here now; `locked`: every plugin the environment lock pins, with the
@@ -1147,7 +1195,7 @@ def plugin_versions(target, argv=()):
         for mf in (os.path.join(".claude-plugin", "plugin.json"), os.path.join(".codex-plugin", "plugin.json"), "plugin.json"):
             v = load(os.path.join(root, mf)).get("version")
             if v:
-                used[m] = v
+                used[m] = v + source_revision(root)
                 break
     lock = load(os.path.join(target, "hunsu.lock.json")).get("plugins", {}) if target else {}
     locked = {name: "%s#%s" % (p.get("version"), p.get("fingerprint")) if p.get("fingerprint") else p.get("version") for name, p in sorted(lock.items())}
@@ -1357,6 +1405,19 @@ def cmd_run(args):
             ts["touched"] = touched_files(target, ts.get("start"))   # what this task changed: the reviewer joins runs to files with it
             if "performed_by" not in ts:
                 ts["performed_by"] = performer(who, target=target)   # the session did the work: record which host/model/session, like a commit author
+            if who == "session" and not ts.get("response"):
+                # a session task's "done" is the agent's word; what the session did in the task's window is on the host's own
+                # record — the same trace a worker's call gets, cut from the session transcript at the time the task was added
+                rec = {"transcript": session_transcript(target, (ts.get("performed_by") or {}).get("session", ""))}
+                if rec.get("transcript"):
+                    try:
+                        save(os.path.join(d, task["id"] + ".session.trace.json"),
+                             {"artifact-type": "chongdae/trace@1", "worker": {k: v for k, v in (ts.get("performed_by") or {}).items() if k in ("host", "model", "session", "agent")},
+                              **trace_of(rec["transcript"], target, since=str(ts.get("added") or "")), "window-from": ts.get("added")})
+                    except (OSError, ValueError):
+                        pass
+                else:
+                    ts.setdefault("non-claims", []).append("no session transcript here: what the session did for this task is its word alone")
             save_state(d, state)
         if ts["status"] == "produced" and gate_of(task).get("human"):
             return stop("human: review %s (%s) — then `chongdae confirm %s --by <name>` or `--delegated \"<why the human handed this off>\"`"
@@ -1694,6 +1755,7 @@ def main(argv=None):
             p.add_argument("--gate", choices=["human"], default=None)
             p.add_argument("--before", nargs="*", default=None, help="roles to run before the work (their findings must be accepted first): --before quibble")
             p.add_argument("--after", nargs="*", default=None, help="roles to run after the checks pass, before the gate; their findings go to the record: --after newbie")
+            p.add_argument("--domain", default=None, help="what kind of artifact the task makes (code, site, plan, ...): carried in every request, so a worker reads it in that domain's terms")
     args = ap.parse_args(argv)
     return {"init": cmd_init, "status": cmd_status, "run": cmd_run, "confirm": cmd_confirm, "recheck": cmd_recheck, "accept": cmd_accept, "retry": cmd_retry,
             "add": cmd_add, "claim": cmd_claim, "drop": cmd_drop, "unstage": cmd_unstage, "close": cmd_close, "report": cmd_report, "delegate": cmd_delegate}[args.cmd](args)
