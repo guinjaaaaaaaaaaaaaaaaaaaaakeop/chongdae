@@ -144,6 +144,102 @@ def head_sha(target):
     return done.stdout.strip() if done.returncode == 0 and done.stdout.strip() else None
 
 
+# What stays on this machine: a worker's whole session (what it read, printed, thought) and the request exactly as sent carry
+# this machine's paths and can be megabytes a call. They are kept for a local audit; what other people and workers need goes
+# into the committed record as `<tag>.trace.json` — the model, the commands and their exit codes, the files changed — with
+# the project as `.` and the home directory as `~`.
+RECORD_IGNORE = ["*.transcript*.jsonl", "*.request.json", "*.request.*.json", "*.provider.log", "*.pending.json",
+                 "*.last.txt", "*.schema.json", "sessions/"]
+
+
+def ensure_record_ignore(target):
+    """`.chongdae/.gitignore` lists what stays local. Written by chongdae, for chongdae's own files only."""
+    path = os.path.join(target, RUNS, ".gitignore")
+    have = io.open(path, encoding="utf-8").read().split("\n") if os.path.exists(path) else []
+    missing = [p for p in RECORD_IGNORE if p not in have]
+    if missing:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        head = [] if have and have != [""] else ["# chongdae: machine-local — each worker's full session and the request as sent stay on this machine;",
+                                                "# the committed record carries <tag>.trace.json (commands, exit codes, files changed)"]
+        with io.open(path, "a", encoding="utf-8", newline="\n") as fh:
+            fh.write("\n".join(head + missing) + "\n")
+
+
+def neutral_path(text, target):
+    """This machine taken out of a string: the project -> `.`, the home directory -> `~`."""
+    text = str(text)
+    for root in sorted({os.path.abspath(target), os.path.realpath(target)}, key=len, reverse=True):
+        text = text.replace(root + os.sep, "./").replace(root, ".")
+    home = os.path.expanduser("~")
+    return text.replace(home, "~") if home and home != "~" else text
+
+
+def trace_of(transcript, target):
+    """A worker's session, reduced to what a reader of the record needs: the commands it ran with their exit codes, the files
+    it changed (and, where the host says so, read). Codex: `command_execution` and `file_change` items; Claude Code: tool
+    calls and their results."""
+    commands, changed, read, calls = [], [], [], {}
+    for line in io.open(transcript, encoding="utf-8", errors="replace"):
+        try:
+            d = json.loads(line) if line.strip() else None
+        except ValueError:
+            continue
+        if not isinstance(d, dict):
+            continue
+        it = d.get("item") or {}
+        if d.get("type") == "item.completed" and it.get("type") == "command_execution":
+            cmd = it.get("command", "")
+            m = re.match(r"^/bin/(?:ba|z)?sh -l?c (.*)$", cmd, re.S)   # the host's shell wrapper; the command is its argument
+            if m:
+                try:
+                    cmd = shlex.split(m.group(1))[0]
+                except ValueError:
+                    cmd = m.group(1)
+            commands.append({"command": neutral_path(cmd, target), "exit": it.get("exit_code")})
+        elif d.get("type") == "item.completed" and it.get("type") == "file_change":
+            for c in it.get("changes") or []:
+                entry = "%s %s" % (c.get("kind", "change"), neutral_path(c.get("path", ""), target))
+                if entry not in changed:
+                    changed.append(entry)
+        elif d.get("type") == "assistant":
+            for c in (d.get("message") or {}).get("content", []):
+                if c.get("type") == "tool_use":
+                    inp = c.get("input") or {}
+                    if c.get("name") == "Bash":
+                        calls[c.get("id")] = {"command": neutral_path(inp.get("command", ""), target), "exit": None}
+                        commands.append(calls[c.get("id")])
+                    elif c.get("name") in ("Edit", "Write", "NotebookEdit"):
+                        entry = "%s %s" % (c["name"].lower(), neutral_path(inp.get("file_path", ""), target))
+                        if entry not in changed:
+                            changed.append(entry)
+                    elif c.get("name") in ("Read", "Glob", "Grep"):
+                        entry = neutral_path(inp.get("file_path") or inp.get("path") or inp.get("pattern") or "", target)
+                        if entry and entry not in read:
+                            read.append(entry)
+        elif d.get("type") == "user":
+            for c in (d.get("message") or {}).get("content", []) if isinstance((d.get("message") or {}).get("content"), list) else []:
+                if isinstance(c, dict) and c.get("type") == "tool_result" and c.get("tool_use_id") in calls:
+                    calls[c["tool_use_id"]]["exit"] = 1 if c.get("is_error") else 0
+    return {"commands": commands, "changed": changed, **({"read": read} if read else {})}
+
+
+def write_traces(target, run_name):
+    """For every kept session in the run without a trace yet, write its trace beside it (same tag and attempt number)."""
+    d = os.path.join(target, RUNS, run_name)
+    for name in sorted(os.listdir(d)) if os.path.isdir(d) else []:
+        m = re.match(r"^(.*)\.response\.transcript(\.\d+)?\.jsonl$", name)
+        if not m:
+            continue
+        out = os.path.join(d, "%s.trace%s.json" % (m.group(1), m.group(2) or ""))
+        if os.path.exists(out) and os.path.getmtime(out) >= os.path.getmtime(os.path.join(d, name)):
+            continue
+        response = load(os.path.join(d, "%s.response%s.json" % (m.group(1), m.group(2) or "")))
+        w = response.get("worker") or {}
+        save(out, {"artifact-type": "chongdae/trace@1", "worker": {k: w.get(k) for k in ("host", "model", "effort", "turns", "session") if w.get(k) is not None},
+                   **trace_of(os.path.join(d, name), target),
+                   "kept-locally": name})
+
+
 def commit_record(target, run_name, message):
     """A judgment was written into the run's record: commit that record, and only it, right now. git's immutability then
     notarizes the judgment — its content (the tree hash), its time (committer date), and any later edit (a visible diff).
@@ -157,13 +253,41 @@ def commit_record(target, run_name, message):
         return subprocess.run(["git", *a], cwd=target, capture_output=True, text=True, encoding="utf-8", errors="replace")
 
     rel = RUNS + "/" + run_name
-    if git("add", "--", rel).returncode:
+    ensure_record_ignore(target)
+    try:
+        write_traces(target, run_name)
+    except (OSError, ValueError):
+        pass   # a trace is a summary; the record commits without it rather than not at all
+    # The commit is built on a scratch index from HEAD: only this run's directory and chongdae's .gitignore enter it — what
+    # the person has staged stays theirs — and a file an earlier version committed that is now local-only leaves it (a
+    # path-limited `git commit` would take the file back from the working tree, where it rightly stays).
+    gitdir = git("rev-parse", "--absolute-git-dir").stdout.strip()
+    if not gitdir:
         return None
-    if not git("diff", "--cached", "--quiet", "--", rel).returncode:   # nothing of this run staged -> nothing to notarize
-        return None
-    done = git("commit", "-m", "%s: %s" % (run_name, message), "--", rel)
-    if done.returncode:
-        return None
+    env = dict(os.environ, GIT_INDEX_FILE=os.path.join(gitdir, "chongdae-record-index"))
+    scratch = lambda *a: subprocess.run(["git", *a], cwd=target, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env)
+    has_head = git("rev-parse", "--verify", "-q", "HEAD").returncode == 0
+    try:
+        scratch("read-tree", "HEAD") if has_head else scratch("read-tree", "--empty")
+        if scratch("add", "--", rel, RUNS + "/.gitignore").returncode:
+            return None
+        stale = [t for t in scratch("ls-files", "-ci", "--exclude-standard", "--", rel).stdout.split("\n") if t.strip()]
+        if stale:
+            scratch("rm", "--cached", "--quiet", "--", *stale)
+        if has_head and scratch("diff-index", "--cached", "--quiet", "HEAD", "--").returncode == 0:
+            return None   # nothing of this run changed -> nothing to notarize
+        tree = scratch("write-tree").stdout.strip()
+        made = git("commit-tree", tree, *(["-p", "HEAD"] if has_head else []), "-m", "%s: %s" % (run_name, message))
+        if made.returncode or not made.stdout.strip():
+            return None
+        if git("update-ref", "HEAD", made.stdout.strip()).returncode:
+            return None
+    finally:
+        try:
+            os.remove(env["GIT_INDEX_FILE"])
+        except OSError:
+            pass
+    git("reset", "-q", "--", rel, RUNS + "/.gitignore")   # the person's index now agrees with HEAD for the record, and only there
     return head_sha(target)
 
 

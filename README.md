@@ -49,7 +49,8 @@ Each runs the engine and shows its output. `chongdae.py --help` for arguments; e
 |---|---|---|
 | `.chongdae/run-<id>/plan.json` | yes | the intent: goal, tasks (role, what closes, checks or artifact path, gate), providers |
 | `.chongdae/run-<id>/tasks/<id>.json` | yes | one file per task (so two people's tasks in one run merge as distinct files): status, claim, start snapshot, touched, response, review, `stages` (the before/after roles' answers and who gave them), attempts, confirmation, non-claims, `performed_by` and `verified_by` — and for session tasks the task's own definition |
-| `.chongdae/run-<id>/<task>.transcript.jsonl` | yes | a worker's whole host stream, kept by the worker next to its response — what a builder or verifier actually read and ran, not only what it answered |
+| `.chongdae/run-<id>/<tag>.trace.json` | yes | what a worker did, from its session: the model, the commands it ran with their exit codes, the files it changed (and read, where the host says) — the project as `.`, home as `~` |
+| `.chongdae/run-<id>/<tag>.response.transcript.jsonl`, `<tag>.request.json`, `*.provider.log`, `*.pending.json` | no (`.chongdae/.gitignore`, written by chongdae) | the worker's whole session and the request as sent — this machine's paths, often megabytes; kept here for a local audit, summarized into the trace. A copy an earlier version committed leaves the index at the next record commit |
 | `.chongdae/run-<id>/<tag>.pending.json`, `<tag>.provider.log` | yes | a detached provider in flight: its pid and start snapshot, and its output — how a killed `run` finds the work again |
 | `.chongdae/sessions/<session id>.json` | no (ignores itself) | written by the SessionStart hook: where this host keeps that session's transcript, so a session task can name its model |
 | `.chongdae/run-<id>/state.json` | yes | the run's status, `created`, `landed` (older runs kept their tasks here; still read) |

@@ -1007,6 +1007,45 @@ def test_run_selection_prefers_the_running_one_and_never_file_time():
         assert chongdae.run_dir(pj.dir) == second
 
 
+def test_a_workers_session_stays_local_and_the_record_carries_its_trace():
+    """A worker's whole session and the request as sent carry this machine's paths and can be megabytes; they stay on disk,
+    out of git. The committed record gets `<tag>.trace.json`: the commands with exit codes and the files changed, the project
+    as `.` and home as `~`. A session an earlier version committed leaves the index at the next record commit."""
+    tmp = tempfile.mkdtemp(prefix="chongdae-trace-")
+    try:
+        def git(*a):
+            return subprocess.run(["git", *a], cwd=tmp, capture_output=True, text=True)
+        git("init", "-q"); git("config", "user.email", "t@t"); git("config", "user.name", "t")
+        run_dir = os.path.join(tmp, ".chongdae", "run-x")
+        home = os.path.expanduser("~")
+        lines = [
+            {"type": "thread.started", "thread_id": "t1"},
+            {"type": "item.completed", "item": {"type": "command_execution", "command": '/bin/zsh -lc "python3 -m unittest discover -s tests -p \'test_s[12].py\'"', "exit_code": 0}},
+            {"type": "item.completed", "item": {"type": "command_execution", "command": '/bin/zsh -lc "cat %s/.codex/skill.md"' % home, "exit_code": 0}},
+            {"type": "item.completed", "item": {"type": "file_change", "changes": [{"path": os.path.join(tmp, "build.py"), "kind": "update"}]}},
+        ]
+        write(os.path.join(run_dir, "b.response.transcript.jsonl"), "\n".join(json.dumps(x) for x in lines) + "\n")
+        write(os.path.join(run_dir, "b.request.json"), json.dumps({"target": tmp}))
+        write(os.path.join(run_dir, "b.response.json"), json.dumps({"status": "done", "worker": {"host": "codex", "model": "m", "transcript": "b.response.transcript.jsonl"}}))
+        write(os.path.join(run_dir, "state.json"), "{}")
+        # an earlier version committed a session: it must leave the index, and stay on disk
+        write(os.path.join(run_dir, "a.response.transcript.1.jsonl"), json.dumps(lines[1]) + "\n")
+        git("add", "-f", ".chongdae/run-x/a.response.transcript.1.jsonl"); git("commit", "-qm", "old")
+        assert chongdae.commit_record(tmp, "run-x", "test")
+        tracked = git("ls-files").stdout.split()
+        assert ".chongdae/run-x/b.trace.json" in tracked and ".chongdae/run-x/a.trace.1.json" in tracked, tracked
+        assert not any(t.endswith((".jsonl", ".request.json")) for t in tracked), tracked
+        assert os.path.exists(os.path.join(run_dir, "a.response.transcript.1.jsonl")), "local copy kept"
+        trace = json.load(open(os.path.join(run_dir, "b.trace.json"), encoding="utf-8"))
+        assert trace["worker"] == {"host": "codex", "model": "m"}, trace
+        assert trace["commands"][0] == {"command": "python3 -m unittest discover -s tests -p 'test_s[12].py'", "exit": 0}, trace
+        assert trace["commands"][1]["command"] == "cat ~/.codex/skill.md" and trace["changed"] == ["update ./build.py"], trace
+        committed = git("show", "HEAD", "--", ".chongdae/run-x/b.trace.json").stdout
+        assert tmp not in committed and home not in committed, committed
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 if __name__ == "__main__":
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
