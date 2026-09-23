@@ -176,6 +176,9 @@ def neutral_path(text, target):
     home = os.path.expanduser("~")
     text = re.sub(r"(?:%s|~)/\.(?:claude|codex)/plugins/cache/[^/\s\"']+/([^/\s\"']+)/([^/\s\"']+)" % re.escape(home),
                   lambda m: "<plugin:%s@%s>" % (m.group(1), m.group(2)), text)
+    # a path above one plugin's version — a marketplace's cache or checkout — names only this machine's marketplaces
+    text = re.sub(r"(?:%s|~)/\.(claude|codex)/plugins/(?:cache|marketplaces)(?:/[^/\s\"']+)?" % re.escape(home),
+                  lambda m: "<%s-plugins>" % m.group(1), text)
     tmps = {tempfile.gettempdir(), os.path.realpath(tempfile.gettempdir()), "/private/tmp", "/tmp"}
     for t in sorted(tmps, key=len, reverse=True):
         text = re.sub(r"%s/[^\s\"'/]+" % re.escape(t.rstrip("/")), "<tmp>", text)

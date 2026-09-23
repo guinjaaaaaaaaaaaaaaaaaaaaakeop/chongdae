@@ -1091,6 +1091,8 @@ def test_a_workers_session_stays_local_and_the_record_carries_its_trace():
         assert trace["worker"] == {"host": "codex", "model": "m"}, trace
         assert trace["commands"][0] == {"command": "python3 -m unittest discover -s tests -p 'test_s[12].py'", "exit": 0}, trace
         assert trace["commands"][1]["command"] == "cat ~/.codex/skill.md" and trace["changed"] == ["update ./build.py"], trace
+        assert chongdae.neutral_path("rg --files %s/.codex/plugins/cache/some-market | rg x" % home, tmp) == "rg --files <codex-plugins> | rg x"
+        assert chongdae.neutral_path("sed -n 1p ~/.claude/plugins/cache/m/hacheong/1.2.0/worker.py", tmp) == "sed -n 1p <plugin:hacheong@1.2.0>/worker.py"
         committed = git("show", "HEAD", "--", ".chongdae/run-x/b.trace.json").stdout
         assert tmp not in committed and home not in committed, committed
     finally:
