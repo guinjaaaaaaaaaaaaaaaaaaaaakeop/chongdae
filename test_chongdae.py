@@ -208,6 +208,10 @@ def test_verifier_before_the_gate_protected_tests_and_delegation_policy():
         assert code == chongdae.DECISION and "verifier rejected" in out and "clear resets the counter" in out, out
         ts = pj.state()["tasks"]["S1"]
         assert ts["rejected"]["by"] == "verifier" and ts["review"]["verdict"] == "reject" and "start" in ts
+        # before asking a person, the rejected work went back to the hands on its own — twice, then the stop is a person's
+        autos = [a for a in ts.get("attempts", []) if (a.get("retried") or {}).get("auto")]
+        assert len(autos) == chongdae.AUTO_RESENDS and all(a["review"]["verdict"] == "reject" and a["retried"]["by"] == "chongdae" for a in autos), ts.get("attempts")
+        assert "sent back to the provider automatically" in out, out
         assert os.path.exists(os.path.join(chongdae.run_dir(pj.dir), "S1.verify.request.json")), "the verifier's request is part of the record"
         req = json.load(open(os.path.join(chongdae.run_dir(pj.dir), "S1.verify.request.json"), encoding="utf-8"))
         assert req["stage"] == "verify" and req["role"] == "verifier" and req["built"]["summary"] == "added count" and req["tests"] == ["test_x.py"]
@@ -218,12 +222,12 @@ def test_verifier_before_the_gate_protected_tests_and_delegation_policy():
         # retry keeps the review with the attempt; the next verifier accepts; the gate delegates only after that accept
         assert run("retry", "S1", "--by", "kim", "--target", pj.dir)[0] == 0
         ts = pj.state()["tasks"]["S1"]
-        assert ts["attempts"][0]["review"]["verdict"] == "reject" and "review" not in ts and "rejected" not in ts and "start" in ts   # the task keeps its start: attempts accumulate
+        assert ts["attempts"][-1]["review"]["verdict"] == "reject" and ts["attempts"][-1]["retried"]["by"] == "kim" and "review" not in ts and "rejected" not in ts and "start" in ts   # the task keeps its start: attempts accumulate
         pj.fake_provider(REVIEW_ACCEPT, "verifier")
         code, out = run("run", "--target", pj.dir)
         assert code == chongdae.DECISION and "human: review task S1" in out, out
         rd = chongdae.run_dir(pj.dir)
-        assert os.path.exists(os.path.join(rd, "S1.verify.request.json")) and os.path.exists(os.path.join(rd, "S1.verify.2.request.json")), os.listdir(rd)   # the first verdict's files survive the retry
+        assert os.path.exists(os.path.join(rd, "S1.verify.request.json")) and os.path.exists(os.path.join(rd, "S1.verify.4.request.json")), os.listdir(rd)   # every verdict's files survive the retries
         assert run("confirm", "S1", "--delegated", "verifier said ok", "--target", pj.dir)[0] == 0
         cf = dict(pj.state()["tasks"]["S1"]["confirmed"]); cf.pop("at", None)
         assert cf == {"delegated": "verifier said ok", "verifier": "accept"}
@@ -697,6 +701,21 @@ def test_people_hired_before_and_after_a_task_answer_with_findings_the_record_ke
         st = pj.state()["tasks"]["T1"]["stages"]["quibble"]
         assert st["response"]["status"] == "done" and len(st["failed"]) == 1, "the failed try stays in the record next to the answer"
     with Project() as pj:
+        # a role that cannot work on this task comes off it, with the reason: the task goes on, the record says the role did not look
+        write(os.path.join(pj.dir, "hunsu.lock.json"), {"roles": {"newbie": [sys.executable, "-c", "import json,sys; json.dump({'status': 'failed', 'summary': 'no README', 'non-claims': ['readme-only: nothing a newbie can read'], 'findings': []}, open(sys.argv[2], 'w'))", "{request}", "{response}"]}})
+        assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
+        assert run("add", "T1", "--brief", "b", "--check", sys.executable + " -c 'raise SystemExit(0)'", "--after", "newbie", "--target", pj.dir)[0] == 0
+        code, out = run("run", "--target", pj.dir)
+        assert code == chongdae.DECISION and "chongdae unstage T1 newbie --why WHY" in out, out
+        assert run("unstage", "T1", "quibble", "--why", "x", "--target", pj.dir)[0] != 0, "not hired on T1"
+        code, out = run("unstage", "T1", "newbie", "--why", "the project has no README yet", "--by", "kim", "--target", pj.dir)
+        assert code == 0, out
+        code, out = run("run", "--target", pj.dir)
+        assert code == 0, out
+        ts = pj.state()["tasks"]["T1"]
+        assert ts["status"] == "done" and ts["unstaged"]["newbie"]["by"] == "kim" and "newbie" not in ts.get("stages", {})
+        assert any("newbie did not look at this task (taken off: the project has no README yet)" in n for n in ts["non-claims"]), ts["non-claims"]
+    with Project() as pj:
         # an empty quibble lets the work through; a plan's `stages` are the defaults for tasks that say neither; the shape check refuses junk
         write(os.path.join(pj.dir, "hunsu.lock.json"), {"roles": {"quibble": pj.fake_provider(dict(QUIBBLE, findings=[]), name="sibi")}})
         plan = {"artifact-type": "chongdae/plan@1", "goal": "g", "kind": "slice", "stages": {"before": ["quibble"]}, "providers": {"builder": pj.fake_provider(RESPONSE_DONE)},
@@ -711,6 +730,38 @@ def test_people_hired_before_and_after_a_task_answer_with_findings_the_record_ke
         assert chongdae.plan_problems({"artifact-type": "chongdae/plan@1", "goal": "g", "stages": {"during": []}, "tasks": [{"id": "x", "role": "r", "checks": [["x"]], "before": "quibble"}]}) == [
             "x: `before` is a list of role names (people the plan hires around this task: [\"quibble\"], [\"newbie\"])",
             "`stages` is {\"before\": [roles], \"after\": [roles]} — the plan's defaults for tasks that say neither"]
+
+
+def test_a_disputed_contract_test_goes_back_to_its_writer_and_the_build_goes_out_again():
+    """The builder says a contract test contradicts the contract. Nobody edits the test by hand between attempts: the task
+    that wrote it is reopened with the dispute (`amending` in its request), rewrites it, the build re-baselines that file
+    (so the rewrite is not read as the build changing its tests) and goes out again — all inside `run`."""
+    with Project() as pj:
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "base"], cwd=pj.dir)
+        writer = os.path.join(pj.dir, "writer.py")
+        write(writer, "import json, os, sys\nreq = json.load(open(sys.argv[1]))\nroot = os.path.dirname(os.path.abspath(sys.argv[1]))\n"
+                      "open(os.path.join(req['target'], 'test_a.py'), 'w').write('# amended\\n' if req.get('amending') else '# wrong fixture\\n')\n"
+                      "json.dump({'status': 'done', 'summary': 'amended' if req.get('amending') else 'wrote', 'non-claims': [], 'tests': ['test_a.py']}, open(sys.argv[2], 'w'))\n")
+        builder = os.path.join(pj.dir, "builder.py")
+        write(builder, "import json, os, sys\nreq = json.load(open(sys.argv[1]))\n"
+                       "wrong = open(os.path.join(req['target'], 'test_a.py')).read().startswith('# wrong')\n"
+                       "json.dump({'status': 'blocked' if wrong else 'done', 'summary': 'disputed' if wrong else 'built', 'verified': [], 'decisions': [], 'non-claims': [],\n"
+                       "           'disputed-tests': [{'test': 'test_a.py::test_x', 'contract_quote': 'Q', 'why': 'fixture breaks Q'}] if wrong else []}, open(sys.argv[2], 'w'))\n")
+        write(os.path.join(pj.dir, "hunsu.lock.json"), {"roles": {"nitpick": [sys.executable, writer, "{request}", "{response}"],
+                                                                  "implementer": [sys.executable, builder, "{request}", "{response}"]}})
+        assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
+        assert run("add", "tests", "--role", "nitpick", "--tests", "test_a.py", "--target", pj.dir)[0] == 0
+        assert run("add", "build", "--role", "implementer", "--tests", "test_a.py", "--check", sys.executable + " -c 'raise SystemExit(0)'", "--target", pj.dir)[0] == 0
+        code, out = run("run", "--target", pj.dir)
+        assert code == 0 and "reopened with the dispute" in out, out
+        rd = chongdae.run_dir(pj.dir)
+        st = pj.state()["tasks"]
+        assert st["tests"]["status"] == "done" and st["tests"]["attempts"][0]["disputed-tests"][0]["why"] == "fixture breaks Q", st["tests"]
+        assert json.load(open(os.path.join(rd, "tests.request.json")))["amending"][0]["test"] == "test_a.py::test_x"
+        assert json.load(open(os.path.join(rd, "tests.request.1.json")))["checks"] == [[sys.executable, "-c", "raise SystemExit(0)"]], "the writer's request carries the build's check"
+        assert st["build"]["status"] == "done" and st["build"]["rebaselined"][0]["tests"] == ["test_a.py"], st["build"]
+        assert str(st["build"]["attempts"][0]["retried"]["auto"]).startswith("tests disputed"), st["build"]["attempts"]
+        assert open(os.path.join(pj.dir, "test_a.py")).read() == "# amended\n"
 
 
 def test_added_tasks_run_in_the_order_added_and_a_providers_task_starts_when_spawned():
