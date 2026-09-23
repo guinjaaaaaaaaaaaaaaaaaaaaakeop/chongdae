@@ -181,16 +181,29 @@ def neutral_path(text, target):
                   lambda m: "<%s-plugins>" % m.group(1), text)
     tmps = {tempfile.gettempdir(), os.path.realpath(tempfile.gettempdir()), "/private/tmp", "/tmp"}
     for t in sorted(tmps, key=len, reverse=True):
-        text = re.sub(r"%s/[^\s\"'/]+" % re.escape(t.rstrip("/")), "<tmp>", text)
-    text = re.sub(r"/(?:private/)?var/folders/[^\s\"']*", "<tmp>", text)
-    return text.replace(home, "~") if home and home != "~" else text
+        text = re.sub(r"%s/[^\s\"'`;|&)]*" % re.escape(t.rstrip("/")), "<tmp>", text)   # the whole path under it, not its first segment
+    text = re.sub(r"/(?:private/)?var/folders/[^\s\"'`;|&)]*", "<tmp>", text)
+    user = os.path.basename(home.rstrip(os.sep)) if home else ""
+    if home and home != "~":
+        # a host that names folders after paths (Claude Code: ~/.claude/projects/-Users-me-src-app) carries the home in the name
+        text = text.replace(home.replace(os.sep, "-"), "~").replace(home, "~")
+    if len(user) >= 3:
+        text = re.sub(r"(?<![\w-])%s(?![\w-])" % re.escape(user), "<user>", text)   # the account's name, even written on its own
+    return text
 
 
-def trace_of(transcript, target, since=None):
+def trace_of(transcript, target, since=None, project_only=False):
     """A worker's session, reduced to what a reader of the record needs: the commands it ran with their exit codes, the files
     it changed (and, where the host says so, read). Codex: `command_execution` and `file_change` items; Claude Code: tool
     calls and their results."""
     commands, changed, read, calls = [], [], [], {}
+    elsewhere = 0
+    home = os.path.expanduser("~")
+    roots = {os.path.abspath(target), os.path.realpath(target)}
+    roots |= {"~" + r[len(home):] for r in list(roots) if home and r.startswith(home + os.sep)}   # `cd ~/src/app` names it too
+    def about_project(text, cwd):
+        # a session works on many things; its trace for one project keeps what touched that project
+        return not project_only or any(r in str(text) for r in roots) or (cwd and os.path.realpath(cwd) in roots)
     for line in io.open(transcript, encoding="utf-8", errors="replace"):
         try:
             d = json.loads(line) if line.strip() else None
@@ -220,9 +233,15 @@ def trace_of(transcript, target, since=None):
                 if c.get("type") == "tool_use":
                     inp = c.get("input") or {}
                     if c.get("name") == "Bash":
+                        if not about_project(inp.get("command", ""), d.get("cwd")):
+                            elsewhere += 1
+                            continue
                         calls[c.get("id")] = {"command": neutral_path(inp.get("command", ""), target), "exit": None}
                         commands.append(calls[c.get("id")])
                     elif c.get("name") in ("Edit", "Write", "NotebookEdit"):
+                        if not about_project(inp.get("file_path", ""), None):
+                            elsewhere += 1
+                            continue
                         entry = "%s %s" % (c["name"].lower(), neutral_path(inp.get("file_path", ""), target))
                         if entry not in changed:
                             changed.append(entry)
@@ -234,7 +253,21 @@ def trace_of(transcript, target, since=None):
             for c in (d.get("message") or {}).get("content", []) if isinstance((d.get("message") or {}).get("content"), list) else []:
                 if isinstance(c, dict) and c.get("type") == "tool_result" and c.get("tool_use_id") in calls:
                     calls[c["tool_use_id"]]["exit"] = 1 if c.get("is_error") else 0
-    return {"commands": commands, "changed": changed, **({"read": read} if read else {})}
+    read = [r for r in read if not project_only or not os.path.isabs(r) or r.startswith(".")]
+    return {"commands": commands, "changed": changed, **({"read": read} if read else {}),
+            **({"elsewhere": "%d command(s) or edit(s) outside this project, kept only in the local session" % elsewhere} if elsewhere else {})}
+
+
+def session_summary(trace):
+    """A session is a person's (or an agent's) whole working day: its command lines carry whatever it was doing — other
+    repositories, search patterns, names that are nobody's business in a committed record. The committed trace of a session
+    task keeps what it changed in the project and how many commands it ran there; the command lines stay in the local
+    transcript, where an audit on this machine reads them."""
+    out = {"changed": trace.get("changed", []), "commands-run": len(trace.get("commands", [])),
+           "command-lines": "kept in the local session transcript, not in the record"}
+    if trace.get("elsewhere"):
+        out["elsewhere"] = trace["elsewhere"]
+    return out
 
 
 def write_traces(target, run_name):
@@ -1413,7 +1446,8 @@ def cmd_run(args):
                     try:
                         save(os.path.join(d, task["id"] + ".session.trace.json"),
                              {"artifact-type": "chongdae/trace@1", "worker": {k: v for k, v in (ts.get("performed_by") or {}).items() if k in ("host", "model", "session", "agent")},
-                              **trace_of(rec["transcript"], target, since=str(ts.get("added") or "")), "window-from": ts.get("added")})
+                              **session_summary(trace_of(rec["transcript"], target, since=str(ts.get("added") or ""), project_only=True)),
+                              "window-from": ts.get("added")})
                     except (OSError, ValueError):
                         pass
                 else:

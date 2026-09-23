@@ -780,15 +780,19 @@ def test_a_session_tasks_done_carries_what_the_session_did_in_its_window():
             write(tr, json.dumps(before) + "\n")
             assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
             assert run("add", "T1", "--brief", "b", "--target", pj.dir)[0] == 0
-            after = {"type": "assistant", "timestamp": "2999-01-01T00:00:00Z", "message": {"model": "m", "content": [
+            after = {"type": "assistant", "timestamp": "2999-01-01T00:00:00Z", "cwd": pj.dir, "message": {"model": "m", "content": [
                 {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "python3 build.py"}},
                 {"type": "tool_use", "id": "t2", "name": "Write", "input": {"file_path": os.path.join(pj.dir, "NOTES.md")}}]}}
+            # the same session also worked somewhere else: that stays out of this project's record
+            other = {"type": "assistant", "timestamp": "2999-01-01T00:00:01Z", "cwd": "/somewhere/else", "message": {"model": "m", "content": [
+                {"type": "tool_use", "id": "t3", "name": "Bash", "input": {"command": "grep secret notes.txt"}}]}}
             with open(tr, "a", encoding="utf-8") as fh:
-                fh.write(json.dumps(after) + "\n")
+                fh.write(json.dumps(after) + "\n" + json.dumps(other) + "\n")
             assert run("run", "--target", pj.dir)[0] == 0
             trace = json.load(open(os.path.join(chongdae.run_dir(pj.dir), "T1.session.trace.json"), encoding="utf-8"))
-            assert [c["command"] for c in trace["commands"]] == ["python3 build.py"] and trace["changed"] == ["write ./NOTES.md"], trace
+            assert trace["commands-run"] == 1 and "commands" not in trace and trace["changed"] == ["write ./NOTES.md"], trace   # lines stay local
             assert trace["worker"]["session"] == "sess-1" and trace["worker"]["model"] == "m", trace
+            assert "secret" not in json.dumps(trace) and trace["elsewhere"].startswith("1 command"), trace
     finally:
         for k, v in old.items():
             if v is None:
@@ -1157,6 +1161,8 @@ def test_a_workers_session_stays_local_and_the_record_carries_its_trace():
         assert trace["commands"][1]["command"] == "cat ~/.codex/skill.md" and trace["changed"] == ["update ./build.py"], trace
         assert chongdae.neutral_path("rg --files %s/.codex/plugins/cache/some-market | rg x" % home, tmp) == "rg --files <codex-plugins> | rg x"
         assert chongdae.neutral_path("sed -n 1p ~/.claude/plugins/cache/m/hacheong/1.2.0/worker.py", tmp) == "sed -n 1p <plugin:hacheong@1.2.0>/worker.py"
+        assert chongdae.neutral_path("D=/private/tmp/claude-1/x-y/scratch/a.json && ls", tmp) == "D=<tmp> && ls"
+        assert chongdae.neutral_path("cat %s/.claude/projects/%s-src/s.jsonl" % (home, home.replace(os.sep, "-")), tmp) == "cat ~/.claude/projects/~-src/s.jsonl"
         committed = git("show", "HEAD", "--", ".chongdae/run-x/b.trace.json").stdout
         assert tmp not in committed and home not in committed, committed
     finally:
