@@ -1640,7 +1640,7 @@ def cmd_run(args):
                 if rec.get("transcript"):
                     try:
                         save(os.path.join(d, task["id"] + ".session.trace.json"),
-                             {"artifact-type": "chongdae/trace@1", "worker": {k: v for k, v in (ts.get("performed_by") or {}).items() if k in ("host", "model", "session", "agent")},
+                             {"artifact-type": "chongdae/trace@1", "worker": {k: v for k, v in (ts.get("performed_by") or {}).items() if k in ("host", "model", "agent")},   # the session is local/'s
                               **session_summary(trace_of(rec["transcript"], target, since=str(ts.get("added") or ""), project_only=True)),
                               "window-from": ts.get("added")})
                     except (OSError, ValueError):

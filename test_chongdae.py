@@ -798,7 +798,7 @@ def test_a_session_tasks_done_carries_what_the_session_did_in_its_window():
             assert run("run", "--target", pj.dir)[0] == 0
             trace = json.load(open(os.path.join(chongdae.run_dir(pj.dir), "T1.session.trace.json"), encoding="utf-8"))
             assert trace["commands-run"] == 1 and "commands" not in trace and trace["changed"] == ["write ./NOTES.md"], trace   # lines stay local
-            assert trace["worker"]["session"] == "sess-1" and trace["worker"]["model"] == "m", trace
+            assert "session" not in trace["worker"] and trace["worker"]["model"] == "m", trace   # the session is this machine's (local/)
             assert "secret" not in json.dumps(trace) and trace["elsewhere"].startswith("1 command"), trace
     finally:
         for k, v in old.items():
@@ -866,6 +866,9 @@ def test_the_record_carries_what_replays_a_run_and_nothing_of_this_machine():
             local = json.load(open(os.path.join(rd, "local", "tasks", "T1.json"), encoding="utf-8"))
             assert "unrelated.png" in local["start"] and local["performed_by"]["session"] == "sess-local", local
             assert pj.state()["tasks"]["T1"]["performed_by"]["session"] == "sess-local", "the engine still reads its own machine's part"
+            for name in os.listdir(rd):
+                if name.endswith(".json"):
+                    assert "sess-local" not in open(os.path.join(rd, name), encoding="utf-8").read(), name   # no committed file names the session
             # a provider's task: what it was asked is committed, portably; the request as sent stays local
             assert run("add", "T2", "--role", "implementer", "--check", sys.executable + " -c pass", "--target", pj.dir)[0] == 0
             assert run("run", "--target", pj.dir)[0] == 0
