@@ -878,11 +878,12 @@ def test_the_record_carries_what_replays_a_run_and_nothing_of_this_machine():
             doc = json.loads(run("report", "--target", pj.dir)[1])
             unreleased = [f for f in doc["findings"] if f["kind"] == "unreleased-writer"]
             assert ("+g" in chongdae.engine()) == bool(unreleased), (chongdae.engine(), unreleased)
-            # while the project tries working sources, the record is written and not committed
+            # `commit-records: false` (here in this machine's overlay, as `hunsu dev` applies a project's dev-settings):
+            # the record is written and not committed
             head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=pj.dir, capture_output=True, text=True).stdout
-            write(os.path.join(pj.dir, "hunsu.local.json"), {"dev": {"chongdae": "/src/chongdae"}})
+            write(os.path.join(pj.dir, "hunsu.local.json"), {"settings": {"chongdae": {"commit-records": False}}})
             code, out = run("init", "--session", "--goal", "trial", "--target", pj.dir)
-            assert code == 0 and "record not committed" in out, out
+            assert code == 0 and "record written, not committed" in out, out
             assert subprocess.run(["git", "rev-parse", "HEAD"], cwd=pj.dir, capture_output=True, text=True).stdout == head
             assert os.path.exists(os.path.join(chongdae.run_dir(pj.dir), "state.json")), "the record is on disk"
         finally:

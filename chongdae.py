@@ -195,7 +195,7 @@ def stamp():
 
 
 _ENGINE = None
-_DEV_TOLD = False
+_UNCOMMITTED_TOLD = False
 
 
 def engine():
@@ -392,14 +392,12 @@ def commit_record(target, run_name, message):
 
     rel = RUNS + "/" + run_name
     ensure_record_ignore(target)
-    dev = (load(os.path.join(target, "hunsu.local.json")) or {}).get("dev")
-    if dev:
-        # a trial leaves nothing in the project: while `hunsu dev` runs working sources here, the record is written and
-        # kept on disk, never committed — its commit is the released version's, after the release
-        global _DEV_TOLD
-        if not _DEV_TOLD:
-            print("  (record not committed: this project is trying working sources — %s; the record stays on disk)" % ", ".join(sorted(dev)))
-            _DEV_TOLD = True
+    if settings(target).get("commit-records") is False:
+        # the project (or this machine's overlay) says the record is written, not committed
+        global _UNCOMMITTED_TOLD
+        if not _UNCOMMITTED_TOLD:
+            print("  (record written, not committed: settings.chongdae.commit-records is false)")
+            _UNCOMMITTED_TOLD = True
         return None
     try:
         write_traces(target, run_name)
@@ -515,13 +513,20 @@ def providers(target, plan):
     return out
 
 
+def settings(target):
+    """chongdae's settings: hunsu.json `settings.chongdae`, with this machine's overlay (hunsu.local.json `settings.chongdae`,
+    never committed) on top — read where they are written, not from the lock."""
+    out = dict(((load(os.path.join(target, "hunsu.json")).get("settings") or {}).get("chongdae") or {}))
+    out.update(((load(os.path.join(target, "hunsu.local.json")).get("settings") or {}).get("chongdae") or {}))
+    return out
+
+
 def outside_runs(target):
     """Paths the project changes by its own procedure, not in runs (an author's posts, the site built from them):
     hunsu.json `settings.chongdae.outside-runs`, a human declaration read where it is written — not from the lock, so it
     holds while this source is tried under `hunsu dev`. Project-relative; an entry names a file or a directory. An entry
     that is absolute or climbs out of the project names nothing and is dropped."""
-    manifest = load(os.path.join(target, "hunsu.json"))
-    declared = ((manifest.get("settings") or {}).get("chongdae") or {}).get("outside-runs") or []
+    declared = settings(target).get("outside-runs") or []
     out = []
     for p in declared if isinstance(declared, list) else []:
         p = str(p).replace("\\", "/").strip()
@@ -888,14 +893,14 @@ def cmd_report(args):
                     findings.append({"kind": "left-open", "where": "%s/%s" % (name, tid),
                                      "text": ("rejected by %s (%s) and never retried" % (rej["by"], rej["why"]) if rej else "left open when the run closed")
                                              + " — `chongdae drop %s --why` if it will not be done, or a run that does it" % tid})
-    # a record a working source wrote and somebody committed: it names a build nobody can install
+    # a record written by a build that is not a release: it names a build nobody can install
     for r in all_runs(target):
         name = os.path.basename(r)
         for f in [os.path.join(r, "state.json")] + sorted(glob.glob(os.path.join(r, "tasks", "*.json"))):
             w = str(load(f).get("written_by", ""))
             if "+g" in w and git("ls-files", "--error-unmatch", os.path.relpath(f, target)) is not None:
                 findings.append({"kind": "unreleased-writer", "where": os.path.relpath(f, target).replace(os.sep, "/"),
-                                 "text": "committed as written by %s — a working source, not a release; a trial's records stay local" % w})
+                                 "text": "committed as written by %s — a build that is not a release (its version carries +g<commit>); nobody can install what wrote it" % w})
     print(json.dumps({"artifact-type": "dwitbuk/findings@1", "source": "chongdae", "findings": findings}, ensure_ascii=False, indent=1))
     return 0
 
