@@ -34,6 +34,7 @@ Artifacts a task produces live in the project (task `path` is project-relative).
 The run is the agent's container: the plugin's PreToolUse hook refuses Edit/Write in a project with no run in progress.
 """
 import argparse
+import glob
 import io
 import json
 import os
@@ -90,21 +91,66 @@ def load(path):
 
 
 def save(path, data):
+    if isinstance(data, dict) and str(data.get("artifact-type", "")).startswith("chongdae/"):
+        # every record says which chongdae wrote it — a version, and `+g<sha>[-dirty]` when a working source did
+        data = {"artifact-type": data["artifact-type"], "written_by": engine(), **{k: v for k, v in data.items() if k not in ("artifact-type", "written_by")}}
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with io.open(path, "w", encoding="utf-8", newline="\n") as fh:
         json.dump(data, fh, ensure_ascii=False, indent=2)
         fh.write("\n")
 
 
+# What a record keeps for this machine only: which host session did the work and where its transcript is, and the
+# snapshot a task measures its changes from. Nobody else can open that session or needs that snapshot once `touched`
+# is written; committed, they named sessions and unrelated local files. They live in <run>/local/ (git-ignored).
+PRIVATE_KEYS = ("session", "transcript", "kept-locally", "start")
+
+
+def split_private(o):
+    """(public, private): the record without PRIVATE_KEYS at any depth, and a mirror holding only them."""
+    if isinstance(o, dict):
+        pub, priv = {}, {}
+        for k, v in o.items():
+            if k in PRIVATE_KEYS:
+                priv[k] = v
+                continue
+            pub[k], q = split_private(v)
+            if q:
+                priv[k] = q
+        return pub, priv
+    if isinstance(o, list):
+        pub, priv = [], {}
+        for i, v in enumerate(o):
+            p, q = split_private(v)
+            pub.append(p)
+            if q:
+                priv[str(i)] = q
+        return pub, ({"[]": priv} if priv else {})
+    return o, {}
+
+
+def merge_private(pub, priv):
+    if isinstance(pub, list) and isinstance(priv, dict) and "[]" in priv:
+        for i, q in priv["[]"].items():
+            if int(i) < len(pub):
+                pub[int(i)] = merge_private(pub[int(i)], q)
+        return pub
+    if isinstance(pub, dict) and isinstance(priv, dict):
+        for k, q in priv.items():
+            pub[k] = merge_private(pub[k], q) if k in pub and isinstance(q, dict) and k not in PRIVATE_KEYS else q
+    return pub
+
+
 def load_state(d):
-    """The run's state: status from state.json, tasks from tasks/<id>.json (older runs kept tasks inside state.json — read as is)."""
+    """The run's state: status from state.json, tasks from tasks/<id>.json (older runs kept tasks inside state.json — read as is),
+    each merged with its machine-local part (local/tasks/<id>.json) when this machine has one."""
     state = load(os.path.join(d, "state.json"))
     tasks = state.get("tasks") or {}
     folder = os.path.join(d, "tasks")
     if os.path.isdir(folder):
         for name in sorted(os.listdir(folder)):
             if name.endswith(".json"):
-                tasks[name[:-5]] = load(os.path.join(folder, name))
+                tasks[name[:-5]] = merge_private(load(os.path.join(folder, name)), load(os.path.join(d, "local", "tasks", name)))
     state["tasks"] = tasks
     state.setdefault("non-claims", [])
     return state
@@ -113,7 +159,13 @@ def load_state(d):
 def save_state(d, state):
     """One file per task, so tasks done on different branches merge as distinct files. state.json keeps only the run's own fields."""
     for tid, ts in state.get("tasks", {}).items():
-        save(os.path.join(d, "tasks", tid + ".json"), {"artifact-type": "chongdae/task@1", **ts})
+        pub, priv = split_private({k: v for k, v in ts.items() if k not in ("artifact-type", "written_by")})
+        save(os.path.join(d, "tasks", tid + ".json"), {"artifact-type": "chongdae/task@1", **pub})
+        local = os.path.join(d, "local", "tasks", tid + ".json")
+        if priv:
+            save(local, priv)
+        elif os.path.exists(local):
+            os.remove(local)
     save(os.path.join(d, "state.json"), {"artifact-type": "chongdae/run@1", **{k: v for k, v in state.items() if k != "tasks"}})
 
 
@@ -137,6 +189,35 @@ def now_utc():
     return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00")
 
 
+def stamp():
+    """A judgment's time and the chongdae that recorded it: one run can span versions."""
+    return {"at": now_utc(), "chongdae": engine()}
+
+
+_ENGINE = None
+_DEV_TOLD = False
+
+
+def engine():
+    """`chongdae <version>` — with `+g<sha>[-dirty]` when this is a working source, not an installed release."""
+    global _ENGINE
+    if _ENGINE is None:
+        root = os.path.dirname(os.path.abspath(__file__))
+        v = next((load(os.path.join(root, mf)).get("version") for mf in (os.path.join(".claude-plugin", "plugin.json"), "plugin.json")
+                  if load(os.path.join(root, mf)).get("version")), "unknown")
+        _ENGINE = "chongdae %s%s" % (v, source_revision(root))
+    return _ENGINE
+
+
+def portable(o, target):
+    """A record's copy of something that named this machine: every string with the machine taken out (neutral_path)."""
+    if isinstance(o, dict):
+        return {k: portable(v, target) for k, v in o.items()}
+    if isinstance(o, list):
+        return [portable(v, target) for v in o]
+    return neutral_path(o, target) if isinstance(o, str) else o
+
+
 def head_sha(target):
     """The commit this tree stands on — a run pinned to it can be ordered by ancestry, not by anyone's clock."""
     import subprocess
@@ -149,7 +230,10 @@ def head_sha(target):
 # into the committed record as `<tag>.trace.json` — the model, the commands and their exit codes, the files changed — with
 # the project as `.` and the home directory as `~`.
 RECORD_IGNORE = ["*.transcript*.jsonl", "*.request.json", "*.request.*.json", "*.provider.log", "*.pending.json",
-                 "*.last.txt", "*.schema.json", "sessions/"]
+                 "*.last.txt", "*.schema.json", "sessions/",
+                 # a provider's raw answer: the task file carries it (without the worker's session), a second copy was noise
+                 "*.response.json", "*.response.*.json",
+                 "local/"]   # each run's machine-local part: sessions, transcripts, start snapshots, full traces
 
 
 def ensure_record_ignore(target):
@@ -282,9 +366,16 @@ def write_traces(target, run_name):
             continue
         response = load(os.path.join(d, "%s.response%s.json" % (m.group(1), m.group(2) or "")))
         w = response.get("worker") or {}
-        save(out, {"artifact-type": "chongdae/trace@1", "worker": {k: w.get(k) for k in ("host", "model", "effort", "turns", "session") if w.get(k) is not None},
-                   **trace_of(os.path.join(d, name), target),
-                   "kept-locally": name})
+        full = trace_of(os.path.join(d, name), target)
+        worker = {k: w.get(k) for k in ("host", "model", "effort", "turns") if w.get(k) is not None}
+        # a model's run does not replay from its command lines: the record keeps what it changed and how its commands
+        # ended; the lines themselves stay in <run>/local/ with the session they came from
+        commands = full.pop("commands", [])
+        failed = [c for c in commands if c.get("exit") not in (0, None)]
+        save(out, {"artifact-type": "chongdae/trace@1", "worker": worker, **full,
+                   "commands-run": len(commands), "commands-failed": len(failed)})
+        save(os.path.join(d, "local", os.path.basename(out)), {"worker": {**worker, **({"session": w["session"]} if w.get("session") else {})},
+                                                              "commands": commands, "transcript": name})
 
 
 def commit_record(target, run_name, message):
@@ -301,6 +392,15 @@ def commit_record(target, run_name, message):
 
     rel = RUNS + "/" + run_name
     ensure_record_ignore(target)
+    dev = (load(os.path.join(target, "hunsu.local.json")) or {}).get("dev")
+    if dev:
+        # a trial leaves nothing in the project: while `hunsu dev` runs working sources here, the record is written and
+        # kept on disk, never committed — its commit is the released version's, after the release
+        global _DEV_TOLD
+        if not _DEV_TOLD:
+            print("  (record not committed: this project is trying working sources — %s; the record stays on disk)" % ", ".join(sorted(dev)))
+            _DEV_TOLD = True
+        return None
     try:
         write_traces(target, run_name)
     except (OSError, ValueError):
@@ -399,7 +499,7 @@ def cmd_recheck(args):
     # the verdict is a record, not a line on a screen: `.chongdae/rechecks/<time>.json`, so "recheck was green" can be pointed at
     import subprocess
     head = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=target, capture_output=True, text=True).stdout.strip() or None
-    rec = {"artifact-type": "chongdae/recheck@1", "at": now_utc(), "head": head, "green": [n for n, _ in green],
+    rec = {"artifact-type": "chongdae/recheck@1", **stamp(), "head": head, "green": [n for n, _ in green],
            "red": [{"task": n, "failed": f} for n, f in red], "unchecked": unchecked}
     path = os.path.join(target, RUNS, "rechecks", rec["at"].replace(":", "").replace("+", "p") + ".json")
     save(path, rec)
@@ -524,6 +624,9 @@ def cmd_init(args):
             if not os.path.exists(plan_path):
                 raise SystemExit("no plan file %s" % args.plan)
             plan = load(plan_path)
+        for t in plan.get("tasks", []) if isinstance(plan.get("tasks"), list) else []:
+            if isinstance(t, dict) and isinstance(t.get("checks"), list):
+                t["checks"] = [portable_argv(c) if isinstance(c, list) else c for c in t["checks"]]
         problems = plan_problems(plan)
         if problems:
             raise SystemExit("plan rejected:\n  " + "\n  ".join(problems))
@@ -542,7 +645,7 @@ def cmd_init(args):
                 "providers": {"questions": "session", "plan": "session"}}   # the plan says who provides; chongdae assumes nothing
     save(os.path.join(d, "plan.json"), plan)
     state = {"status": "running", "tasks": {t["id"]: {"status": "todo"} for t in plan["tasks"]}, "non-claims": list(plan.get("non-claims", []))}
-    state["created"] = {"at": now_utc(), "based_on": head_sha(target)}   # the commit this run starts from: its place in history is ancestry, not its id's timestamp
+    state["created"] = {**stamp(), "based_on": head_sha(target)}   # the commit this run starts from: its place in history is ancestry, not its id's timestamp
     if getattr(args, "worktree", False):
         state["worktree"] = {"main": os.path.abspath(args.target).replace(os.sep, "/"), "branch": "run/" + run_name}
     save_state(d, state)
@@ -567,7 +670,7 @@ def cmd_add(args):
         raise SystemExit("tasks are added to session runs only; a plan run's tasks are the plan's")
     if args.id in state["tasks"] or any(t.get("id") == args.id for t in plan.get("tasks", [])):
         raise SystemExit("task %s exists" % args.id)
-    task = {"id": args.id, "role": args.role, "brief": args.brief or "", "closes": args.closes or [], "needs": [], "checks": [shlex.split(c) for c in args.check or []],
+    task = {"id": args.id, "role": args.role, "brief": args.brief or "", "closes": args.closes or [], "needs": [], "checks": [portable_argv(shlex.split(c)) for c in args.check or []],
             "tests": args.tests or [], "gate": "human" if args.gate == "human" else None, **({"domain": args.domain} if args.domain else {})}
     for when in ("before", "after"):
         if getattr(args, when) is not None:
@@ -607,7 +710,7 @@ def cmd_drop(args):
     if ts["status"] in ("done", "skipped", "dropped"):
         raise SystemExit("%s is %s — nothing to drop" % (args.task, ts["status"]))
     ts["status"] = "dropped"
-    ts["dropped"] = {"why": args.why, "by": args.by if args.by is not None else me(args.target), "at": now_utc()}
+    ts["dropped"] = {"why": args.why, "by": args.by if args.by is not None else me(args.target), **stamp()}
     ts["touched"] = touched_files(args.target, ts.get("start"))   # what changed in its window stays attributed to it, dropped or not
     ts.setdefault("non-claims", []).append("dropped, not done: %s" % args.why)
     save_state(d, state)
@@ -630,7 +733,7 @@ def cmd_unstage(args):
         raise SystemExit("no task %s" % args.task)
     if args.role not in stage_roles(plan, task, "before") + stage_roles(plan, task, "after"):
         raise SystemExit("%s is not hired before or after %s" % (args.role, args.task))
-    ts.setdefault("unstaged", {})[args.role] = {"why": args.why, "by": args.by if args.by is not None else me(args.target), "at": now_utc()}
+    ts.setdefault("unstaged", {})[args.role] = {"why": args.why, "by": args.by if args.by is not None else me(args.target), **stamp()}
     rec = (ts.get("stages") or {}).pop(args.role, None)
     if rec:
         ts.setdefault("stages-taken-off", {})[args.role] = rec
@@ -785,6 +888,14 @@ def cmd_report(args):
                     findings.append({"kind": "left-open", "where": "%s/%s" % (name, tid),
                                      "text": ("rejected by %s (%s) and never retried" % (rej["by"], rej["why"]) if rej else "left open when the run closed")
                                              + " — `chongdae drop %s --why` if it will not be done, or a run that does it" % tid})
+    # a record a working source wrote and somebody committed: it names a build nobody can install
+    for r in all_runs(target):
+        name = os.path.basename(r)
+        for f in [os.path.join(r, "state.json")] + sorted(glob.glob(os.path.join(r, "tasks", "*.json"))):
+            w = str(load(f).get("written_by", ""))
+            if "+g" in w and git("ls-files", "--error-unmatch", os.path.relpath(f, target)) is not None:
+                findings.append({"kind": "unreleased-writer", "where": os.path.relpath(f, target).replace(os.sep, "/"),
+                                 "text": "committed as written by %s — a working source, not a release; a trial's records stay local" % w})
     print(json.dumps({"artifact-type": "dwitbuk/findings@1", "source": "chongdae", "findings": findings}, ensure_ascii=False, indent=1))
     return 0
 
@@ -858,7 +969,7 @@ def merge_back(wt_path, wt, run_name):
     rec = os.path.join(main, RUNS, run_name, "state.json")
     if landed and os.path.exists(rec):
         st = load(rec)
-        st["landed"] = {"at": now_utc(), "commit": landed}
+        st["landed"] = {**stamp(), "commit": landed}
         save(rec, st)
         commit_record(main, run_name, "landed as %s" % landed[:12])
     print("merged %s into main and removed the worktree — recheck green" % branch)
@@ -918,7 +1029,7 @@ def dirty(target):
     for line in done.stdout.splitlines():
         path = line[3:].strip().replace("\\", "/") if len(line) > 3 else ""
         path = path[len(prefix):] if prefix and path.startswith(prefix) else path
-        if path and not path.startswith((RUNS + "/", ".mangsang/", ".dwitbuk/", ".claude/")):   # records and machine-local state are nobody's work
+        if path and not path.startswith((RUNS + "/", ".mangsang/", ".dwitbuk/", ".claude/")) and not re.search(r"(^|/)__pycache__/|\.py[co]$", path):   # records, machine-local state and interpreter leftovers are nobody's work
             full = os.path.join(target, path)
             out[path] = hashlib.sha1(io.open(full, "rb").read()).hexdigest() if os.path.isfile(full) else "gone"
     return out
@@ -996,10 +1107,29 @@ def native_argv(target, provider):
     return None
 
 
-def resolve_argv(target, argv):
-    """`{plugin:NAME}` -> that plugin's root on this machine. Plans stay portable; machines resolve."""
+def portable_argv(argv):
+    """A check or provider as the record keeps it: an installed plugin's path -> `{plugin:NAME}`, anything else under this
+    machine's home -> `~/…` (resolved again where it runs). A check given as `/Users/<me>/.claude/plugins/cache/…` was
+    committed as is — it named the account and ran nowhere else."""
+    home = os.path.expanduser("~").rstrip(os.sep)
     out = []
     for a in argv:
+        a = str(a)
+        if home and home != "~":
+            a = re.sub(r"(?:%s|~)/\.(?:claude|codex)/plugins/cache/[^/\s\"']+/([^/\s\"']+)/[^/\s\"']+" % re.escape(home),
+                       lambda m: "{plugin:%s}" % m.group(1), a)
+            a = re.sub(r"%s(?=/|$)" % re.escape(home), "~", a)
+        out.append(a)
+    return out
+
+
+def resolve_argv(target, argv):
+    """`{plugin:NAME}` -> that plugin's root on this machine, a leading `~/` -> this machine's home. Plans stay portable;
+    machines resolve."""
+    out = []
+    for a in argv:
+        if a == "~" or a.startswith("~/"):
+            a = os.path.expanduser(a)
         for m in set(re.findall(r"\{plugin:([\w.-]+)\}", a)):
             a = a.replace("{plugin:%s}" % m, plugin_root(target, m).replace(os.sep, "/"))
         out.append(a)
@@ -1101,6 +1231,9 @@ def spawn(target, run, task, provider, plan, attempts=(), stage="build", extra=N
             req["touched"] = touched_files(target)
         req.update(extra or {})
         save(req_path, req)
+        # the request as sent names this machine's paths and stays local; what the provider was asked, portably, is
+        # the record's — without it nobody else can put the same question to a worker again
+        save(os.path.join(run, tag + ".asked.json"), portable(req, target))
         if os.path.exists(res_path):
             os.remove(res_path)
         if native:
@@ -1266,6 +1399,7 @@ def plugin_versions(target, argv=()):
             if v:
                 used[m] = v + source_revision(root)
                 break
+    used["chongdae"] = engine().split(" ", 1)[1]   # the engine that ran the call is one of the versions it ran with
     lock = load(os.path.join(target, "hunsu.lock.json")).get("plugins", {}) if target else {}
     locked = {name: "%s#%s" % (p.get("version"), p.get("fingerprint")) if p.get("fingerprint") else p.get("version") for name, p in sorted(lock.items())}
     return {k: v for k, v in (("used", used), ("locked", locked)) if v}
@@ -1372,7 +1506,7 @@ def cmd_run(args):
                         ts.setdefault("start", {})[f] = now[f]
                     else:
                         (ts.get("start") or {}).pop(f, None)
-                ts.setdefault("rebaselined", []).append({"tests": ts.pop("rebaseline"), "at": now_utc()})
+                ts.setdefault("rebaselined", []).append({"tests": ts.pop("rebaseline"), **stamp()})
                 save_state(d, state)
             if not ts.get("response"):
                 code, response, before = spawn(target, d, task, who, plan, ts.get("attempts", []),
@@ -1563,7 +1697,7 @@ def cmd_delegate(args):
         raise SystemExit("--scope needs judgment kinds, e.g. confirm,accept,retry")
     did = "D-" + secrets.token_hex(4)
     save(os.path.join(d, "delegations", did + ".json"),
-         {"artifact-type": "chongdae/delegation@1", "id": did, "scope": scope, "why": args.why, "by": args.by, "at": now_utc()})
+         {"artifact-type": "chongdae/delegation@1", "id": did, "scope": scope, "why": args.why, "by": args.by, **stamp()})
     commit_record(args.target, os.path.basename(d), "delegate %s (%s)" % (did, ",".join(scope)))
     print(did)
     return 0
@@ -1649,7 +1783,7 @@ def cmd_accept(args):
         raise SystemExit("%s has no provider decisions or stage findings to accept" % args.task)
     if not (args.by or args.delegated):
         raise SystemExit("say who accepted (--by) or why the human delegated it (--delegated)")
-    who = {**({"by": args.by} if args.by else delegation_record(d, args.delegated, "accept")), "at": now_utc()}
+    who = {**({"by": args.by} if args.by else delegation_record(d, args.delegated, "accept")), **stamp()}
     if pending:
         role, rec = pending[0]
         rec["accepted"] = who
@@ -1692,7 +1826,7 @@ def resend(target, d, state, task_id, retried, message=None):
     """Send a stopped task out again, keeping the stopped attempt (its response, review, stages) in the record under its
     number — the next call receives it. `retried` says who sent it: a person (`by`), a delegation, or chongdae itself."""
     ts = state["tasks"][task_id]
-    attempt = {**(ts.pop("response", None) or {"status": "session"}), "retried": {**retried, "at": now_utc()}}
+    attempt = {**(ts.pop("response", None) or {"status": "session"}), "retried": {**retried, **stamp()}}
     for key in ("review", "rejected"):
         if key in ts:
             attempt[key] = ts.pop(key)
@@ -1742,7 +1876,7 @@ def route_dispute(target, d, state, plan, task, disputed):
     if not writer or routed >= AUTO_RESENDS:
         return False
     wts = state["tasks"][writer["id"]]
-    attempt = {**(wts.pop("response", None) or {}), "reopened": {"by": "chongdae", "auto": "tests disputed by %s" % task["id"], "at": now_utc()},
+    attempt = {**(wts.pop("response", None) or {}), "reopened": {"by": "chongdae", "auto": "tests disputed by %s" % task["id"], **stamp()},
                "disputed-tests": disputed}
     wts.setdefault("attempts", []).append(attempt)
     n = len(wts["attempts"])
@@ -1788,7 +1922,7 @@ def cmd_confirm(args):
     if args.delegated and gate_of(task).get("delegate") == "after-verifier" and verdict != "accept":
         raise SystemExit("%s: this gate delegates only after a verifier accepts (verdict: %s) — a person must read it, or the plan must say otherwise" % (args.task, verdict or "none"))
     # Delegation is recorded with what stood in for the reader: a verifier's accept, or nothing. The reviewer counts the two apart.
-    ts["confirmed"] = {**({"by": args.by} if args.by else {**delegation_record(d, args.delegated, "confirm"), "verifier": verdict}), "at": now_utc()}
+    ts["confirmed"] = {**({"by": args.by} if args.by else {**delegation_record(d, args.delegated, "confirm"), "verifier": verdict}), **stamp()}
     ts["status"] = "done"
     save_state(d, state)
     commit_record(args.target, os.path.basename(d), "confirm %s (%s)" % (args.task, "by " + args.by if args.by else "delegated"))

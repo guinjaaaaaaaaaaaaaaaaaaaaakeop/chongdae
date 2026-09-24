@@ -105,6 +105,7 @@ def test_bootstrap_stops_at_each_step_and_records_gates_and_non_claims():
         st = pj.state()
         q, pl = dict(st["tasks"]["questions"]["confirmed"]), dict(st["tasks"]["plan"]["confirmed"])
         assert q.pop("at", "").endswith("+00:00") and pl.pop("at", "").endswith("+00:00")   # a judgment carries its moment, in UTC
+        assert q.pop("chongdae") == pl.pop("chongdae") == chongdae.engine()   # and the chongdae that recorded it
         assert q == {"by": "kim"} and pl == {"delegated": "owner said go", "verifier": None}
         assert st["tasks"]["model"]["status"] == "skipped" and any("no provider for role 'modeler'" in n for n in chongdae.non_claims(st))
         assert not os.path.exists(os.path.join(chongdae.run_dir(pj.dir), "PLAN.md")), "artifacts live in the project, not the run dir"
@@ -155,7 +156,7 @@ def test_command_provider_done_decisions_and_blocked():
         assert run("accept", "B", "--delegated", "owner ok", "--target", pj.dir)[0] == 0
         code, out = run("run", "--target", pj.dir)
         assert code == chongdae.DECISION and "human: review task B" in out, out
-        acc = dict(pj.state()["tasks"]["B"]["accepted"]); acc.pop("at", None)
+        acc = dict(pj.state()["tasks"]["B"]["accepted"]); acc.pop("at", None); acc.pop("chongdae", None)
         assert acc == {"delegated": "owner ok"}
         assert run("confirm", "B", "--by", "kim", "--target", pj.dir)[0] == 0 and run("run", "--target", pj.dir)[0] == 0
         # blocked -> stop with the provider's summary; no response -> stop
@@ -167,7 +168,7 @@ def test_command_provider_done_decisions_and_blocked():
         assert run("retry", "C", "--target", pj.dir)[0] != 0, "retry needs by/delegated"
         assert run("retry", "C", "--by", "kim", "--target", pj.dir)[0] == 0
         st = pj.state()["tasks"]["C"]
-        ret = dict(st["attempts"][0]["retried"]); ret.pop("at", None)
+        ret = dict(st["attempts"][0]["retried"]); ret.pop("at", None); ret.pop("chongdae", None)
         assert "response" not in st and st["attempts"][0]["status"] == "blocked" and ret == {"by": "kim"}
         pj.fake_provider(RESPONSE_DONE)   # the same script path: the human "wrote the decision into the plan", the next call succeeds
         code, out = run("run", "--target", pj.dir)
@@ -229,7 +230,7 @@ def test_verifier_before_the_gate_protected_tests_and_delegation_policy():
         rd = chongdae.run_dir(pj.dir)
         assert os.path.exists(os.path.join(rd, "S1.verify.request.json")) and os.path.exists(os.path.join(rd, "S1.verify.4.request.json")), os.listdir(rd)   # every verdict's files survive the retries
         assert run("confirm", "S1", "--delegated", "verifier said ok", "--target", pj.dir)[0] == 0
-        cf = dict(pj.state()["tasks"]["S1"]["confirmed"]); cf.pop("at", None)
+        cf = dict(pj.state()["tasks"]["S1"]["confirmed"]); cf.pop("at", None); cf.pop("chongdae", None)
         assert cf == {"delegated": "verifier said ok", "verifier": "accept"}
         assert run("run", "--target", pj.dir)[0] == 0
         # a build that edits the contract's tests is rejected whoever built it — here the session agent
@@ -366,7 +367,12 @@ def test_performed_by_is_recorded_like_an_author_line():
             assert run("run", "--target", pj.dir)[0] == 0
             ts = pj.state()["tasks"]["T1"]
             assert ts["performed_by"] == {"provider": "session", "host": "claude-code", "agent": "claude-code_9-9-9_agent", "effort": "high", "session": "sess-123",
-                                          "model-unknown": "no transcript for this session on this host (no SessionStart record here, none under the host's projects)"}, ts["performed_by"]
+                                          "model-unknown": "no transcript for this session on this host (no SessionStart record here, none under the host's projects)",
+                                          "versions": {"used": {"chongdae": chongdae.engine().split(" ", 1)[1]}}}, ts["performed_by"]
+            # the session is this machine's: the committed task file does not name it, the local part does
+            rd = chongdae.run_dir(pj.dir)
+            assert "sess-123" not in open(os.path.join(rd, "tasks", "T1.json"), encoding="utf-8").read()
+            assert "sess-123" in open(os.path.join(rd, "local", "tasks", "T1.json"), encoding="utf-8").read()
         with Project() as pj:
             # a Codex session started from a Claude Code shell sees both hosts' markers: the products' AGENT_HOST decides, and the
             # model comes from the rollout Codex keeps for the thread — never from the ancestor's AI_AGENT
@@ -377,7 +383,8 @@ def test_performed_by_is_recorded_like_an_author_line():
             assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
             assert run("add", "T1", "--check", sys.executable + " -c 'raise SystemExit(0)'", "--target", pj.dir)[0] == 0
             assert run("run", "--target", pj.dir)[0] == 0
-            assert pj.state()["tasks"]["T1"]["performed_by"] == {"provider": "session", "host": "codex", "agent": "codex_0.155.0", "session": "thread-1", "model": "gpt-test"}, pj.state()["tasks"]["T1"]["performed_by"]
+            assert pj.state()["tasks"]["T1"]["performed_by"] == {"provider": "session", "host": "codex", "agent": "codex_0.155.0", "session": "thread-1", "model": "gpt-test",
+                                                                   "versions": {"used": {"chongdae": chongdae.engine().split(" ", 1)[1]}}}, pj.state()["tasks"]["T1"]["performed_by"]
             del os.environ["AGENT_HOST"], os.environ["CODEX_THREAD_ID"], os.environ["CODEX_VERSION"], os.environ["HUNSU_CODEX_DIR"]
         with Project() as pj:
             del os.environ["CLAUDE_EFFORT"]   # unset -> absent, never an empty field
@@ -830,6 +837,59 @@ def test_a_plugin_resolves_to_the_copy_this_project_declares_not_the_first_insta
             os.environ.pop("HUNSU_CLAUDE_DIR") if old is None else os.environ.__setitem__("HUNSU_CLAUDE_DIR", old)
 
 
+def test_the_record_carries_what_replays_a_run_and_nothing_of_this_machine():
+    """A reader elsewhere needs the contract, who did it with which versions, what changed and what was judged. Not this
+    machine's sessions, snapshots of unrelated files, interpreter leftovers or home paths — those stay in <run>/local/."""
+    home = os.path.expanduser("~")
+    with Project() as pj:
+        os.environ["CHONGDAE_USER"] = "kim"
+        os.environ["CLAUDE_CODE_SESSION_ID"] = "sess-local"
+        try:
+            write(os.path.join(pj.dir, "hunsu.lock.json"), {"roles": {"implementer": pj.fake_provider(RESPONSE_DONE)}})
+            write(os.path.join(pj.dir, "unrelated.png"), "not this run's\n")   # dirt before the run: nobody's business
+            assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
+            # a check given with this machine's paths is recorded portably, and still runs here
+            plugin_check = "%s/.claude/plugins/cache/m/mangsang/1.5.0/mangsang.py" % home
+            assert run("add", "T1", "--check", "python3 -c pass " + plugin_check + " " + home + "/x", "--target", pj.dir)[0] == 0
+            ts = pj.state()["tasks"]["T1"]
+            assert ts["def"]["checks"] == [["python3", "-c", "pass", "{plugin:mangsang}/mangsang.py", "~/x"]], ts["def"]["checks"]
+            assert chongdae.resolve_argv(pj.dir, ["~/x"]) == [home + "/x"]
+            write(os.path.join(pj.dir, "a.py"), "x = 1\n")
+            write(os.path.join(pj.dir, "__pycache__", "a.cpython-312.pyc"), "bytecode")
+            assert run("run", "--target", pj.dir)[0] == 0
+            rd = chongdae.run_dir(pj.dir)
+            task_file = open(os.path.join(rd, "tasks", "T1.json"), encoding="utf-8").read()
+            task = json.loads(task_file)
+            assert task["touched"] == ["a.py"], task["touched"]   # neither the interpreter's leftovers nor the dirt before
+            assert "start" not in task and "sess-local" not in task_file and home not in task_file and "unrelated.png" not in task_file, task_file
+            assert task["written_by"] == chongdae.engine() and task["performed_by"]["versions"]["used"]["chongdae"] == chongdae.engine().split(" ", 1)[1]
+            local = json.load(open(os.path.join(rd, "local", "tasks", "T1.json"), encoding="utf-8"))
+            assert "unrelated.png" in local["start"] and local["performed_by"]["session"] == "sess-local", local
+            assert pj.state()["tasks"]["T1"]["performed_by"]["session"] == "sess-local", "the engine still reads its own machine's part"
+            # a provider's task: what it was asked is committed, portably; the request as sent stays local
+            assert run("add", "T2", "--role", "implementer", "--check", sys.executable + " -c pass", "--target", pj.dir)[0] == 0
+            assert run("run", "--target", pj.dir)[0] == 0
+            asked = open(os.path.join(rd, "T2.asked.json"), encoding="utf-8").read()
+            assert json.loads(asked)["task"] == "T2" and pj.dir not in asked and home not in asked, asked
+            assert run("close", "--target", pj.dir)[0] == 0
+            tracked = subprocess.run(["git", "ls-files"], cwd=pj.dir, capture_output=True, text=True).stdout.split()
+            assert any(t.endswith("T2.asked.json") for t in tracked) and not any("/local/" in t or t.endswith(".request.json") for t in tracked), tracked
+            # committed records written by a working source are named for the reviewer
+            doc = json.loads(run("report", "--target", pj.dir)[1])
+            unreleased = [f for f in doc["findings"] if f["kind"] == "unreleased-writer"]
+            assert ("+g" in chongdae.engine()) == bool(unreleased), (chongdae.engine(), unreleased)
+            # while the project tries working sources, the record is written and not committed
+            head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=pj.dir, capture_output=True, text=True).stdout
+            write(os.path.join(pj.dir, "hunsu.local.json"), {"dev": {"chongdae": "/src/chongdae"}})
+            code, out = run("init", "--session", "--goal", "trial", "--target", pj.dir)
+            assert code == 0 and "record not committed" in out, out
+            assert subprocess.run(["git", "rev-parse", "HEAD"], cwd=pj.dir, capture_output=True, text=True).stdout == head
+            assert os.path.exists(os.path.join(chongdae.run_dir(pj.dir), "state.json")), "the record is on disk"
+        finally:
+            os.environ.pop("CHONGDAE_USER", None)
+            os.environ.pop("CLAUDE_CODE_SESSION_ID", None)
+
+
 def test_a_session_run_keeps_each_tasks_word_its_own():
     """Seen on a site's about page: two no-check tasks added ahead of their work were both done by one `run`, the second
     claiming the first's file; a session build named tests it then wrote itself; a verifier's reject went back to the
@@ -1128,9 +1188,9 @@ def test_delegation_is_declared_once_and_referenced_scope_enforced_and_stamps_fl
                 assert code != 0 and "does not cover 'confirm'" in out and "accept" in out, out
             reason = did if i <= 3 else "boss said ship it"
             assert run("confirm", "T%d" % i, "--delegated", reason, "--target", pj.dir)[0] == 0
-        cf = dict(pj.state()["tasks"]["T1"]["confirmed"]); cf.pop("at", None)
+        cf = dict(pj.state()["tasks"]["T1"]["confirmed"]); cf.pop("at", None); cf.pop("chongdae", None)
         assert cf == {"delegated": {"ref": did}, "verifier": None}, cf   # a ref, not the delegation's words repeated
-        cf = dict(pj.state()["tasks"]["T4"]["confirmed"]); cf.pop("at", None)
+        cf = dict(pj.state()["tasks"]["T4"]["confirmed"]); cf.pop("at", None); cf.pop("chongdae", None)
         assert cf == {"delegated": "boss said ship it", "verifier": None}, cf   # a literal reason keeps working as before
         assert run("close", "--target", pj.dir)[0] == 0
         doc = json.loads(run("report", "--target", pj.dir)[1])
@@ -1212,9 +1272,13 @@ def test_a_workers_session_stays_local_and_the_record_carries_its_trace():
         assert not any(t.endswith((".jsonl", ".request.json")) for t in tracked), tracked
         assert os.path.exists(os.path.join(run_dir, "a.response.transcript.1.jsonl")), "local copy kept"
         trace = json.load(open(os.path.join(run_dir, "b.trace.json"), encoding="utf-8"))
-        assert trace["worker"] == {"host": "codex", "model": "m"}, trace
-        assert trace["commands"][0] == {"command": "python3 -m unittest discover -s tests -p 'test_s[12].py'", "exit": 0}, trace
-        assert trace["commands"][1]["command"] == "cat ~/.codex/skill.md" and trace["changed"] == ["update ./build.py"], trace
+        assert trace["worker"] == {"host": "codex", "model": "m"} and trace["written_by"] == chongdae.engine(), trace
+        # the record keeps what the worker changed and how its commands ended; the command lines stay local
+        assert "commands" not in trace and trace["commands-run"] == 2 and trace["commands-failed"] == 0 and trace["changed"] == ["update ./build.py"], trace
+        full = json.load(open(os.path.join(run_dir, "local", "b.trace.json"), encoding="utf-8"))
+        assert full["commands"][0] == {"command": "python3 -m unittest discover -s tests -p 'test_s[12].py'", "exit": 0}, full
+        assert full["commands"][1]["command"] == "cat ~/.codex/skill.md", full
+        assert not any("/local/" in t for t in tracked) and ".chongdae/run-x/b.response.json" not in tracked, tracked
         assert chongdae.neutral_path("rg --files %s/.codex/plugins/cache/some-market | rg x" % home, tmp) == "rg --files <codex-plugins> | rg x"
         assert chongdae.neutral_path("sed -n 1p ~/.claude/plugins/cache/m/hacheong/1.2.0/worker.py", tmp) == "sed -n 1p <plugin:hacheong@1.2.0>/worker.py"
         assert chongdae.neutral_path("D=/private/tmp/claude-1/x-y/scratch/a.json && ls", tmp) == "D=<tmp> && ls"
