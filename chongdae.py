@@ -4,10 +4,12 @@
   init  --merge [--base REV]            after merging branches: the merge plan — recheck (+ coherence when the lock declares that role) behind a human gate
   init  --session [--goal "..."]        a session run: no plan, tasks added as the work goes (`add`), closed when the session ends (`close`)
   init  ... --worktree                  the run gets its own worktree + branch under .chongdae/wt/ (the shared tree may have other workers); `close` commits and merges it back — a conflict or red recheck becomes a merge run
-  add   <id> [--brief ..] [--closes Q..] [--check ARGV]... [--tests F]... [--gate human]   a task in the session run; the start snapshot is taken now
+  add   <id> [--brief ..] [--closes Q..] [--check ARGV]... [--tests F]... [--gate human] [--role R [--why ..]]   a task in the session run; the start snapshot is taken now.
+                                        The lock says who does it (checks -> implementer, new tests -> nitpick, else the session); `--role session --why` takes one back, recorded
   claim <id> [--by NAME]                take a task (defaults to git user.name); `run` skips tasks claimed by someone else
   drop  <id> --why WHY [--by NAME]      a session task that will not be done: leaves the open set, stays in the record with the reason
-  close [--target DIR] [--run ID]       end a session run (open tasks recorded as such); a worktree run merges back — a completed plan run too
+  close [--target DIR] [--run ID]       end a session run (open tasks recorded as such): the lock's `reviewer` role runs and what it wrote goes into the
+                                        close commit; a worktree run merges back — a completed plan run too
   report [--since REV]                  what this record says a reviewer should see, as `dwitbuk/findings@1` on stdout: changes no run
                                         claims (outside-run), runs that recorded no `touched` (unattributed), gates/decisions/retries passed
                                         by delegation, and every non-claim. chongdae knows its runs and git; a reviewer knows the type
@@ -30,7 +32,9 @@ session agent (the brain) to produce the artifact; then it checks the artifact's
 Roles are names; who provides them comes from hunsu.lock.json `roles` (or the plan's own `providers`). A role with no
 provider is skipped and recorded as a non-claim — never substituted.
 Artifacts a task produces live in the project (task `path` is project-relative). `.chongdae/` holds only how a run went:
-`plan.json` (the intent), `state.json` (status), `tasks/<id>.json` (one file per task, so two people's work on one run merges).
+`plan.json` (the intent), `state.json` (status), `tasks/<id>.json` (one file per task, so two people's work on one run merges),
+`asked/` and `contract/` (what each provider was asked) — the record; and under `local/`, ignored, the work this machine
+needed while the run went (requests as sent, responses, sessions, pending pids, logs, each task's private overlay).
 The run is the agent's container: the plugin's PreToolUse hook refuses Edit/Write in a project with no run in progress.
 """
 import argparse
@@ -100,10 +104,16 @@ def save(path, data):
         fh.write("\n")
 
 
-# What a record keeps for this machine only: which host session did the work and where its transcript is, and the
-# snapshot a task measures its changes from. Nobody else can open that session or needs that snapshot once `touched`
-# is written; committed, they named sessions and unrelated local files. They live in <run>/local/ (git-ignored).
-PRIVATE_KEYS = ("session", "transcript", "kept-locally", "start")
+# A run's directory is two things, apart: the record — what a judgment wrote, committed, read by anyone — and the work —
+# what this machine needed while the run went (the request as sent, the response as written, the worker's whole session,
+# the pending pid, the log, the command lines, the flags the engine keeps between two `run` calls). The work lives under
+# <run>/local/ (git-ignored, one line); the record is the run's root: plan.json, state.json, tasks/, asked/, contract/,
+# delegations/. A task's working state is its record plus this machine's overlay (local/tasks/<id>.json): the keys below,
+# at any depth, are the overlay's — the record never carries them.
+LOCAL = "local"
+PRIVATE_KEYS = ("session", "transcript", "kept-locally", "start",   # the host session behind an author line; the snapshot a task measures from
+                "commands", "read",                                 # a worker's command lines and what it read: the record keeps the summary (`trace`)
+                "reported", "rebaseline")                           # flags the engine keeps between two `run` calls
 
 
 def split_private(o):
@@ -150,23 +160,30 @@ def load_state(d):
     if os.path.isdir(folder):
         for name in sorted(os.listdir(folder)):
             if name.endswith(".json"):
-                tasks[name[:-5]] = merge_private(load(os.path.join(folder, name)), load(os.path.join(d, "local", "tasks", name)))
+                tasks[name[:-5]] = merge_private(load(os.path.join(folder, name)), load(os.path.join(d, LOCAL, "tasks", name)))
     state["tasks"] = tasks
     state.setdefault("non-claims", [])
     return state
 
 
 def save_state(d, state):
-    """One file per task, so tasks done on different branches merge as distinct files. state.json keeps only the run's own fields."""
+    """The record and the work, written apart: tasks/<id>.json is the record (one file per task, so tasks done on different
+    branches merge as distinct files; never a PRIVATE_KEYS key), local/tasks/<id>.json this machine's overlay of exactly
+    those keys. state.json keeps only the run's own fields."""
     for tid, ts in state.get("tasks", {}).items():
         pub, priv = split_private({k: v for k, v in ts.items() if k not in ("artifact-type", "written_by")})
         save(os.path.join(d, "tasks", tid + ".json"), {"artifact-type": "chongdae/task@1", **pub})
-        local = os.path.join(d, "local", "tasks", tid + ".json")
+        local = os.path.join(d, LOCAL, "tasks", tid + ".json")
         if priv:
             save(local, priv)
         elif os.path.exists(local):
             os.remove(local)
     save(os.path.join(d, "state.json"), {"artifact-type": "chongdae/run@1", **{k: v for k, v in state.items() if k != "tasks"}})
+
+
+def work_path(run, name):
+    """A work file's place: <run>/local/<name>. The record never holds one."""
+    return os.path.join(run, LOCAL, name)
 
 
 def all_tasks(plan, state):
@@ -225,15 +242,14 @@ def head_sha(target):
     return done.stdout.strip() if done.returncode == 0 and done.stdout.strip() else None
 
 
-# What stays on this machine: a worker's whole session (what it read, printed, thought) and the request exactly as sent carry
-# this machine's paths and can be megabytes a call. They are kept for a local audit; what other people and workers need goes
-# into the committed record as `<tag>.trace.json` — the model, the commands and their exit codes, the files changed — with
-# the project as `.` and the home directory as `~`.
-RECORD_IGNORE = ["*.transcript*.jsonl", "*.request.json", "*.request.*.json", "*.provider.log", "*.pending.json",
-                 "*.last.txt", "*.schema.json", "sessions/",
-                 # a provider's raw answer: the task file carries it (without the worker's session), a second copy was noise
-                 "*.response.json", "*.response.*.json",
-                 "local/"]   # each run's machine-local part: sessions, transcripts, start snapshots, full traces
+# What stays on this machine: everything under a run's local/ — the request as sent, the response as written, a worker's
+# whole session (megabytes, this machine's paths), the pending pid, the log, the full trace — and the sessions/ map.
+# The record (the run's root) carries what other people and workers need: the contract as asked, who did it, what changed,
+# what was judged — with the project as `.` and the home directory as `~`. The suffix patterns are for runs an earlier
+# chongdae wrote with those files beside the record; a new run has none there.
+RECORD_IGNORE = [LOCAL + "/", "sessions/",
+                 "*.transcript*.jsonl", "*.request.json", "*.request.*.json", "*.provider.log", "*.pending.json",
+                 "*.last.txt", "*.schema.json", "*.response.json", "*.response.*.json"]
 
 
 def ensure_record_ignore(target):
@@ -243,8 +259,8 @@ def ensure_record_ignore(target):
     missing = [p for p in RECORD_IGNORE if p not in have]
     if missing:
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        head = [] if have and have != [""] else ["# chongdae: machine-local — each worker's full session and the request as sent stay on this machine;",
-                                                "# the committed record carries <tag>.trace.json (commands, exit codes, files changed)"]
+        head = [] if have and have != [""] else ["# chongdae: a run's local/ is this machine's work (requests, responses, sessions, pending, logs);",
+                                                "# the run's root is the committed record"]
         with io.open(path, "a", encoding="utf-8", newline="\n") as fh:
             fh.write("\n".join(head + missing) + "\n")
 
@@ -354,35 +370,36 @@ def session_summary(trace):
     return out
 
 
-def write_traces(target, run_name):
-    """For every kept session in the run without a trace yet, write its trace beside it (same tag and attempt number)."""
-    d = os.path.join(target, RUNS, run_name)
-    for name in sorted(os.listdir(d)) if os.path.isdir(d) else []:
-        m = re.match(r"^(.*)\.response\.transcript(\.\d+)?\.jsonl$", name)
-        if not m:
-            continue
-        out = os.path.join(d, "%s.trace%s.json" % (m.group(1), m.group(2) or ""))
-        if os.path.exists(out) and os.path.getmtime(out) >= os.path.getmtime(os.path.join(d, name)):
-            continue
-        response = load(os.path.join(d, "%s.response%s.json" % (m.group(1), m.group(2) or "")))
-        w = response.get("worker") or {}
-        full = trace_of(os.path.join(d, name), target)
-        worker = {k: w.get(k) for k in ("host", "model", "effort", "turns") if w.get(k) is not None}
-        # a model's run does not replay from its command lines: the record keeps what it changed and how its commands
-        # ended; the lines themselves stay in <run>/local/ with the session they came from
-        commands = full.pop("commands", [])
-        failed = [c for c in commands if c.get("exit") not in (0, None)]
-        save(out, {"artifact-type": "chongdae/trace@1", "worker": worker, **full,
-                   "commands-run": len(commands), "commands-failed": len(failed)})
-        save(os.path.join(d, "local", os.path.basename(out)), {"worker": {**worker, **({"session": w["session"]} if w.get("session") else {})},
-                                                              "commands": commands, "transcript": name})
+def with_trace(who, response, run, target):
+    """An author line with what its worker did, from the session the worker kept beside its response (local/): the record
+    gets `trace` — the files it changed, how many commands it ran and how many failed; the command lines and what it read
+    go to the overlay (PRIVATE_KEYS `commands`, `read`) — a model's run does not replay from its command lines, and a
+    session's lines carry whatever else it was doing."""
+    w = (response or {}).get("worker") if isinstance(response, dict) else None
+    name = (w or {}).get("transcript") if isinstance(w, dict) else None
+    path = os.path.join(run, LOCAL, os.path.basename(str(name))) if name else None
+    if not (path and os.path.exists(path)):
+        return who
+    try:
+        full = trace_of(path, target)
+    except (OSError, ValueError):
+        return who
+    commands = full.pop("commands", [])
+    failed = [c for c in commands if c.get("exit") not in (0, None)]
+    read = full.pop("read", None)
+    who["trace"] = {**full, "commands-run": len(commands), "commands-failed": len(failed)}
+    who["commands"] = commands
+    if read:
+        who["read"] = read
+    return who
 
 
-def commit_record(target, run_name, message):
+def commit_record(target, run_name, message, also=()):
     """A judgment was written into the run's record: commit that record, and only it, right now. git's immutability then
     notarizes the judgment — its content (the tree hash), its time (committer date), and any later edit (a visible diff).
     Without this the record's durability was a habit of whoever remembered to commit; now it is the engine's.
-    The paths are pinned to the run's directory so a dirty working tree (someone else's work in flight) is never swept in.
+    The paths are pinned to the run's directory so a dirty working tree (someone else's work in flight) is never swept in;
+    `also` names the few project paths a judgment wrote outside it (what the reviewer wrote at close).
     Best effort by design: no repo, nothing staged, or an identity-less git config must not stop the run — the record on
     disk is still the record; `close` and the reviewer see uncommitted records as what they are."""
     import subprocess
@@ -399,10 +416,6 @@ def commit_record(target, run_name, message):
             print("  (record written, not committed: settings.chongdae.commit-records is false)")
             _UNCOMMITTED_TOLD = True
         return None
-    try:
-        write_traces(target, run_name)
-    except (OSError, ValueError):
-        pass   # a trace is a summary; the record commits without it rather than not at all
     # The commit is built on a scratch index from HEAD: only this run's directory and chongdae's .gitignore enter it — what
     # the person has staged stays theirs — and a file an earlier version committed that is now local-only leaves it (a
     # path-limited `git commit` would take the file back from the working tree, where it rightly stays).
@@ -412,9 +425,10 @@ def commit_record(target, run_name, message):
     env = dict(os.environ, GIT_INDEX_FILE=os.path.join(gitdir, "chongdae-record-index"))
     scratch = lambda *a: subprocess.run(["git", *a], cwd=target, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env)
     has_head = git("rev-parse", "--verify", "-q", "HEAD").returncode == 0
+    also = [p for p in also if os.path.exists(os.path.join(target, p))]
     try:
         scratch("read-tree", "HEAD") if has_head else scratch("read-tree", "--empty")
-        if scratch("add", "--", rel, RUNS + "/.gitignore").returncode:
+        if scratch("add", "--", rel, RUNS + "/.gitignore", *also).returncode:
             return None
         stale = [t for t in scratch("ls-files", "-ci", "--exclude-standard", "--", rel).stdout.split("\n") if t.strip()]
         if stale:
@@ -432,7 +446,7 @@ def commit_record(target, run_name, message):
             os.remove(env["GIT_INDEX_FILE"])
         except OSError:
             pass
-    git("reset", "-q", "--", rel, RUNS + "/.gitignore")   # the person's index now agrees with HEAD for the record, and only there
+    git("reset", "-q", "--", rel, RUNS + "/.gitignore", *also)   # the person's index now agrees with HEAD for the record, and only there
     return head_sha(target)
 
 
@@ -651,10 +665,13 @@ def cmd_init(args):
     save(os.path.join(d, "plan.json"), plan)
     state = {"status": "running", "tasks": {t["id"]: {"status": "todo"} for t in plan["tasks"]}, "non-claims": list(plan.get("non-claims", []))}
     state["created"] = {**stamp(), "based_on": head_sha(target)}   # the commit this run starts from: its place in history is ancestry, not its id's timestamp
+    locked = locked_versions(target)
+    if locked:
+        state["environment"] = {"locked": locked}   # the lock every call in this run ran under, once; a task says `locked` only when it differs
     if getattr(args, "worktree", False):
         state["worktree"] = {"main": os.path.abspath(args.target).replace(os.sep, "/"), "branch": "run/" + run_name}
     save_state(d, state)
-    commit_record(target, run_name, "init (%s)" % plan.get("kind", "?"))
+    commit_record(target, run_name, "init (%s) — %s" % (plan.get("kind", "?"), plan.get("goal", "")))
     print("run %s: goal %r — %s plan (%s). Now %s."
           % (os.path.basename(d), plan["goal"], plan.get("kind", "?"), " -> ".join(t["id"] for t in plan["tasks"]) or "no tasks yet",
              "`chongdae add <id> ...` for each piece of work, `chongdae run` to record it, `chongdae close` at the end" if args.session else "`chongdae run`"))
@@ -675,7 +692,23 @@ def cmd_add(args):
         raise SystemExit("tasks are added to session runs only; a plan run's tasks are the plan's")
     if args.id in state["tasks"] or any(t.get("id") == args.id for t in plan.get("tasks", [])):
         raise SystemExit("task %s exists" % args.id)
-    task = {"id": args.id, "role": args.role, "brief": args.brief or "", "closes": args.closes or [], "needs": [], "checks": [portable_argv(shlex.split(c)) for c in args.check or []],
+    checks = [portable_argv(shlex.split(c)) for c in args.check or []]
+    # Who does it is the lock's to say, not this session's to assume: a task with checks is a build, and a build goes to the
+    # implementer the lock declares; a task that writes the contract's tests goes to the nitpicker. The session does a task
+    # itself when nothing is declared for it (a plan section, a model), or when it says so and why — recorded, like a
+    # delegation, so a record can show how much of the work the brain did with its own hands.
+    declared = providers(args.target, plan)
+    due = "implementer" if checks else ("nitpick" if args.tests and not all(os.path.exists(os.path.join(args.target, f)) for f in args.tests) else None)
+    due = due if due in declared else None
+    role, own = args.role, None
+    if role is None:
+        role = due or "session"
+    elif role == "session" and due:
+        if not args.why:
+            raise SystemExit("--role session: the lock declares %r for a task like this — say why the session does it itself (--why), "
+                             "or leave --role out and %r does it" % (due, due))
+        own = {"instead-of": due, "why": args.why, "by": args.by if args.by is not None else me(args.target), **stamp()}
+    task = {"id": args.id, "role": role, "brief": args.brief or "", "closes": args.closes or [], "needs": [], "checks": checks,
             "tests": args.tests or [], "gate": "human" if args.gate == "human" else None, **({"domain": args.domain} if args.domain else {})}
     for when in ("before", "after"):
         if getattr(args, when) is not None:
@@ -690,6 +723,8 @@ def cmd_add(args):
     if problems:
         raise SystemExit("task rejected:\n  " + "\n  ".join(problems))
     ts = {"status": "todo", "def": task, "seq": 1 + max([t.get("seq", 0) for t in state["tasks"].values()] or [0]), "added": now_utc()}
+    if own:
+        ts["self-performed"] = own
     if task["role"] == "session":
         ts["start"] = dirty(args.target)   # the session works between `add` and `run`: what changed is measured from now
     # a provider's task starts when `run` spawns it (`start` is taken then): a build added alongside its test task must not see the test-writer's file as its own change
@@ -697,7 +732,11 @@ def cmd_add(args):
         ts["non-claims"] = ["no check decides this task; done means the agent said so"]
     state["tasks"][args.id] = ts
     save_state(d, state)
-    print("added %s to %s%s. Work, then `chongdae run`." % (args.id, os.path.basename(d), " (no checks — done will be a claim, recorded as such)" if not task["checks"] else ""))
+    if task["role"] == "session":
+        print("added %s to %s%s%s. Work, then `chongdae run`." % (args.id, os.path.basename(d), " (no checks — done will be a claim, recorded as such)" if not task["checks"] else "",
+                                                                  " — the session does it itself, instead of the lock's %s: recorded" % own["instead-of"] if own else ""))
+    else:
+        print("added %s to %s — %s does it (%s). `chongdae run` sends it out." % (args.id, os.path.basename(d), task["role"], "the lock's provider" if args.role is None else "as asked"))
     return 0
 
 
@@ -847,6 +886,13 @@ def cmd_report(args):
                 stamps.setdefault(v, []).append(where)
 
         for tid, ts in state.get("tasks", {}).items():
+            own = ts.get("self-performed")
+            if isinstance(own, dict):
+                # the brain did with its own hands what the lock had hired someone for: a fact of the record, with the reason —
+                # and a reason stamped across tasks is one decision claiming to be many, like a delegation's
+                stamp(own.get("why"), "%s/%s" % (name, tid))
+                findings.append({"kind": "self-performed", "where": "%s/%s" % (name, tid), "layer": "observation",
+                                 "text": "the session did this itself instead of the lock's %s (%s): %s" % (own.get("instead-of"), own.get("by"), own.get("why"))})
             for key, label in (("confirmed", "gate"), ("accepted", "provider decisions")):
                 d = ts.get(key)
                 if isinstance(d, dict) and "delegated" in d:
@@ -924,7 +970,9 @@ def cmd_close(args):
     state["status"] = "complete"
     state["open"] = open_
     save_state(d, state)
-    commit_record(args.target, os.path.basename(d), "close (%d open)" % len(open_))
+    wrote = place_reviewer(args.target, d, state, plan)
+    save_state(d, state)
+    commit_record(args.target, os.path.basename(d), "close — %s (%d done, %d open)" % (plan.get("goal", ""), sum(ts["status"] == "done" for ts in state["tasks"].values()), len(open_)), also=wrote)
     dropped = [tid for tid, ts in state["tasks"].items() if ts["status"] == "dropped"]
     print("closed %s: %d task(s) done, %d open (%s)%s. non-claims: %s" % (os.path.basename(d), sum(ts["status"] == "done" for ts in state["tasks"].values()), len(open_), ", ".join(open_) or "-",
                                                                  ", %d dropped (%s)" % (len(dropped), ", ".join(dropped)) if dropped else "", non_claims(state) or "none"))
@@ -1205,10 +1253,11 @@ def spawn(target, run, task, provider, plan, attempts=(), stage="build", extra=N
     import subprocess
     import time
     tag = task["id"] + ("" if stage == "build" else "." + stage + (".%d" % (len(attempts) + 1) if attempts else ""))
-    req_path = os.path.join(run, tag + ".request.json")
-    res_path = os.path.join(run, tag + ".response.json")
-    pend_path = os.path.join(run, tag + ".pending.json")
-    log_path = os.path.join(run, tag + ".provider.log")
+    req_path = work_path(run, tag + ".request.json")
+    res_path = work_path(run, tag + ".response.json")
+    pend_path = work_path(run, tag + ".pending.json")
+    log_path = work_path(run, tag + ".provider.log")
+    os.makedirs(os.path.join(run, LOCAL), exist_ok=True)
     pending = load(pend_path)
     proc = None
     native = native_argv(target, provider)
@@ -1237,8 +1286,10 @@ def spawn(target, run, task, provider, plan, attempts=(), stage="build", extra=N
         req.update(extra or {})
         save(req_path, req)
         # the request as sent names this machine's paths and stays local; what the provider was asked, portably, is
-        # the record's — without it nobody else can put the same question to a worker again
-        save(os.path.join(run, tag + ".asked.json"), portable(req, target))
+        # the record's — without it nobody else can put the same question to a worker again. The contract's sections are
+        # kept once per run per text (contract/), and every asked record points at them: three tasks closing one section
+        # carried three copies of it
+        save(os.path.join(run, "asked", tag + ".json"), {**portable(req, target), "contract": keep_contract(run, sections)})
         if os.path.exists(res_path):
             os.remove(res_path)
         if native:
@@ -1288,6 +1339,23 @@ def spawn(target, run, task, provider, plan, attempts=(), stage="build", extra=N
     if os.path.exists(pend_path):
         os.remove(pend_path)
     return code, response, start
+
+
+def keep_contract(run, sections):
+    """The plan sections a request carries, kept once per run per text — contract/<Q>-<hash>.md — so a section three tasks
+    close is in the record once, and a section the plan changed between two calls is there twice, as two texts. Returns
+    {section id: the record path} for the asked record."""
+    import hashlib
+    out = {}
+    for qid, text in (sections or {}).items():
+        name = "contract/%s-%s.md" % (qid, hashlib.sha256(text.encode("utf-8")).hexdigest()[:8])
+        path = os.path.join(run, name)
+        if not os.path.exists(path):
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with io.open(path, "w", encoding="utf-8", newline="\n") as fh:
+                fh.write(text.rstrip("\n") + "\n")
+        out[qid] = name
+    return out
 
 
 def cmd_status(args):
@@ -1405,9 +1473,25 @@ def plugin_versions(target, argv=()):
                 used[m] = v + source_revision(root)
                 break
     used["chongdae"] = engine().split(" ", 1)[1]   # the engine that ran the call is one of the versions it ran with
-    lock = load(os.path.join(target, "hunsu.lock.json")).get("plugins", {}) if target else {}
-    locked = {name: "%s#%s" % (p.get("version"), p.get("fingerprint")) if p.get("fingerprint") else p.get("version") for name, p in sorted(lock.items())}
+    locked = locked_versions(target) if target else {}
     return {k: v for k, v in (("used", used), ("locked", locked)) if v}
+
+
+def locked_versions(target):
+    """Every plugin the environment lock pins, with the content fingerprint it recorded (hunsu.lock.json)."""
+    lock = load(os.path.join(target, "hunsu.lock.json")).get("plugins", {})
+    return {name: "%s#%s" % (p.get("version"), p.get("fingerprint")) if p.get("fingerprint") else p.get("version") for name, p in sorted(lock.items())}
+
+
+def against_run(who, state):
+    """An author line's `versions.locked` against the run's: the same lock is said once, in state.json (`environment`);
+    a call under a changed lock keeps its own."""
+    locked = (who.get("versions") or {}).get("locked")
+    if locked and locked == (state.get("environment") or {}).get("locked"):
+        del who["versions"]["locked"]
+        if not who["versions"]:
+            del who["versions"]
+    return who
 
 
 def performer(who, argv=None, response=None, target=None):
@@ -1522,7 +1606,7 @@ def cmd_run(args):
                     return stop(waiting_text(task["id"], response))
                 ts["response"] = response
                 ts["touched_by_provider"] = touched_files(target, before)
-                ts["performed_by"] = performer(who, argv=who if isinstance(who, list) else [who], response=response, target=target)   # the un-resolved argv: portable, names host/model without machine paths
+                ts["performed_by"] = against_run(with_trace(performer(who, argv=who if isinstance(who, list) else [who], response=response, target=target), response, d, target), state)   # the un-resolved argv: portable, names host/model without machine paths
                 if native_argv(target, who):
                     ts.setdefault("non-claims", []).append("%s: the answer was written by the session on a native subagent's behalf; chongdae did not observe the subagent" % task["id"])
                 save_state(d, state)
@@ -1540,7 +1624,7 @@ def cmd_run(args):
                 return cmd_run(args)
             if response.get("status") != "done":
                 return stop("%s: provider %r did not finish (%s) — see %s; fix what stopped it (or nothing, if it ran out of budget), %s"
-                            % (task["id"], who, response.get("status"), os.path.join(d, task["id"] + ".response.json"), again))
+                            % (task["id"], who, response.get("status"), work_path(d, task["id"] + ".response.json"), again))
             if response.get("decisions") and not ts.get("accepted"):
                 # The provider settled something the contract did not. That is a plan change: a human writes it into the plan and accepts, or rejects the work.
                 return stop("%s: the provider made %d decision(s) the contract did not — write each into the plan (or reject the work and reset the tree), "
@@ -1577,7 +1661,7 @@ def cmd_run(args):
                     if code == WAITING:
                         return stop(waiting_text(task["id"] + " (verify)", review))
                     ts["review"] = review
-                    ts["verified_by"] = performer(prov["verifier"], argv=prov["verifier"] if isinstance(prov["verifier"], list) else [prov["verifier"]], response=review, target=target)
+                    ts["verified_by"] = against_run(with_trace(performer(prov["verifier"], argv=prov["verifier"] if isinstance(prov["verifier"], list) else [prov["verifier"]], response=review, target=target), review, d, target), state)
                     if native_argv(target, prov["verifier"]):
                         ts.setdefault("non-claims", []).append("%s: the verdict was written by the session on a native subagent's behalf; chongdae did not observe the subagent" % task["id"])
                     save_state(d, state)
@@ -1632,17 +1716,14 @@ def cmd_run(args):
                         else:
                             other["start"].pop(f, None)
             if "performed_by" not in ts:
-                ts["performed_by"] = performer(who, target=target)   # the session did the work: record which host/model/session, like a commit author
+                ts["performed_by"] = against_run(performer(who, target=target), state)   # the session did the work: record which host/model/session, like a commit author
             if who == "session" and not ts.get("response"):
                 # a session task's "done" is the agent's word; what the session did in the task's window is on the host's own
                 # record — the same trace a worker's call gets, cut from the session transcript at the time the task was added
-                rec = {"transcript": session_transcript(target, (ts.get("performed_by") or {}).get("session", ""))}
-                if rec.get("transcript"):
+                transcript = session_transcript(target, (ts.get("performed_by") or {}).get("session", ""))
+                if transcript:
                     try:
-                        save(os.path.join(d, task["id"] + ".session.trace.json"),
-                             {"artifact-type": "chongdae/trace@1", "worker": {k: v for k, v in (ts.get("performed_by") or {}).items() if k in ("host", "model", "agent")},   # the session is local/'s
-                              **session_summary(trace_of(rec["transcript"], target, since=str(ts.get("added") or ""), project_only=True)),
-                              "window-from": ts.get("added")})
+                        ts["performed_by"]["trace"] = {**session_summary(trace_of(transcript, target, since=str(ts.get("added") or ""), project_only=True)), "window-from": ts.get("added")}
                     except (OSError, ValueError):
                         pass
                 else:
@@ -1662,9 +1743,45 @@ def cmd_run(args):
         return stop("nothing this machine can advance — the open tasks are claimed elsewhere (or blocked on them); pull and `chongdae run` again")
     state["status"] = "complete"
     save_state(d, state)
-    commit_record(args.target, os.path.basename(d), "complete")
+    wrote = place_reviewer(target, d, state, plan)
+    save_state(d, state)
+    commit_record(args.target, os.path.basename(d), "complete — %s" % plan.get("goal", ""), also=wrote)
     print("run %s complete. non-claims: %s" % (os.path.basename(d), non_claims(state) or "none"))
     return 0
+
+
+def place_reviewer(target, d, state, plan):
+    """The run has ended; its record is reviewed now, by the lock's `reviewer` role — placed by the runner, as the verifier
+    is, never by the hands. The reviewer is a command run in the project (dwitbuk's `review` is one): whatever it wrote there
+    is part of the closing record and goes into the close commit (returned as paths); what it said last is kept in
+    state.json `reviewed`. No reviewer in the lock: a non-claim, nothing substituted. A reviewer that fails: also a non-claim
+    — the run still closes."""
+    import subprocess
+    prov = providers(target, plan).get("reviewer")
+    if not prov or prov == "session" or (isinstance(prov, dict) and prov.get("native")):
+        state.setdefault("non-claims", []).append("no `reviewer` role in the lock%s: nobody reviewed this run's record when it ended"
+                                                  % (" (it names the session or a native subagent — the reviewer is a command, never the hands)" if prov else ""))
+        return []
+    before = dirty(target) or {}
+    try:
+        # nothing that goes wrong here stops the run from ending: a reviewer that cannot be resolved or run is a non-claim
+        argv = resolve_argv(target, [str(a) for a in (prov if isinstance(prov, list) else prov.split())])
+        if argv and argv[0] in ("python", "python3") and not shutil.which(argv[0]):
+            argv[0] = next((c for c in ("python3", "python") if shutil.which(c)), None) or sys.executable
+        done = subprocess.run(argv, cwd=target, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=600)
+        code, out = done.returncode, (done.stdout or "") + (done.stderr or "")
+    except (OSError, subprocess.TimeoutExpired, SystemExit) as err:
+        code, out = 1, str(err)
+    after = dirty(target) or {}
+    wrote = sorted(p for p, h in after.items() if before.get(p) != h)
+    said = [l for l in out.strip().split("\n") if l.strip()][-1:] or [""]
+    rec = {"by": performer(prov, argv=prov if isinstance(prov, list) else [prov]), "said": said[0][:300], "wrote": wrote, **stamp()}
+    if code:
+        rec["exit"] = code
+        state.setdefault("non-claims", []).append("the reviewer exited %d when this run ended: its review is not on record (%s)" % (code, said[0][:120]))
+    state["reviewed"] = rec
+    print("  reviewer: %s%s" % (said[0][:200], " — wrote %s" % ", ".join(wrote) if wrote else ""))
+    return wrote
 
 
 DELEGATION_REF = re.compile(r"D-[0-9a-f]+\Z")
@@ -1748,7 +1865,7 @@ def run_stage(target, d, task, ts, state, plan, prov, when, extra):
             return stop(dispatch_text("%s (%s)" % (task["id"], role), response))
         if code == WAITING:
             return stop(waiting_text("%s (%s)" % (task["id"], role), response))
-        by = performer(provider, argv=provider if isinstance(provider, list) else [provider], response=response, target=target)
+        by = against_run(with_trace(performer(provider, argv=provider if isinstance(provider, list) else [provider], response=response, target=target), response, d, target), state)
         if response.get("status") != "done":
             # not an answer: kept as what happened (the reviewer sees it), but the role is asked again on the next `run`
             ts.setdefault("stages", {}).setdefault(role, {}).setdefault("failed", []).append({"response": response, "by": by, "when": when})
@@ -1831,7 +1948,10 @@ def resend(target, d, state, task_id, retried, message=None):
     """Send a stopped task out again, keeping the stopped attempt (its response, review, stages) in the record under its
     number — the next call receives it. `retried` says who sent it: a person (`by`), a delegation, or chongdae itself."""
     ts = state["tasks"][task_id]
-    attempt = {**(ts.pop("response", None) or {"status": "session"}), "retried": {**retried, **stamp()}}
+    response = ts.pop("response", None)
+    attempt = {**(response or {"status": "session"}), "retried": {**retried, **stamp()}}
+    if response:
+        with_trace(attempt, response, d, target)   # what this attempt's worker did stays with the attempt
     for key in ("review", "rejected"):
         if key in ts:
             attempt[key] = ts.pop(key)
@@ -1858,9 +1978,9 @@ def resend(target, d, state, task_id, retried, message=None):
     # by the session and would otherwise be read again as the new answer) and the record keeps what this attempt said
     for kind in ("response", "request", "pending", "response.transcript"):   # the build stage's files (verify files are numbered by spawn already)
         ext = "jsonl" if kind.endswith("transcript") else "json"
-        src = os.path.join(d, "%s.%s.%s" % (task_id, kind, ext))
+        src = work_path(d, "%s.%s.%s" % (task_id, kind, ext))
         if os.path.exists(src):
-            os.replace(src, os.path.join(d, "%s.%s.%d.%s" % (task_id, kind, n, ext)))
+            os.replace(src, work_path(d, "%s.%s.%d.%s" % (task_id, kind, n, ext)))
     save_state(d, state)
     commit_record(target, os.path.basename(d), message or "retry %s (attempt %d kept)" % (task_id, n))
     return n
@@ -1887,9 +2007,9 @@ def route_dispute(target, d, state, plan, task, disputed):
     n = len(wts["attempts"])
     for kind in ("response", "request", "pending", "response.transcript"):
         ext = "jsonl" if kind.endswith("transcript") else "json"
-        src = os.path.join(d, "%s.%s.%s" % (writer["id"], kind, ext))
+        src = work_path(d, "%s.%s.%s" % (writer["id"], kind, ext))
         if os.path.exists(src):
-            os.replace(src, os.path.join(d, "%s.%s.%d.%s" % (writer["id"], kind, n, ext)))
+            os.replace(src, work_path(d, "%s.%s.%d.%s" % (writer["id"], kind, n, ext)))
     wts["status"] = "todo"
     wts["amending"] = disputed
     wts.pop("reported", None)
@@ -1976,7 +2096,9 @@ def main(argv=None):
             p.add_argument("--by", default=None, help="who takes it (default: git user.name); an empty string releases")
         if name == "add":
             p.add_argument("id")
-            p.add_argument("--role", default="session", help="who does it: `session` (this agent, the default) or a role the lock declares a provider for (`implementer`: a fresh process builds it from the brief and checks)")
+            p.add_argument("--role", default=None, help="who does it. Left out, the lock says: a task with --check goes to its `implementer`, one that writes --tests to its `nitpick`, anything else to this session. `session` where the lock declares a provider needs --why (recorded); any role the lock declares can be named outright")
+            p.add_argument("--why", default=None, help="with --role session: why this session does the task itself, instead of the provider the lock declares for it")
+            p.add_argument("--by", default=None, help="with --role session --why: who decided (default: git user.name)")
             p.add_argument("--brief", default=None)
             p.add_argument("--closes", nargs="*", default=None)
             p.add_argument("--check", action="append", default=None, help="a check argv (quoted); repeatable")

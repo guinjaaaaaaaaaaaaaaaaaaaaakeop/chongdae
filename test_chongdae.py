@@ -145,7 +145,7 @@ def test_command_provider_done_decisions_and_blocked():
         assert code == chongdae.DECISION and "human: review task A" in out, out
         st = pj.state()
         assert st["tasks"]["A"]["response"]["status"] == "done" and any("count with extra args" in n for n in chongdae.non_claims(st))
-        assert os.path.exists(os.path.join(chongdae.run_dir(pj.dir), "A.request.json")), "the request file is part of the record"
+        assert os.path.exists(os.path.join(chongdae.run_dir(pj.dir), "local", "A.request.json")), "the request as sent is kept, in the run's local/"
         assert run("confirm", "A", "--by", "kim", "--target", pj.dir)[0] == 0 and run("run", "--target", pj.dir)[0] == 0
         # decisions -> not done until accepted; accept needs by/delegated; then the gate
         plan_with(RESPONSE_DECISIONS, "B")
@@ -173,7 +173,7 @@ def test_command_provider_done_decisions_and_blocked():
         pj.fake_provider(RESPONSE_DONE)   # the same script path: the human "wrote the decision into the plan", the next call succeeds
         code, out = run("run", "--target", pj.dir)
         assert code == chongdae.DECISION and "human: review task C" in out, out
-        req = json.load(open(os.path.join(chongdae.run_dir(pj.dir), "C.request.json"), encoding="utf-8"))
+        req = json.load(open(os.path.join(chongdae.run_dir(pj.dir), "local", "C.request.json"), encoding="utf-8"))
         assert req["attempts"][0]["summary"] == "the contract does not say what done means" and "touched" in req
         os.remove(os.path.join(chongdae.run_dir(pj.dir), "state.json"))   # abandon C
         shutil.rmtree(chongdae.run_dir(pj.dir))
@@ -213,8 +213,8 @@ def test_verifier_before_the_gate_protected_tests_and_delegation_policy():
         autos = [a for a in ts.get("attempts", []) if (a.get("retried") or {}).get("auto")]
         assert len(autos) == chongdae.AUTO_RESENDS and all(a["review"]["verdict"] == "reject" and a["retried"]["by"] == "chongdae" for a in autos), ts.get("attempts")
         assert "sent back to the provider automatically" in out, out
-        assert os.path.exists(os.path.join(chongdae.run_dir(pj.dir), "S1.verify.request.json")), "the verifier's request is part of the record"
-        req = json.load(open(os.path.join(chongdae.run_dir(pj.dir), "S1.verify.request.json"), encoding="utf-8"))
+        assert os.path.exists(os.path.join(chongdae.run_dir(pj.dir), "local", "S1.verify.request.json")), "the verifier's request as sent is kept in local/"
+        req = json.load(open(os.path.join(chongdae.run_dir(pj.dir), "local", "S1.verify.request.json"), encoding="utf-8"))
         assert req["stage"] == "verify" and req["role"] == "verifier" and req["built"]["summary"] == "added count" and req["tests"] == ["test_x.py"]
         assert req["touched"] == [] and "touched_since" in req, req   # the fake provider changed nothing; a human's edits would be in touched_since
         assert run("confirm", "S1", "--by", "kim", "--target", pj.dir)[0] != 0, "nothing produced yet"
@@ -228,7 +228,7 @@ def test_verifier_before_the_gate_protected_tests_and_delegation_policy():
         code, out = run("run", "--target", pj.dir)
         assert code == chongdae.DECISION and "human: review task S1" in out, out
         rd = chongdae.run_dir(pj.dir)
-        assert os.path.exists(os.path.join(rd, "S1.verify.request.json")) and os.path.exists(os.path.join(rd, "S1.verify.4.request.json")), os.listdir(rd)   # every verdict's files survive the retries
+        assert os.path.exists(os.path.join(rd, "local", "S1.verify.request.json")) and os.path.exists(os.path.join(rd, "local", "S1.verify.4.request.json")), os.listdir(os.path.join(rd, "local"))   # every verdict's files survive the retries
         assert run("confirm", "S1", "--delegated", "verifier said ok", "--target", pj.dir)[0] == 0
         cf = dict(pj.state()["tasks"]["S1"]["confirmed"]); cf.pop("at", None); cf.pop("chongdae", None)
         assert cf == {"delegated": "verifier said ok", "verifier": "accept"}
@@ -309,7 +309,7 @@ def test_judgments_are_notarized_as_record_only_commits_with_utc_times():
         assert run("close", "--target", pj.dir)[0] == 0
 
         log = subprocess.run(["git", "log", "--format=§%s", "--name-only"], cwd=pj.dir, capture_output=True, text=True).stdout
-        assert "init (session)" in log and "confirm T1 (by kim)" in log and "close (0 open)" in log, log
+        assert "init (session) — g" in log and "confirm T1 (by kim)" in log and "close — g (1 done, 0 open)" in log, log   # a judgment's commit names the run's goal: the log reads without opening the record
         for block in log.split("§"):   # per commit: the notary commits (run-*) carry record files only
             lines = [l for l in block.splitlines() if l.strip()]
             if lines and lines[0].startswith("run-"):
@@ -459,12 +459,12 @@ def test_provider_survives_the_runner_and_a_second_run_consumes_its_response():
         time.sleep(1.5)
         runner.kill(); runner.wait()
         d = chongdae.run_dir(pj.dir)
-        assert os.path.exists(os.path.join(d, "T1.pending.json")), "the pending record survives the dead runner"
+        assert os.path.exists(os.path.join(d, "local", "T1.pending.json")), "the pending record survives the dead runner"
         # second `run` resumes the SAME provider (waits for it) instead of spawning another
         code, out = run("run", "--target", pj.dir)
         assert code == 0, out
         assert io.open(marker, encoding="utf-8").read() == "x", "the provider ran once, not twice"
-        assert not os.path.exists(os.path.join(d, "T1.pending.json")), "consumed pending is cleaned up"
+        assert not os.path.exists(os.path.join(d, "local", "T1.pending.json")), "consumed pending is cleaned up"
         st = pj.state()
         assert st["tasks"]["T1"]["status"] == "done" and st["tasks"]["T1"]["response"]["status"] == "done"
 
@@ -602,7 +602,7 @@ def test_a_session_task_can_be_handed_to_the_locked_implementer():
         tasks = pj.state()["tasks"]
         assert tasks["mine"]["status"] == "done" and tasks["mine"]["performed_by"]["provider"] == "session"
         assert tasks["theirs"]["status"] == "done" and tasks["theirs"]["performed_by"]["provider"] == "command" and tasks["theirs"]["response"]["status"] == "done", tasks["theirs"]
-        req = json.load(open(os.path.join(chongdae.run_dir(pj.dir), "theirs.request.json")))
+        req = json.load(open(os.path.join(chongdae.run_dir(pj.dir), "local", "theirs.request.json")))
         assert req["contract"] == {"Q-add": "## Q-add\n\n`add` appends one item."}, "a session run's --from names the document whose sections are the contract"
         assert run("add", "nobody", "--role", "modeler", "--brief", "no such provider", "--target", pj.dir)[0] == 0
         code, out = run("run", "--target", pj.dir)
@@ -624,8 +624,8 @@ def test_a_native_provider_is_dispatched_by_the_session_and_its_answer_consumed_
         code, out = run("run", "--target", pj.dir)
         assert code == chongdae.DECISION and "session agent: dispatch T1" in out and "--prompt-only" in out and "VERBATIM" in out, out
         d = chongdae.run_dir(pj.dir)
-        req, res = os.path.join(d, "T1.request.json"), os.path.join(d, "T1.response.json")
-        assert os.path.exists(req) and not os.path.exists(res) and chongdae.load(os.path.join(d, "T1.pending.json")).get("native")
+        req, res = os.path.join(d, "local", "T1.request.json"), os.path.join(d, "local", "T1.response.json")
+        assert os.path.exists(req) and not os.path.exists(res) and chongdae.load(os.path.join(d, "local", "T1.pending.json")).get("native")
         # the prompt the instruction names is the worker's own
         argv = [a.strip('"') for a in out.split("get the prompt with `")[1].split("`")[0].split(" ")]
         assert subprocess.run(argv, capture_output=True, text=True).stdout.strip() == "THE PROMPT for " + req
@@ -636,7 +636,7 @@ def test_a_native_provider_is_dispatched_by_the_session_and_its_answer_consumed_
         code, out = run("run", "--target", pj.dir)
         assert code == chongdae.DECISION and "the provider stopped" in out, out
         assert run("retry", "T1", "--delegated", "test", "--target", pj.dir)[0] == 0
-        assert not os.path.exists(res) and os.path.exists(os.path.join(d, "T1.response.1.json")) and os.path.exists(os.path.join(d, "T1.request.1.json")), os.listdir(d)
+        assert not os.path.exists(res) and os.path.exists(os.path.join(d, "local", "T1.response.1.json")) and os.path.exists(os.path.join(d, "local", "T1.request.1.json")), os.listdir(os.path.join(d, "local"))
         code, out = run("run", "--target", pj.dir)
         assert code == chongdae.DECISION and "session agent: dispatch T1" in out, out
         write(res, dict(RESPONSE_DONE, worker={"host": "claude-code", "model": "claude-native-1"}))
@@ -648,7 +648,7 @@ def test_a_native_provider_is_dispatched_by_the_session_and_its_answer_consumed_
         assert pb["relayed_by"]["provider"] == "session", pb
         assert len(ts["attempts"]) == 1 and ts["attempts"][0]["status"] == "blocked"
         assert any("native subagent" in n for n in ts.get("non-claims", [])), ts.get("non-claims")
-        assert not os.path.exists(os.path.join(d, "T1.pending.json"))
+        assert not os.path.exists(os.path.join(d, "local", "T1.pending.json"))
 
 
 def test_people_hired_before_and_after_a_task_answer_with_findings_the_record_keeps():
@@ -669,8 +669,8 @@ def test_people_hired_before_and_after_a_task_answer_with_findings_the_record_ke
         ts = pj.state()["tasks"]["T1"]
         assert ts["stages"]["quibble"]["response"]["findings"][0]["kind"] == "undecided" and ts["stages"]["quibble"]["by"]["provider"] == "command" and ts["stages"]["quibble"]["when"] == "before"
         assert ts["status"] == "todo" and "response" not in ts, "the hands did not move"
-        assert os.path.exists(os.path.join(chongdae.run_dir(pj.dir), "T1.quibble.request.json"))
-        assert json.load(open(os.path.join(chongdae.run_dir(pj.dir), "T1.quibble.request.json")))["role"] == "quibble"
+        assert os.path.exists(os.path.join(chongdae.run_dir(pj.dir), "local", "T1.quibble.request.json"))
+        assert json.load(open(os.path.join(chongdae.run_dir(pj.dir), "local", "T1.quibble.request.json")))["role"] == "quibble"
         code2, out2 = run("run", "--target", pj.dir)
         assert code2 == chongdae.DECISION and "quibble found 2" in out2, "asked again: still waiting, not re-run"
         assert run("accept", "T1", "--target", pj.dir)[0] != 0, "who accepted?"
@@ -682,8 +682,8 @@ def test_people_hired_before_and_after_a_task_answer_with_findings_the_record_ke
         assert ts["status"] == "done" and ts["stages"]["quibble"]["accepted"]["by"] == "kim"
         assert ts["stages"]["modeler"] == {"skipped": "no provider"} and any("no provider for role 'modeler' (before)" in n for n in ts["non-claims"]), ts
         assert ts["stages"]["newbie"]["when"] == "after" and ts["stages"]["newbie"]["response"]["findings"][0]["kind"] == "unclear"
-        assert os.path.exists(os.path.join(chongdae.run_dir(pj.dir), "T1.newbie.request.json"))
-        req = json.load(open(os.path.join(chongdae.run_dir(pj.dir), "T1.newbie.request.json")))
+        assert os.path.exists(os.path.join(chongdae.run_dir(pj.dir), "local", "T1.newbie.request.json"))
+        req = json.load(open(os.path.join(chongdae.run_dir(pj.dir), "local", "T1.newbie.request.json")))
         assert req["role"] == "newbie" and "touched" in req and "built" in req
         # the report: both stages' findings, and the acceptance if it was delegated
         code, out = run("report", "--target", pj.dir)
@@ -764,8 +764,8 @@ def test_a_disputed_contract_test_goes_back_to_its_writer_and_the_build_goes_out
         rd = chongdae.run_dir(pj.dir)
         st = pj.state()["tasks"]
         assert st["tests"]["status"] == "done" and st["tests"]["attempts"][0]["disputed-tests"][0]["why"] == "fixture breaks Q", st["tests"]
-        assert json.load(open(os.path.join(rd, "tests.request.json")))["amending"][0]["test"] == "test_a.py::test_x"
-        assert json.load(open(os.path.join(rd, "tests.request.1.json")))["checks"] == [[sys.executable, "-c", "raise SystemExit(0)"]], "the writer's request carries the build's check"
+        assert json.load(open(os.path.join(rd, "local", "tests.request.json")))["amending"][0]["test"] == "test_a.py::test_x"
+        assert json.load(open(os.path.join(rd, "local", "tests.request.1.json")))["checks"] == [[sys.executable, "-c", "raise SystemExit(0)"]], "the writer's request carries the build's check"
         assert st["build"]["status"] == "done" and st["build"]["rebaselined"][0]["tests"] == ["test_a.py"], st["build"]
         assert str(st["build"]["attempts"][0]["retried"]["auto"]).startswith("tests disputed"), st["build"]["attempts"]
         assert open(os.path.join(pj.dir, "test_a.py")).read() == "# amended\n"
@@ -796,10 +796,13 @@ def test_a_session_tasks_done_carries_what_the_session_did_in_its_window():
             with open(tr, "a", encoding="utf-8") as fh:
                 fh.write(json.dumps(after) + "\n" + json.dumps(other) + "\n")
             assert run("run", "--target", pj.dir)[0] == 0
-            trace = json.load(open(os.path.join(chongdae.run_dir(pj.dir), "T1.session.trace.json"), encoding="utf-8"))
+            rd = chongdae.run_dir(pj.dir)
+            rec = json.load(open(os.path.join(rd, "tasks", "T1.json"), encoding="utf-8"))
+            trace = rec["performed_by"]["trace"]
             assert trace["commands-run"] == 1 and "commands" not in trace and trace["changed"] == ["write ./NOTES.md"], trace   # lines stay local
-            assert "session" not in trace["worker"] and trace["worker"]["model"] == "m", trace   # the session is this machine's (local/)
-            assert "secret" not in json.dumps(trace) and trace["elsewhere"].startswith("1 command"), trace
+            assert "session" not in rec["performed_by"] and rec["performed_by"]["model"] == "m", rec   # the session is this machine's (local/)
+            assert "secret" not in json.dumps(rec) and trace["elsewhere"].startswith("1 command"), trace
+            assert not any(n.endswith(".trace.json") for n in os.listdir(rd)), os.listdir(rd)   # no trace files beside the record
     finally:
         for k, v in old.items():
             if v is None:
@@ -850,8 +853,11 @@ def test_the_record_carries_what_replays_a_run_and_nothing_of_this_machine():
             assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
             # a check given with this machine's paths is recorded portably, and still runs here
             plugin_check = "%s/.claude/plugins/cache/m/mangsang/1.5.0/mangsang.py" % home
-            assert run("add", "T1", "--check", "python3 -c pass " + plugin_check + " " + home + "/x", "--target", pj.dir)[0] == 0
+            code, out = run("add", "T1", "--check", "python3 -c pass " + plugin_check + " " + home + "/x", "--role", "session", "--target", pj.dir)
+            assert code != 0 and "--why" in out, out   # the lock has an implementer: the session doing a build itself is a decision, with a reason
+            assert run("add", "T1", "--check", "python3 -c pass " + plugin_check + " " + home + "/x", "--role", "session", "--why", "one line, quicker than a call", "--target", pj.dir)[0] == 0
             ts = pj.state()["tasks"]["T1"]
+            assert ts["self-performed"]["instead-of"] == "implementer" and ts["self-performed"]["why"] == "one line, quicker than a call", ts["self-performed"]
             assert ts["def"]["checks"] == [["python3", "-c", "pass", "{plugin:mangsang}/mangsang.py", "~/x"]], ts["def"]["checks"]
             assert chongdae.resolve_argv(pj.dir, ["~/x"]) == [home + "/x"]
             write(os.path.join(pj.dir, "a.py"), "x = 1\n")
@@ -872,11 +878,14 @@ def test_the_record_carries_what_replays_a_run_and_nothing_of_this_machine():
             # a provider's task: what it was asked is committed, portably; the request as sent stays local
             assert run("add", "T2", "--role", "implementer", "--check", sys.executable + " -c pass", "--target", pj.dir)[0] == 0
             assert run("run", "--target", pj.dir)[0] == 0
-            asked = open(os.path.join(rd, "T2.asked.json"), encoding="utf-8").read()
+            asked = open(os.path.join(rd, "asked", "T2.json"), encoding="utf-8").read()
             assert json.loads(asked)["task"] == "T2" and pj.dir not in asked and home not in asked, asked
             assert run("close", "--target", pj.dir)[0] == 0
             tracked = subprocess.run(["git", "ls-files"], cwd=pj.dir, capture_output=True, text=True).stdout.split()
-            assert any(t.endswith("T2.asked.json") for t in tracked) and not any("/local/" in t or t.endswith(".request.json") for t in tracked), tracked
+            assert any(t.endswith("asked/T2.json") for t in tracked) and not any("/local/" in t or t.endswith(".request.json") for t in tracked), tracked
+            # the run's root is the record and nothing else: no work file beside it, the work under local/
+            assert set(os.listdir(rd)) <= {"plan.json", "state.json", "tasks", "asked", "contract", "delegations", "local"}, os.listdir(rd)
+            assert {"T2.request.json", "T2.response.json"} <= set(os.listdir(os.path.join(rd, "local"))), os.listdir(os.path.join(rd, "local"))
             # committed records written by a working source are named for the reviewer
             doc = json.loads(run("report", "--target", pj.dir)[1])
             unreleased = [f for f in doc["findings"] if f["kind"] == "unreleased-writer"]
@@ -969,11 +978,11 @@ def test_run_waits_a_bounded_time_then_hands_back_and_the_next_run_resumes():
             code, out = run("run", "--target", pj.dir)
             assert code == chongdae.DECISION and "T1: the provider is still working (pid" in out and "again keeps waiting" in out, out
             d = chongdae.run_dir(pj.dir)
-            assert os.path.exists(os.path.join(d, "T1.pending.json")) and "response" not in pj.state()["tasks"]["T1"]
+            assert os.path.exists(os.path.join(d, "local", "T1.pending.json")) and "response" not in pj.state()["tasks"]["T1"]
             chongdae.WAIT_BUDGET = 30
             code, out = run("run", "--target", pj.dir)
             assert code == 0, out
-            assert pj.state()["tasks"]["T1"]["status"] == "done" and not os.path.exists(os.path.join(d, "T1.pending.json"))
+            assert pj.state()["tasks"]["T1"]["status"] == "done" and not os.path.exists(os.path.join(d, "local", "T1.pending.json"))
         finally:
             chongdae.WAIT_BUDGET = old
 
@@ -1247,9 +1256,10 @@ def test_run_selection_prefers_the_running_one_and_never_file_time():
 
 
 def test_a_workers_session_stays_local_and_the_record_carries_its_trace():
-    """A worker's whole session and the request as sent carry this machine's paths and can be megabytes; they stay on disk,
-    out of git. The committed record gets `<tag>.trace.json`: the commands with exit codes and the files changed, the project
-    as `.` and home as `~`. A session an earlier version committed leaves the index at the next record commit."""
+    """A worker's whole session and the request as sent carry this machine's paths and can be megabytes; they stay under the
+    run's local/, out of git. The author line in the record gets `trace`: the files changed, how many commands ran and
+    failed, the project as `.` and home as `~`; the command lines go to this machine's overlay. A session an earlier version
+    committed beside the record leaves the index at the next record commit."""
     tmp = tempfile.mkdtemp(prefix="chongdae-trace-")
     try:
         def git(*a):
@@ -1263,34 +1273,114 @@ def test_a_workers_session_stays_local_and_the_record_carries_its_trace():
             {"type": "item.completed", "item": {"type": "command_execution", "command": '/bin/zsh -lc "cat %s/.codex/skill.md"' % home, "exit_code": 0}},
             {"type": "item.completed", "item": {"type": "file_change", "changes": [{"path": os.path.join(tmp, "build.py"), "kind": "update"}]}},
         ]
-        write(os.path.join(run_dir, "b.response.transcript.jsonl"), "\n".join(json.dumps(x) for x in lines) + "\n")
-        write(os.path.join(run_dir, "b.request.json"), json.dumps({"target": tmp}))
-        write(os.path.join(run_dir, "b.response.json"), json.dumps({"status": "done", "worker": {"host": "codex", "model": "m", "transcript": "b.response.transcript.jsonl"}}))
+        write(os.path.join(run_dir, "local", "b.response.transcript.jsonl"), "\n".join(json.dumps(x) for x in lines) + "\n")
+        response = {"status": "done", "worker": {"host": "codex", "model": "m", "session": "s-1", "transcript": "b.response.transcript.jsonl"}}
+        who = chongdae.with_trace(chongdae.performer(["w"], argv=["w"], response=response), response, run_dir, tmp)
+        # the record keeps what the worker changed and how its commands ended; the command lines and the session stay local
+        pub, priv = chongdae.split_private(who)
+        assert pub["trace"] == {"changed": ["update ./build.py"], "commands-run": 2, "commands-failed": 0} and "commands" not in pub and "session" not in pub, pub
+        assert priv["commands"][0] == {"command": "python3 -m unittest discover -s tests -p 'test_s[12].py'", "exit": 0} and priv["commands"][1]["command"] == "cat ~/.codex/skill.md", priv
         write(os.path.join(run_dir, "state.json"), "{}")
-        # an earlier version committed a session: it must leave the index, and stay on disk
+        # an earlier version committed a session beside the record: it must leave the index, and stay on disk
         write(os.path.join(run_dir, "a.response.transcript.1.jsonl"), json.dumps(lines[1]) + "\n")
         git("add", "-f", ".chongdae/run-x/a.response.transcript.1.jsonl"); git("commit", "-qm", "old")
         assert chongdae.commit_record(tmp, "run-x", "test")
         tracked = git("ls-files").stdout.split()
-        assert ".chongdae/run-x/b.trace.json" in tracked and ".chongdae/run-x/a.trace.1.json" in tracked, tracked
-        assert not any(t.endswith((".jsonl", ".request.json")) for t in tracked), tracked
+        assert tracked == [".chongdae/.gitignore", ".chongdae/run-x/state.json"], tracked
         assert os.path.exists(os.path.join(run_dir, "a.response.transcript.1.jsonl")), "local copy kept"
-        trace = json.load(open(os.path.join(run_dir, "b.trace.json"), encoding="utf-8"))
-        assert trace["worker"] == {"host": "codex", "model": "m"} and trace["written_by"] == chongdae.engine(), trace
-        # the record keeps what the worker changed and how its commands ended; the command lines stay local
-        assert "commands" not in trace and trace["commands-run"] == 2 and trace["commands-failed"] == 0 and trace["changed"] == ["update ./build.py"], trace
-        full = json.load(open(os.path.join(run_dir, "local", "b.trace.json"), encoding="utf-8"))
-        assert full["commands"][0] == {"command": "python3 -m unittest discover -s tests -p 'test_s[12].py'", "exit": 0}, full
-        assert full["commands"][1]["command"] == "cat ~/.codex/skill.md", full
-        assert not any("/local/" in t for t in tracked) and ".chongdae/run-x/b.response.json" not in tracked, tracked
+        assert open(os.path.join(tmp, ".chongdae", ".gitignore")).read().split("\n")[2] == "local/", "one line says what stays: the run's local/"
         assert chongdae.neutral_path("rg --files %s/.codex/plugins/cache/some-market | rg x" % home, tmp) == "rg --files <codex-plugins> | rg x"
         assert chongdae.neutral_path("sed -n 1p ~/.claude/plugins/cache/m/hacheong/1.2.0/worker.py", tmp) == "sed -n 1p <plugin:hacheong@1.2.0>/worker.py"
         assert chongdae.neutral_path("D=/private/tmp/claude-1/x-y/scratch/a.json && ls", tmp) == "D=<tmp> && ls"
         assert chongdae.neutral_path("cat %s/.claude/projects/%s-src/s.jsonl" % (home, home.replace(os.sep, "-")), tmp) == "cat ~/.claude/projects/~-src/s.jsonl"
-        committed = git("show", "HEAD", "--", ".chongdae/run-x/b.trace.json").stdout
-        assert tmp not in committed and home not in committed, committed
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_the_lock_says_who_does_a_task_and_the_session_says_why_when_it_does_it_itself():
+    """Seen on a site: 43 tasks in a day, every one `role: session` — nobody chose that; `add` defaulted to the session and a
+    model at work does the work. Now the lock says: a task with checks goes to its `implementer`, a task that writes the
+    contract's tests to its `nitpick`; the session does what nothing is declared for, or what it takes with a reason —
+    recorded on the task (`self-performed`) and reported as an observation, its reason counted like a delegation's."""
+    with Project() as pj:
+        write(os.path.join(pj.dir, "hunsu.lock.json"), {"roles": {"implementer": pj.fake_provider(RESPONSE_DONE),
+                                                                  "nitpick": pj.fake_provider({"status": "done", "summary": "wrote", "non-claims": [], "tests": ["test_a.py"]}, name="teujip")}})
+        assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
+        code, out = run("add", "plan", "--brief", "a plan section", "--target", pj.dir)
+        assert code == 0 and "Work, then" in out, out   # nothing declared for a plan: the session's own
+        code, out = run("add", "tests", "--tests", "test_a.py", "--target", pj.dir)
+        assert code == 0 and "nitpick does it (the lock's provider)" in out, out
+        code, out = run("add", "build", "--tests", "test_a.py", "--check", sys.executable + " -c pass", "--target", pj.dir)
+        assert code == 0 and "implementer does it (the lock's provider)" in out, out
+        code, out = run("add", "own", "--check", sys.executable + " -c pass", "--role", "session", "--target", pj.dir)
+        assert code != 0 and "--why" in out and "'implementer'" in out, out
+        assert run("add", "own", "--check", sys.executable + " -c pass", "--role", "session", "--why", "a one-line fix", "--target", pj.dir)[0] == 0
+        assert run("add", "own2", "--check", sys.executable + " -c pass", "--role", "session", "--why", "a one-line fix", "--by", "kim", "--target", pj.dir)[0] == 0
+        defs = {tid: ts["def"]["role"] for tid, ts in pj.state()["tasks"].items()}
+        assert defs == {"plan": "session", "tests": "nitpick", "build": "implementer", "own": "session", "own2": "session"}, defs
+        assert run("run", "--target", pj.dir)[0] == 0
+        st = pj.state()["tasks"]
+        assert st["tests"]["performed_by"]["provider"] == "command" and st["build"]["performed_by"]["provider"] == "command" and st["own"]["performed_by"]["provider"] == "session"
+        assert st["own2"]["self-performed"]["by"] == "kim" and st["own"]["self-performed"]["instead-of"] == "implementer"
+        doc = json.loads(run("report", "--target", pj.dir)[1])
+        own = [f for f in doc["findings"] if f["kind"] == "self-performed"]
+        assert len(own) == 2 and all(f["layer"] == "observation" and "a one-line fix" in f["text"] for f in own), own
+        # a project with nothing declared: the session does everything, and says nothing about it
+    with Project() as pj:
+        assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
+        assert run("add", "b", "--check", sys.executable + " -c pass", "--target", pj.dir)[0] == 0
+        assert pj.state()["tasks"]["b"]["def"]["role"] == "session" and "self-performed" not in pj.state()["tasks"]["b"]
+
+
+def test_the_runner_places_the_reviewer_when_a_run_ends():
+    """dwitbuk's review never ran on a site with 22 runs: no product called it, and a skill is the session's discretion. The
+    reviewer is placed by the runner, like the verifier — the lock's `reviewer` role runs when a run ends (close, complete);
+    what it wrote is part of the closing record and goes into that commit; what it said last is kept. No reviewer: a non-claim."""
+    with Project() as pj:
+        subprocess.run(["git", "config", "user.email", "t@t"], cwd=pj.dir, check=True)
+        subprocess.run(["git", "config", "user.name", "t"], cwd=pj.dir, check=True)
+        subprocess.run(["git", "commit", "-q", "--allow-empty", "-m", "base"], cwd=pj.dir, check=True)
+        reviewer = os.path.join(pj.dir, "reviewer.py")
+        write(reviewer, "import json, os, sys\nos.makedirs('reviews', exist_ok=True)\n"
+                        "runs = [d for d in os.listdir('.chongdae') if d.startswith('run-')]\n"
+                        "json.dump({'runs': runs}, open('reviews/review-1.json', 'w'))\nprint('review-1: 2 objection(s)')\n")
+        write(os.path.join(pj.dir, "hunsu.lock.json"), {"roles": {"reviewer": [sys.executable, reviewer]}})
+        assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
+        assert run("add", "T1", "--brief", "b", "--target", pj.dir)[0] == 0
+        assert run("run", "--target", pj.dir)[0] == 0
+        code, out = run("close", "--target", pj.dir)
+        assert code == 0 and "reviewer: review-1: 2 objection(s) — wrote reviews/review-1.json" in out, out
+        st = pj.state()
+        assert st["reviewed"]["said"] == "review-1: 2 objection(s)" and st["reviewed"]["wrote"] == ["reviews/review-1.json"] and st["reviewed"]["by"]["argv"][1] == reviewer, st["reviewed"]
+        assert json.load(open(os.path.join(pj.dir, "reviews", "review-1.json")))["runs"] == [os.path.basename(chongdae.run_dir(pj.dir))], "the reviewer saw the run complete"
+        shown = subprocess.run(["git", "show", "--name-only", "--format=%s", "HEAD"], cwd=pj.dir, capture_output=True, text=True).stdout
+        assert shown.startswith(os.path.basename(chongdae.run_dir(pj.dir)) + ": close — g") and "reviews/review-1.json" in shown, shown
+        assert not subprocess.run(["git", "status", "--porcelain", "--", "reviews", ".chongdae"], cwd=pj.dir, capture_output=True, text=True).stdout.strip(), "the review and the record are committed, nothing of them left over"
+    with Project() as pj:
+        # no reviewer declared: the run closes, and the record says nobody reviewed it
+        assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
+        assert run("close", "--target", pj.dir)[0] == 0
+        assert any("no `reviewer` role" in n for n in pj.state()["non-claims"]), pj.state()["non-claims"]
+    with Project() as pj:
+        # a plan run's `complete` places it too, and a reviewer that fails is a non-claim, not a stop
+        write(os.path.join(pj.dir, "hunsu.lock.json"), {"roles": {"reviewer": [sys.executable, "-c", "raise SystemExit('no reporters here')"]}})
+        plan = {"artifact-type": "chongdae/plan@1", "goal": "p", "providers": {"b": [sys.executable, "-c", "import json,sys; json.dump({'status': 'done', 'summary': 's', 'verified': [], 'decisions': [], 'non-claims': []}, open(sys.argv[2], 'w'))", "{request}", "{response}"]},
+                "tasks": [{"id": "T", "role": "b", "checks": [[sys.executable, "-c", "pass"]]}]}
+        write(os.path.join(pj.dir, "plan.json"), plan)
+        assert run("init", "--plan", "plan.json", "--target", pj.dir)[0] == 0
+        code, out = run("run", "--target", pj.dir)
+        assert code == 0 and "complete" in out, out
+        st = pj.state()
+        assert st["reviewed"]["exit"] == 1 and any("the reviewer exited 1" in n for n in st["non-claims"]), st
+    with Project() as pj:
+        # a reviewer that cannot even be resolved here (a plugin this machine lacks) — seen on a trial clone: `close` had set the
+        # run complete, then died resolving the argv, leaving a complete run with its task open and no close commit
+        write(os.path.join(pj.dir, "hunsu.lock.json"), {"roles": {"reviewer": ["python3", "{plugin:nope}/x.py"]}})
+        assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
+        code, out = run("close", "--target", pj.dir)
+        assert code == 0 and "closed" in out, out
+        st = pj.state()
+        assert st["status"] == "complete" and st["reviewed"]["exit"] == 1 and "not linked" in st["reviewed"]["said"], st["reviewed"]
 
 
 if __name__ == "__main__":
