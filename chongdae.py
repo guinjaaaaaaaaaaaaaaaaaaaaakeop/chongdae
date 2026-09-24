@@ -415,6 +415,29 @@ def providers(target, plan):
     return out
 
 
+def outside_runs(target):
+    """Paths the project changes by its own procedure, not in runs (an author's posts, the site built from them):
+    hunsu.json `settings.chongdae.outside-runs`, a human declaration read where it is written — not from the lock, so it
+    holds while this source is tried under `hunsu dev`. Project-relative; an entry names a file or a directory. An entry
+    that is absolute or climbs out of the project names nothing and is dropped."""
+    manifest = load(os.path.join(target, "hunsu.json"))
+    declared = ((manifest.get("settings") or {}).get("chongdae") or {}).get("outside-runs") or []
+    out = []
+    for p in declared if isinstance(declared, list) else []:
+        p = str(p).replace("\\", "/").strip()
+        while p.startswith("./"):
+            p = p[2:]
+        p = p.rstrip("/")
+        if p and not p.startswith("/") and ":" not in p and ".." not in p.split("/"):
+            out.append(p)
+    return out
+
+
+def under(rel, paths):
+    """Is project-relative `rel` one of `paths` or inside one of them?"""
+    return any(rel == p or rel.startswith(p + "/") for p in paths)
+
+
 # ---------------------------------------------------------------- artifact checks (shape only; meaning is the human's)
 
 def check_questions(path, state):
@@ -670,6 +693,13 @@ def cmd_report(args):
     prefix = (git("rev-parse", "--show-prefix") or "").strip().replace("\\", "/")
     changed = {p[len(prefix):] if prefix and p.startswith(prefix) else p for p in changed}
     changed = {p for p in changed if not p.startswith((RUNS + "/", ".mangsang/", ".dwitbuk/", ".claude/", "reviews/", "hunsu")) and p != ".gitignore"}   # records, machine-local state, the host's settings, the environment (hunsu's own report covers it). Naming sibling record dirs here is chongdae's one known coupling to product names — accepted until a lock-declared record-paths convention earns its keep
+    declared = outside_runs(target)
+    by_procedure = sorted(p for p in changed if under(p, declared))
+    changed -= set(by_procedure)
+    if declared:   # not reported is not unseen: the reviewer is told what was left out and how much of it changed there
+        findings.append({"kind": "non-claim", "where": "settings.chongdae.outside-runs",
+                         "text": "%s: the project's own procedure, declared in hunsu.json; %d file(s) changed there since %s are not reported as outside-run"
+                                 % (", ".join(declared), len(by_procedure), args.since or "the beginning")})
     claimed, unattributed = set(), []
     for r in all_runs(target):
         name, plan, state = os.path.basename(r), load(os.path.join(r, "plan.json")), load_state(r)

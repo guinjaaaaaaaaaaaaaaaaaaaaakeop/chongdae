@@ -3,6 +3,7 @@
 Payload (stdin JSON): {"cwd": ..., "tool_name": "Edit"|"Write"|..., "tool_input": {"file_path": ...}}.
   file outside cwd                       -> allow (not this project's)
   file under .chongdae/, .claude/, hunsu* -> allow (the record and the environment are written by their own engines)
+  file under declared outside-runs       -> allow (the project's own procedure: hunsu.json settings.chongdae.outside-runs)
   a run in progress                      -> allow
   otherwise                              -> deny (exit 2): start a run first
 Bash is not covered (reads would be); dwitbuk's `outside-run` finding catches what slips through.
@@ -39,7 +40,9 @@ def main():
             rel = parts[3]
     if rel.startswith("..") or rel.startswith(EXEMPT):
         return 0
-    d = chongdae.run_dir(cwd) if os.path.isdir(os.path.join(cwd, chongdae.RUNS)) else None
+    if chongdae.under(rel, chongdae.outside_runs(cwd)):
+        return 0
+    d =chongdae.run_dir(cwd) if os.path.isdir(os.path.join(cwd, chongdae.RUNS)) else None
     if d and chongdae.load_state(d).get("status") == "running":
         return 0
     engine = os.path.join(os.path.dirname(HERE), "chongdae.py").replace(os.sep, "/")

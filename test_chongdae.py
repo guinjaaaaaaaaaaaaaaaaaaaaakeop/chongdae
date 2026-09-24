@@ -1033,6 +1033,30 @@ def test_report_emits_findings_typed_for_a_reviewer():
         assert len(vr) == 1 and "attempt 1" in vr[0]["where"] and "clear resets the counter" in vr[0]["text"], vr
 
 
+def test_outside_runs_declared_in_the_lock_are_the_projects_own_procedure():
+    """An author's posts are written by the project's procedure, not in runs: the write hook lets them through without a run,
+    and report leaves them out of outside-run — saying so, with how many files it left out."""
+    with Project() as pj:
+        subprocess.run(["git", "-c", "core.autocrlf=false", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "base"], cwd=pj.dir, check=True)
+        base = subprocess.run(["git", "rev-parse", "HEAD"], cwd=pj.dir, capture_output=True, text=True).stdout.strip()
+        write(os.path.join(pj.dir, "hunsu.json"), {"settings": {"chongdae": {"outside-runs": ["./content/", "docs", "../up", "/abs"]}}})
+        assert chongdae.outside_runs(pj.dir) == ["content", "docs"], "an entry out of the project names nothing"
+
+        def write_hook(*parts):
+            return hook("pre_write.py", {"cwd": pj.dir, "tool_name": "Write", "tool_input": {"file_path": os.path.join(pj.dir, *parts)}})[0]
+        assert write_hook("content", "posts", "a.md") == 0 and write_hook("docs", "index.html") == 0
+        assert write_hook("contents", "a.md") == 2, "a declared directory is not a name prefix"
+        assert write_hook("a.py") == 2, "everything else still needs a run"
+
+        write(os.path.join(pj.dir, "content", "posts", "a.md"), "post\n")
+        write(os.path.join(pj.dir, "docs", "index.html"), "<p>post</p>\n")
+        write(os.path.join(pj.dir, "b.py"), "y = 1\n")
+        doc = json.loads(run("report", "--since", base, "--target", pj.dir)[1])
+        assert [f["where"] for f in doc["findings"] if f["kind"] == "outside-run"] == ["b.py"], doc
+        told = [f for f in doc["findings"] if f["where"] == "settings.chongdae.outside-runs"]
+        assert len(told) == 1 and told[0]["kind"] == "non-claim" and "content, docs" in told[0]["text"] and "2 file(s)" in told[0]["text"], told
+
+
 def test_delegation_is_declared_once_and_referenced_scope_enforced_and_stamps_flagged():
     """A batch pre-approval is ONE judgment: `delegate` writes D-xxxx into the run's delegations/ and notarizes it.
     A `--delegated D-xxxx` is a reference — resolved (it must exist, and cover this judgment kind) and recorded as
