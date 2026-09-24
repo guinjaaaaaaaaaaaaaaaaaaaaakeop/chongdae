@@ -1336,6 +1336,32 @@ def test_the_lock_says_who_does_a_task_and_the_session_says_why_when_it_does_it_
         assert pj.state()["tasks"]["b"]["def"]["role"] == "session" and "self-performed" not in pj.state()["tasks"]["b"]
 
 
+def test_a_refused_report_stands_when_the_checks_pass_here_and_two_shapes_of_task_are_refused_at_add():
+    """A site's refactoring lost eighteen minutes to three things a tool can refuse or route: a validator refused a true
+    report twice for the spelling of a `sh -c` check (each refusal a build and a wait), the session had written that
+    shell line as one check, and it had sent a helper-moving task to the nitpicker with a check of its own."""
+    with Project() as pj:
+        # the worker did the work and ran the checks; the validator did not recognize the command's spelling
+        refused = dict(RESPONSE_DONE, status="failed", **{"non-claims": ["checks-ran: `sh -c 'x && y'` is claimed verified but no such command appears in the session's transcript"]})
+        write(os.path.join(pj.dir, "hunsu.lock.json"), {"roles": {"implementer": pj.fake_provider(refused)}})
+        assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
+        assert run("add", "T1", "--check", sys.executable + " -c pass", "--target", pj.dir)[0] == 0
+        code, out = run("run", "--target", pj.dir)
+        assert code == 0 and "the checks pass here" in out and "sent back" not in out, out
+        ts = pj.state()["tasks"]["T1"]
+        assert ts["status"] == "done" and ts["checks-ran-overruled"]["refused"][0].startswith("checks-ran:") and not ts.get("attempts"), ts
+        assert any("the report stands as the worker's word" in n for n in ts["non-claims"]), ts["non-claims"]
+        # the same refusal on a task whose checks fail here: back to the hands, as before
+        assert run("add", "T2", "--check", sys.executable + " -c 'raise SystemExit(1)'", "--target", pj.dir)[0] == 0
+        code, out = run("run", "--target", pj.dir)
+        assert code == chongdae.DECISION and "sent back to the provider automatically" in out, out
+        # a shell line is not a check; a nitpick task has no check of its own
+        code, out = run("add", "T3", "--check", "sh -c 'python3 build.py && git diff --exit-code'", "--target", pj.dir)
+        assert code != 0 and "a check is one command" in out, out
+        code, out = run("add", "T4", "--role", "nitpick", "--tests", "tests/test_x.py", "--check", sys.executable + " -c pass", "--target", pj.dir)
+        assert code != 0 and "a nitpick task writes the contract's tests and has no check of its own" in out, out
+
+
 def test_the_runner_places_the_reviewer_when_a_run_ends():
     """dwitbuk's review never ran on a site with 22 runs: no product called it, and a skill is the session's discretion. The
     reviewer is placed by the runner, like the verifier — the lock's `reviewer` role runs when a run ends (close, complete);

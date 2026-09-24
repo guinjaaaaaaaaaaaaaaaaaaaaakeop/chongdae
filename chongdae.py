@@ -709,6 +709,12 @@ def cmd_add(args):
     role, own = args.role, None
     if role is None:
         role = due or "session"
+    elif role == "nitpick" and checks:
+        # a nitpick task is decided by its tests being red before the build, never by a check of its own: a task that
+        # carries one is a build. A site sent "move the helpers into tests/support.py" to the nitpicker with a check; the
+        # nitpicker did its own job (wrote a structure test) and the check failed with nobody having moved anything
+        raise SystemExit("--role nitpick with --check: a nitpick task writes the contract's tests and has no check of its own (the build that protects "
+                         "them has the check); a task decided by a check is a build — leave --role out and the lock's implementer does it")
     elif role == "session" and due:
         if not args.why:
             raise SystemExit("--role session: the lock declares %r for a task like this — say why the session does it itself (--why), "
@@ -1048,6 +1054,11 @@ def plan_problems(plan):
             out.append("%s: no role" % t.get("id"))
         if not (t.get("path") or t.get("checks")):
             out.append("%s: needs `path` (an artifact to shape-check) or `checks` (commands that must exit 0) — otherwise nothing decides it is done" % t.get("id"))
+        for c in t.get("checks") or []:
+            # a check is one command: a shell line (`sh -c 'a && b'`) hides the commands inside it — the worker reports them as its
+            # shell spelled them, the validator compares another spelling, and the record keeps a string nobody can re-run apart
+            if isinstance(c, list) and len(c) >= 3 and os.path.basename(str(c[0])) in ("sh", "bash", "zsh", "dash") and str(c[1]).startswith("-") and "c" in str(c[1]):
+                out.append("%s: a check is one command, not a shell line — `%s …` hides what it runs from the worker's report and the record; give each command its own check" % (t.get("id"), " ".join(str(x) for x in c[:2])))
         for n in t.get("needs", []):
             if n not in ids:
                 out.append("%s: needs unknown task %s" % (t.get("id"), n))
@@ -1626,9 +1637,20 @@ def cmd_run(args):
                 return stop("%s: the provider stopped — it needs a decision the contract does not give: %s — write it into the plan, %s" % (task["id"], response.get("summary", ""), again),
                             *response.get("non-claims", []))
             refused = [n for n in response.get("non-claims", []) if str(n).startswith("checks-ran:")]
-            if response.get("status") == "failed" and refused and (setattr(args, "continuing", True) or True) and auto_resend(target, d, state, task["id"], "the report named a check the session did not run: " + refused[0][:160]):
-                return cmd_run(args)
-            if response.get("status") != "done":
+            if response.get("status") == "failed" and refused and not ts.get("checks-ran-overruled"):
+                # The validator refused the report for naming a check it did not see run. The checks decide a task, and
+                # chongdae runs them itself right after — so when they pass here, the refusal was about the report's words,
+                # not the tree: a worker ran `sh -c '…'` and reported it as the host's shell wrapper spelled it, twice, and
+                # each refusal cost a build and a wait. Green here: the report stands as the worker's word, with the
+                # mismatch on record. Red here: back to the hands, as before.
+                if task.get("checks") and not run_checks(target, task["checks"]):
+                    ts["checks-ran-overruled"] = {"refused": [str(n)[:300] for n in refused], **stamp()}
+                    ts.setdefault("non-claims", []).append("%s: the validator refused the report for naming a check it did not see run (%s); chongdae ran the task's checks itself and they passed, so the report stands as the worker's word" % (task["id"], str(refused[0])[:160]))
+                    save_state(d, state)
+                    print("  %s: the report's check was not recognized by the validator; the checks pass here — going on, recorded" % task["id"])
+                elif (setattr(args, "continuing", True) or True) and auto_resend(target, d, state, task["id"], "the report named a check the session did not run: " + refused[0][:160]):
+                    return cmd_run(args)
+            if response.get("status") != "done" and not ts.get("checks-ran-overruled"):
                 return stop("%s: provider %r did not finish (%s) — see %s; fix what stopped it (or nothing, if it ran out of budget), %s"
                             % (task["id"], who, response.get("status"), work_path(d, task["id"] + ".response.json"), again))
             if response.get("decisions") and not ts.get("accepted"):
