@@ -1,9 +1,12 @@
 {
   "name": "chongdae",
-  "version": "1.8.2",
+  "version": "1.9.0",
   "engines": {
     "python": ">=3.11"
   },
+  "records": [
+    ".chongdae/"
+  ],
   "description": "The orchestrator for an era where development is split into parts done by agents.",
   "author": {
     "name": "guineeeeeeeeeeeeeeeeeeeeeeeerm"

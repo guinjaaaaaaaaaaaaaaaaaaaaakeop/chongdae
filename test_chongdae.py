@@ -355,7 +355,7 @@ def test_performed_by_is_recorded_like_an_author_line():
     """Every produced task records who did it: a session task gets the host's self-identification from the env
     (AI_AGENT = host_version_kind; the host's session id, which is the key into the host's own log where the model
     is recorded), a command-provider task gets the provider argv. A run without this cannot be attributed later."""
-    keys = ("AI_AGENT", "CLAUDE_EFFORT", "CLAUDE_CODE_SESSION_ID", "AGENT_HOST", "CODEX_THREAD_ID", "CODEX_VERSION", "HUNSU_CODEX_DIR")
+    keys = ("AI_AGENT", "CLAUDE_EFFORT", "CLAUDE_CODE_SESSION_ID", "AGENT_HOST", "CODEX_THREAD_ID", "CODEX_VERSION", "AGENT_CODEX_HOME")
     saved = {k: os.environ.pop(k, None) for k in keys}   # the host running this test sets these too; own them all
     try:
         with Project() as pj:
@@ -377,7 +377,7 @@ def test_performed_by_is_recorded_like_an_author_line():
             # a Codex session started from a Claude Code shell sees both hosts' markers: the products' AGENT_HOST decides, and the
             # model comes from the rollout Codex keeps for the thread — never from the ancestor's AI_AGENT
             os.environ["AGENT_HOST"], os.environ["CODEX_THREAD_ID"], os.environ["CODEX_VERSION"] = "codex", "thread-1", "0.155.0"
-            os.environ["HUNSU_CODEX_DIR"] = os.path.join(pj.dir, "codex-home")
+            os.environ["AGENT_CODEX_HOME"] = os.path.join(pj.dir, "codex-home")
             write(os.path.join(pj.dir, "codex-home", "sessions", "2026", "rollout-2026-thread-1.jsonl"),
                   json.dumps({"type": "session_meta", "payload": {}}) + "\n" + json.dumps({"type": "turn_context", "payload": {"model": "gpt-test", "effort": None}}) + "\n")
             assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
@@ -385,7 +385,7 @@ def test_performed_by_is_recorded_like_an_author_line():
             assert run("run", "--target", pj.dir)[0] == 0
             assert pj.state()["tasks"]["T1"]["performed_by"] == {"provider": "session", "host": "codex", "agent": "codex_0.155.0", "session": "thread-1", "model": "gpt-test",
                                                                    "versions": {"used": {"chongdae": chongdae.engine().split(" ", 1)[1]}}}, pj.state()["tasks"]["T1"]["performed_by"]
-            del os.environ["AGENT_HOST"], os.environ["CODEX_THREAD_ID"], os.environ["CODEX_VERSION"], os.environ["HUNSU_CODEX_DIR"]
+            del os.environ["AGENT_HOST"], os.environ["CODEX_THREAD_ID"], os.environ["CODEX_VERSION"], os.environ["AGENT_CODEX_HOME"]
         with Project() as pj:
             del os.environ["CLAUDE_EFFORT"]   # unset -> absent, never an empty field
             assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
@@ -1429,3 +1429,26 @@ if __name__ == "__main__":
                 print("FAIL", name, "--", "%s: %s" % (type(err).__name__, err))
     print("all passed" if not failed else "%d failed" % failed)
     sys.exit(1 if failed else 0)
+
+
+def test_the_other_products_records_are_known_from_the_lock_not_by_name():
+    """chongdae's report and its snapshots left out `.mangsang/`, `.dwitbuk/` and `reviews/` by name — the one place a product
+    knew its siblings. Now each plugin declares its record paths and the lock carries them (`record-paths`); a project
+    without that key still gets the old names. At close, what the reviewer wrote is a record and still goes into the commit."""
+    with Project() as pj:
+        os.environ["CHONGDAE_USER"] = "kim"
+        try:
+            write(os.path.join(pj.dir, "hunsu.lock.json"), {"roles": {}, "record-paths": {"alpha": [".alpha/", "alpha.json"], "beta": []}})
+            assert chongdae.record_paths(pj.dir) == (".chongdae/", ".claude/", "hunsu", ".alpha/", "alpha.json")
+            write(os.path.join(pj.dir, ".alpha", "x.json"), "{}")
+            write(os.path.join(pj.dir, "alpha.json"), "{}")
+            write(os.path.join(pj.dir, "reviews", "r.json"), "{}")   # not declared here: a sibling's name is no longer assumed
+            write(os.path.join(pj.dir, "work.py"), "x = 1\n")
+            doc = json.loads(run("report", "--target", pj.dir)[1])
+            outside = sorted(f["where"] for f in doc["findings"] if f["kind"] == "outside-run")
+            assert outside == ["reviews/r.json", "work.py"], outside
+            assert set(chongdae.dirty(pj.dir)) == {"reviews/r.json", "work.py"} and ".alpha/x.json" in chongdae.dirty(pj.dir, records_too=True)
+            os.remove(os.path.join(pj.dir, "hunsu.lock.json"))
+            assert chongdae.record_paths(pj.dir) == (".chongdae/", ".claude/", "hunsu", ".mangsang/", ".dwitbuk/", "reviews/"), "no lock: the old names"
+        finally:
+            os.environ.pop("CHONGDAE_USER", None)

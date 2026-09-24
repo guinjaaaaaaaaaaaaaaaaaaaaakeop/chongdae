@@ -341,6 +341,11 @@ the role again only when it changed.
   nothing passes; name what a check covers (a test runner that fails when a key selects no tests).
 - Not built yet: re-planning on failure, the ideation branch when the goal is under-shaped.
 
+- **The other products' records** — what a task's `touched`, `outside-run` and the snapshots leave out — come from the
+  lock: `record-paths` in hunsu.lock.json, each plugin's own `records` declaration. A project whose lock has no such key gets
+  the names as they were (`.mangsang/`, `.dwitbuk/`, `reviews/`). What the reviewer writes at close is a record and still
+  goes into the close commit. chongdae declares `records: [".chongdae/"]` itself.
+
 ## Versioning
 
 Semver, and a version names one content: every change to the source — code, skill or command text, hooks, this README

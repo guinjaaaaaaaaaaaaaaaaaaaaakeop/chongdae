@@ -567,7 +567,7 @@ def session_model(target, session_id):
 def codex_session_model(thread_id):
     """Codex tells its subprocesses the thread id (CODEX_THREAD_ID), not the model; the rollout it keeps for that thread
     (~/.codex/sessions/**/rollout-*-<thread id>.jsonl) names the model on every turn_context line."""
-    home = os.environ.get("HUNSU_CODEX_DIR") or os.environ.get("CODEX_HOME") or os.path.join(os.path.expanduser("~"), ".codex")
+    home = os.environ.get("AGENT_CODEX_HOME") or os.environ.get("CODEX_HOME") or os.path.join(os.path.expanduser("~"), ".codex")
     for dirpath, _, files in os.walk(os.path.join(home, "sessions")):
         for f in files:
             if f.endswith(thread_id + ".jsonl"):
@@ -800,9 +800,19 @@ def performer(who, argv=None, response=None, target=None):
 
 # ---------------------------------------------------------------- the tree: what changed, the checks, worktrees
 
-def dirty(target):
+def record_paths(target):
+    """Paths that are records or the environment, never a task's work: this run's own record dir, the host's settings, hunsu's
+    files, and every path the other products declare (`record-paths` in hunsu.lock.json, from each plugin's `records`). A
+    project without that lock key falls back to the siblings' names as they were before the lock carried them."""
+    declared = load(os.path.join(target, "hunsu.lock.json")).get("record-paths")
+    others = sorted({p for ps in (declared or {}).values() for p in ps}) if isinstance(declared, dict) else [".mangsang/", ".dwitbuk/", "reviews/"]
+    return tuple([RUNS + "/", ".claude/", "hunsu"] + others)
+
+
+def dirty(target, records_too=False):
     """{path: content hash} of every file that differs from HEAD (tracked or untracked) under target, paths relative to target.
-    None when there is no git — then nothing can be attributed, and the record says so."""
+    None when there is no git — then nothing can be attributed, and the record says so. The products' records are left out
+    (nobody's work) unless `records_too`: what the reviewer wrote at close is a record, and the close commit wants it."""
     import hashlib, subprocess
     try:
         done = subprocess.run(["git", "status", "--porcelain", "--untracked-files=all", "--", "."], cwd=target, capture_output=True, text=True, encoding="utf-8")
@@ -816,7 +826,7 @@ def dirty(target):
     for line in done.stdout.splitlines():
         path = line[3:].strip().replace("\\", "/") if len(line) > 3 else ""
         path = path[len(prefix):] if prefix and path.startswith(prefix) else path
-        if path and not path.startswith((RUNS + "/", ".mangsang/", ".dwitbuk/", ".claude/")) and not re.search(r"(^|/)__pycache__/|\.py[co]$", path):   # records, machine-local state and interpreter leftovers are nobody's work
+        if path and not path.startswith((RUNS + "/",) if records_too else record_paths(target)) and not re.search(r"(^|/)__pycache__/|\.py[co]$", path):   # records, machine-local state and interpreter leftovers are nobody's work
             full = os.path.join(target, path)
             out[path] = hashlib.sha1(io.open(full, "rb").read()).hexdigest() if os.path.isfile(full) else "gone"
     return out
@@ -1505,7 +1515,7 @@ def place_reviewer(target, d, state, plan):
         state.setdefault("non-claims", []).append("no `reviewer` role in the lock%s: nobody reviewed this run's record when it ended"
                                                   % (" (it names the session or a native subagent — the reviewer is a command, never the hands)" if prov else ""))
         return []
-    before = dirty(target) or {}
+    before = dirty(target, records_too=True) or {}
     try:
         # nothing that goes wrong here stops the run from ending: a reviewer that cannot be resolved or run is a non-claim
         argv = resolve_argv(target, [str(a) for a in (prov if isinstance(prov, list) else prov.split())])
@@ -1515,7 +1525,7 @@ def place_reviewer(target, d, state, plan):
         code, out = done.returncode, (done.stdout or "") + (done.stderr or "")
     except (OSError, subprocess.TimeoutExpired, SystemExit) as err:
         code, out = 1, str(err)
-    after = dirty(target) or {}
+    after = dirty(target, records_too=True) or {}
     wrote = sorted(p for p, h in after.items() if before.get(p) != h)
     said = [l for l in out.strip().split("\n") if l.strip()][-1:] or [""]
     rec = {"by": performer(prov, argv=prov if isinstance(prov, list) else [prov]), "said": said[0][:300], "wrote": wrote, **stamp()}
@@ -1989,7 +1999,7 @@ def cmd_report(args):
             changed.add(line[3:].strip().replace("\\", "/"))
     prefix = (git("rev-parse", "--show-prefix") or "").strip().replace("\\", "/")
     changed = {p[len(prefix):] if prefix and p.startswith(prefix) else p for p in changed}
-    changed = {p for p in changed if not p.startswith((RUNS + "/", ".mangsang/", ".dwitbuk/", ".claude/", "reviews/", "hunsu")) and p != ".gitignore"}   # records, machine-local state, the host's settings, the environment (hunsu's own report covers it). Naming sibling record dirs here is chongdae's one known coupling to product names — accepted until a lock-declared record-paths convention earns its keep
+    changed = {p for p in changed if not p.startswith(record_paths(target)) and p != ".gitignore"}   # records, machine-local state, the host's settings, the environment: the lock says which paths those are (each product declares its own); hunsu's own report covers the environment
     declared = outside_runs(target)
     by_procedure = sorted(p for p in changed if under(p, declared))
     changed -= set(by_procedure)

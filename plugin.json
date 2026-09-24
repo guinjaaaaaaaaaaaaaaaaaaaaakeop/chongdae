@@ -1,10 +1,13 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "chongdae",
-  "version": "1.8.2",
+  "version": "1.9.0",
   "engines": {
     "python": ">=3.9"
   },
+  "records": [
+    ".chongdae/"
+  ],
   "description": "The orchestrator for an era where development is split into parts done by agents.",
   "extensions": {
     "com.openai": {
