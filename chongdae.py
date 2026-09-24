@@ -451,10 +451,16 @@ def commit_record(target, run_name, message, also=()):
 
 
 def non_claims(state):
-    """Every non-claim in the run, prefixed with its task — the reader's view over the per-task files (and older runs' shared list)."""
+    """Every non-claim in the run, prefixed with its task — the reader's view over the per-task files (and older runs' shared
+    list). The same sentence on several tasks is said once, with the tasks: a run of four no-check session tasks said
+    "no check decides this task" four times, and a review of a day's runs read it thirty-five times."""
     out = list(state.get("non-claims", []))
-    for tid, ts in state.get("tasks", {}).items():
-        out += ["%s: %s" % (tid, n) for n in ts.get("non-claims", [])]
+    by_text = {}
+    for tid, ts in sorted(state.get("tasks", {}).items(), key=lambda kv: (kv[1].get("seq", 0), kv[0])):   # task files read in name order; a name is not a time
+        for n in ts.get("non-claims", []):
+            by_text.setdefault(n, []).append(tid)
+    for text, tids in by_text.items():
+        out.append("%s: %s" % (tids[0], text) if len(tids) == 1 else "%s — %d task(s): %s" % (text, len(tids), ", ".join(tids)))
     return out
 
 

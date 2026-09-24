@@ -1308,6 +1308,10 @@ def test_the_lock_says_who_does_a_task_and_the_session_says_why_when_it_does_it_
         assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
         code, out = run("add", "plan", "--brief", "a plan section", "--target", pj.dir)
         assert code == 0 and "Work, then" in out, out   # nothing declared for a plan: the session's own
+        assert run("add", "model", "--brief", "the model", "--target", pj.dir)[0] == 0
+        # two no-check tasks say "done is the agent's word" once, together — not once per task
+        said = [n for n in chongdae.non_claims(pj.state()) if "no check decides" in n]
+        assert said == ["no check decides this task; done means the agent said so — 2 task(s): plan, model"], said
         code, out = run("add", "tests", "--tests", "test_a.py", "--target", pj.dir)
         assert code == 0 and "nitpick does it (the lock's provider)" in out, out
         code, out = run("add", "build", "--tests", "test_a.py", "--check", sys.executable + " -c pass", "--target", pj.dir)
@@ -1317,7 +1321,7 @@ def test_the_lock_says_who_does_a_task_and_the_session_says_why_when_it_does_it_
         assert run("add", "own", "--check", sys.executable + " -c pass", "--role", "session", "--why", "a one-line fix", "--target", pj.dir)[0] == 0
         assert run("add", "own2", "--check", sys.executable + " -c pass", "--role", "session", "--why", "a one-line fix", "--by", "kim", "--target", pj.dir)[0] == 0
         defs = {tid: ts["def"]["role"] for tid, ts in pj.state()["tasks"].items()}
-        assert defs == {"plan": "session", "tests": "nitpick", "build": "implementer", "own": "session", "own2": "session"}, defs
+        assert defs == {"plan": "session", "model": "session", "tests": "nitpick", "build": "implementer", "own": "session", "own2": "session"}, defs
         assert run("run", "--target", pj.dir)[0] == 0
         st = pj.state()["tasks"]
         assert st["tests"]["performed_by"]["provider"] == "command" and st["build"]["performed_by"]["provider"] == "command" and st["own"]["performed_by"]["provider"] == "session"
