@@ -830,6 +830,38 @@ def test_a_plugin_resolves_to_the_copy_this_project_declares_not_the_first_insta
             os.environ.pop("HUNSU_CLAUDE_DIR") if old is None else os.environ.__setitem__("HUNSU_CLAUDE_DIR", old)
 
 
+def test_a_session_run_keeps_each_tasks_word_its_own():
+    """Seen on a site's about page: two no-check tasks added ahead of their work were both done by one `run`, the second
+    claiming the first's file; a session build named tests it then wrote itself; a verifier's reject went back to the
+    session twice with the tree unchanged."""
+    with Project() as pj:
+        os.environ["CHONGDAE_USER"] = "kim"
+        try:
+            assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
+            # a session build's tests must exist when it is added
+            code, out = run("add", "build", "--check", sys.executable + " -c pass", "--tests", "test_a.py", "--target", pj.dir)
+            assert code != 0 and "does not exist yet" in out, out
+            # two no-check tasks added ahead: the first's file is not the second's work
+            assert run("add", "plan", "--brief", "p", "--target", pj.dir)[0] == 0
+            assert run("add", "tests", "--brief", "t", "--target", pj.dir)[0] == 0
+            write(os.path.join(pj.dir, "PLAN.md"), "# plan\n")
+            code, out = run("run", "--target", pj.dir)
+            assert code == chongdae.DECISION and "done plan" in out and "tests has changed nothing of its own" in out and "PLAN.md were the task before it" in out, out
+            assert pj.state()["tasks"]["tests"]["status"] == "todo"
+            write(os.path.join(pj.dir, "test_a.py"), "# the contract's test\n")
+            code, out = run("run", "--target", pj.dir)
+            assert code == 0 and "done tests" in out and pj.state()["tasks"]["tests"]["touched"] == ["test_a.py"], (out, pj.state()["tasks"]["tests"])
+            # the tests exist now: the session build is accepted; its verifier's reject stops at once, no automatic resend
+            write(os.path.join(pj.dir, "hunsu.lock.json"), {"roles": {"verifier": pj.fake_provider(REVIEW_REJECT, "verifier")}})
+            assert run("add", "build", "--check", sys.executable + " -c pass", "--tests", "test_a.py", "--target", pj.dir)[0] == 0
+            write(os.path.join(pj.dir, "a.py"), "x = 1\n")
+            code, out = run("run", "--target", pj.dir)
+            ts = pj.state()["tasks"]["build"]
+            assert code == chongdae.DECISION and "verifier rejected" in out and "sent back" not in out and not ts.get("attempts"), (out, ts.get("attempts"))
+        finally:
+            os.environ.pop("CHONGDAE_USER", None)
+
+
 def test_added_tasks_run_in_the_order_added_and_a_providers_task_starts_when_spawned():
     """Task files are read in name order; a session run's tasks must advance in the order they were added (seen live: a session
     renamed `tests-core` to `a-tests-core` to get the tests before the build). And a provider's task takes its `start`

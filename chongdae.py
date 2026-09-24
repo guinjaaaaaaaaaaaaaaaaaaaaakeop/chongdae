@@ -573,6 +573,12 @@ def cmd_add(args):
         if getattr(args, when) is not None:
             task[when] = getattr(args, when)
     problems = [x for x in plan_problems({"artifact-type": "chongdae/plan@1", "goal": "x", "tasks": [task]}) if "needs `path`" not in x]
+    # a session build takes its start snapshot now: protected tests it names must exist already, or writing them would read
+    # as the build changing its own contract (a provider's build takes its snapshot when spawned, after the tests' task ran)
+    if task["role"] == "session" and task["checks"]:
+        problems += ["--tests %s: does not exist yet — a session build's start is taken at `add`, so writing its tests after "
+                     "would read as the build changing them; write the tests in their own task first (`add`, work, `run`), "
+                     "then add this one" % f for f in task["tests"] if not os.path.exists(os.path.join(args.target, f))]
     if problems:
         raise SystemExit("task rejected:\n  " + "\n  ".join(problems))
     ts = {"status": "todo", "def": task, "seq": 1 + max([t.get("seq", 0) for t in state["tasks"].values()] or [0]), "added": now_utc()}
@@ -1326,6 +1332,7 @@ def cmd_run(args):
         return 0
     prov = providers(target, plan)
     who_am_i = me(target)
+    claimed_now = set()   # files the tasks completed in this call recorded as theirs
     for task in all_tasks(plan, state):
         ts = state["tasks"][task["id"]]
         if ts["status"] in ("done", "skipped", "dropped"):
@@ -1444,13 +1451,21 @@ def cmd_run(args):
                     if review["verdict"] == "reject":
                         ts["rejected"] = {"by": "verifier", "why": "%d finding(s)" % len(review.get("findings", []))}
                         save_state(d, state)
-                        if (setattr(args, "continuing", True) or True) and auto_resend(target, d, state, task["id"], "the verifier rejected: %d finding(s)" % len(review.get("findings", []))):
+                        # back to the hands on its own — unless the hands are the session reading this stop: resending to it would
+                        # only run the verifier again on the same tree
+                        if who != "session" and (setattr(args, "continuing", True) or True) and auto_resend(target, d, state, task["id"], "the verifier rejected: %d finding(s)" % len(review.get("findings", []))):
                             return cmd_run(args)
                         return stop("%s: the verifier rejected the slice — fix the tree (or the contract, and re-plan), then `chongdae retry %s --by NAME | --delegated WHY`" % (task["id"], task["id"]),
                                     *("%s @ %s: %s — record: \u201c%s\u201d — tree: \u201c%s\u201d" % (f.get("kind"), f.get("where"), f.get("why"), f.get("record_quote"), f.get("tree_quote"))
                                       for f in review.get("findings", [])))
             elif not task.get("path"):
-                pass   # a session task with no check: the agent's word, already recorded as a non-claim when it was added
+                # a session task with no check: done is the agent's word (a non-claim since `add`). It still has to be the
+                # task's own word: a task added ahead of its work would otherwise be done here with the files the task before
+                # it changed — a false claim a done task cannot take back
+                if who == "session" and claimed_now and not touched_files(target, ts.get("start")):
+                    return stop("session agent: %s has changed nothing of its own — %s were the task before it — do its work, then "
+                                "`chongdae run`; `chongdae drop %s --why` if it will not be done" % (task["id"], ", ".join(sorted(claimed_now)), task["id"]),
+                                task.get("brief", ""))
             else:
                 if not (path and os.path.exists(path)):
                     return stop("session agent: produce %s at %s, then `chongdae run`" % (task["produces"], path), task["brief"])
@@ -1466,6 +1481,17 @@ def cmd_run(args):
             ts["status"] = "produced"
             ts["checks"] = task.get("checks", [])
             ts["touched"] = touched_files(target, ts.get("start"))   # what this task changed: the reviewer joins runs to files with it
+            claimed_now.update(ts["touched"] or [])
+            # those files are this task's now: a session task still open measures its own changes from here, not from its `add`
+            now = dirty(target) or {}
+            for t2 in all_tasks(plan, state):
+                other = state["tasks"][t2["id"]]
+                if other is not ts and other.get("status") == "todo" and isinstance(other.get("start"), dict) and prov.get(t2["role"]) == "session":
+                    for f in ts["touched"] or []:
+                        if f in now:
+                            other["start"][f] = now[f]
+                        else:
+                            other["start"].pop(f, None)
             if "performed_by" not in ts:
                 ts["performed_by"] = performer(who, target=target)   # the session did the work: record which host/model/session, like a commit author
             if who == "session" and not ts.get("response"):
