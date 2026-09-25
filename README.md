@@ -264,7 +264,11 @@ human review — the reviewer says so at the gate; neither the tree nor the old 
 A role's provider is `session` (the agent driving this run writes the artifact) or a command — argv with `{request}`
 and `{response}` — that gets a `chongdae/request@1` file (task, brief, the plan sections it closes, its checks) and
 must leave a response with `status`, `summary`, `verified`, `decisions`, `non-claims`. A non-empty `decisions` stops
-the run until a human `accept`s. A role with no provider is skipped and recorded as a non-claim; nothing stands in.
+the run until a human `accept`s — or rejects the work: reset the tree and `retry` (the attempt, decisions included, stays
+in the record). A provider's `non-claims` belong to its attempt: a retry moves them there, and the task keeps only what is
+still true. What a role hired `after` a task found is printed by `run` as well as filed. A role with no provider is
+skipped and recorded as a non-claim; nothing stands in. `tests` holds one path per entry — a shell-joined list is refused
+— and a build whose protected tests are not in the tree when it starts stops there: the guard would watch nothing.
 
 A command provider runs **detached**: its own session, output to `<tag>.provider.log`, its pid in `<tag>.pending.json`
 written before `run` waits on it. A `run` that is killed leaves the provider working; the next `run` finds the pending

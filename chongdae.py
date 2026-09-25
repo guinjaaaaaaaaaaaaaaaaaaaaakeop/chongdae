@@ -1009,6 +1009,10 @@ def plan_problems(plan):
             out.append("%s: no role" % t.get("id"))
         if not (t.get("path") or t.get("checks")):
             out.append("%s: needs `path` (an artifact to shape-check) or `checks` (commands that must exit 0) — otherwise nothing decides it is done" % t.get("id"))
+        for x in t.get("tests") or []:
+            if isinstance(x, str) and re.search(r"\s", x.strip()):
+                # `--tests "$(ls tests/*.py)"` arrives as one string: the guard looked that string up and watched nothing
+                out.append("%s: `tests` entry %r holds several paths — one path per entry (`--tests a.py b.py`, unquoted)" % (t.get("id"), x[:80]))
         for c in t.get("checks") or []:
             # a check is one command: a shell line (`sh -c 'a && b'`) hides the commands inside it — the worker reports them as its
             # shell spelled them, the validator compares another spelling, and the record keeps a string nobody can re-run apart
@@ -1256,6 +1260,10 @@ def cmd_run(args):
         # task paths are project-relative: artifacts belong to the project, .chongdae holds only how the run went
         path = os.path.join(target, task["path"]) if task.get("path") else None
         if "start" not in ts:
+            absent = [t for t in task.get("tests") or [] if not os.path.isfile(os.path.join(target, t))]
+            if absent and task.get("checks"):
+                return stop("%s: its protected tests do not exist (%s) — the guard would watch nothing; the task that writes them runs first, "
+                            "or fix the paths (`chongdae drop` and `add` again)" % (task["id"], ", ".join(absent)))
             ts["start"] = dirty(target)   # what the tree already differed in: `touched` is measured from here, not from HEAD
             keep_contract_tests(target, d, task)
             save_state(d, state)
@@ -1340,8 +1348,9 @@ def run_hands(ctx, task, ts, who):
                     % (task["id"], who, response.get("status"), work_path(d, task["id"] + ".response.json"), again))
     if response.get("decisions") and not ts.get("accepted"):
         # The provider settled something the contract did not. That is a plan change: a human writes it into the plan and accepts, or rejects the work.
-        return stop("%s: the provider made %d decision(s) the contract did not — write each into the plan (or reject the work and reset the tree), "
-                    "then `chongdae accept %s --by NAME | --delegated WHY` and re-run" % (task["id"], len(response["decisions"]), task["id"]),
+        return stop("%s: the provider made %d decision(s) the contract did not — write each into the plan, then `chongdae accept %s --by NAME | "
+                    "--delegated WHY` and re-run; or reject the work: reset the tree, say why in the plan or brief, then `chongdae retry %s --by NAME | --delegated WHY`"
+                    % (task["id"], len(response["decisions"]), task["id"], task["id"]),
                     *("%s: chose %r (alternatives: %s)" % (x["what"], x["chosen"], ", ".join(x["alternatives"]) or "-") for x in response["decisions"]))
     if not ts.get("reported"):
         ts["non-claims"] = ts.get("non-claims", []) + ["(provider) %s" % n for n in response.get("non-claims", [])]
@@ -1531,6 +1540,8 @@ def run_stage(target, d, task, ts, state, plan, prov, when, extra):
         if when == "before" and response.get("findings"):
             return stage_wait_text(task["id"], role, response)
         print("  %s %s: %d finding(s)%s" % (role, task["id"], len(response.get("findings") or []), " — in the record" if when == "after" else ""))
+        for f in response.get("findings") or []:   # what the session must relay to the person: said here, not left for it to dig out of JSON
+            print("    %s @ %s: %s — \u201c%s\u201d" % (f.get("kind"), f.get("where", ""), f.get("why", ""), " ".join(str(f.get("quote", "")).split())[:160]))
     return None
 
 
@@ -1607,6 +1618,10 @@ def resend(target, d, state, task_id, retried, message=None):
             ts.pop("stages")
     ts.setdefault("attempts", []).append(attempt)
     ts.pop("reported", None)
+    # what the provider said it did not claim was about the work this attempt did; the attempt keeps it (its response), the
+    # task's own list keeps only what is still true — every attempt's copies piled up as near-duplicate findings
+    if "non-claims" in ts:
+        ts["non-claims"] = [n for n in ts["non-claims"] if not str(n).startswith("(provider) ")]
     n = len(ts["attempts"])
     # the attempt's files move aside under their number: the next `run` must find no response (a native provider's is written
     # by the session and would otherwise be read again as the new answer) and the record keeps what this attempt said
@@ -1972,6 +1987,9 @@ def cmd_retry(args):
     state = load_state(d)
     ts = state["tasks"].get(args.task, {})
     stopped = (ts.get("response") or {}).get("status") not in (None, "done") or ts.get("rejected")
+    # a provider's decisions wait for `accept`; not accepting them and sending the task out again is the other answer the stop
+    # offers — the work is rejected, and the attempt (decisions included) stays in the record
+    stopped = stopped or ((ts.get("response") or {}).get("decisions") and not ts.get("accepted"))
     if ts.get("status") != "todo" or not stopped:
         raise SystemExit("%s is not stopped on a provider response or a rejection (status %s, response %s)" % (args.task, ts.get("status"), (ts.get("response") or {}).get("status")))
     if not (args.by or args.delegated):
@@ -2112,10 +2130,15 @@ def cmd_report(args):
                     stamp(a["retried"]["delegated"], "%s/%s attempt %d" % (name, tid, i))
                     findings.append({"kind": "delegated", "where": "%s/%s attempt %d" % (name, tid, i),
                                      "text": "retry after %s passed by delegation: %s" % (a.get("status"), deleg_text(a["retried"]["delegated"]))})
-                # a verifier's reject outlives the attempt it stopped: the reviewer's ledger sees it, and sees it again if it recurs
+                # a verifier's reject outlives the attempt it stopped: the reviewer's ledger sees it, and sees it again if it recurs.
+                # Once a later attempt of the task was accepted by the verifier, the reject was answered by that work: a fact of
+                # the record then, not a charge someone still owes an answer to
+                later_ok = (ts.get("review") or {}).get("verdict") == "accept"
                 for f in ((a.get("review") or {}).get("findings") or []):
                     findings.append({"kind": "verifier-reject", "where": "%s/%s attempt %d: %s" % (name, tid, i, f.get("where", "")),
-                                     "text": "%s: %s — record: \u201c%s\u201d — tree: \u201c%s\u201d" % (f.get("kind"), f.get("why"), f.get("record_quote"), f.get("tree_quote"))})
+                                     **({"layer": "observation"} if later_ok else {}),
+                                     "text": "%s: %s — record: \u201c%s\u201d — tree: \u201c%s\u201d%s" % (f.get("kind"), f.get("why"), f.get("record_quote"), f.get("tree_quote"),
+                                                                          " (a later attempt was accepted by the verifier)" if later_ok else "")})
         # one reason string stamped across 3+ judgments: one judgment claiming to be many — the lie is the format's, and the format now has `delegate`
         for reason, wheres in sorted(stamps.items()):
             if len(wheres) >= 3:

@@ -159,6 +159,23 @@ def test_command_provider_done_decisions_and_blocked():
         acc = dict(pj.state()["tasks"]["B"]["accepted"]); acc.pop("at", None); acc.pop("chongdae", None)
         assert acc == {"delegated": "owner ok"}
         assert run("confirm", "B", "--by", "kim", "--target", pj.dir)[0] == 0 and run("run", "--target", pj.dir)[0] == 0
+        # decisions nobody accepts: the other answer is to reject the work — `retry` takes it, the attempt (decisions and
+        # the provider's non-claims) stays with the attempt, and the task's own list holds only what is still true
+        plan_with(RESPONSE_DECISIONS, "B2")
+        code, out = run("run", "--target", pj.dir)
+        assert code == chongdae.DECISION and "chongdae retry B2" in out, out
+        ts = pj.state()["tasks"]["B2"]
+        ts_nc = [n for n in ts.get("non-claims", []) if n.startswith("(provider) ")]
+        assert run("retry", "B2", "--by", "kim", "--target", pj.dir)[0] == 0
+        ts = pj.state()["tasks"]["B2"]
+        assert ts["attempts"][-1]["decisions"] and "response" not in ts and not [n for n in ts.get("non-claims", []) if n.startswith("(provider) ")], ts
+        run("run", "--target", pj.dir)   # the second attempt (the same fake answer): accepted this time, then the gate
+        assert run("accept", "B2", "--by", "kim", "--target", pj.dir)[0] == 0 and run("run", "--target", pj.dir)[0] == chongdae.DECISION
+        assert run("confirm", "B2", "--by", "kim", "--target", pj.dir)[0] == 0 and run("run", "--target", pj.dir)[0] == 0
+        # a `tests` entry is one path: a shell-joined list arrives as one string and would be watched by nothing
+        probs = chongdae.plan_problems({"artifact-type": "chongdae/plan@1", "goal": "g", "tasks": [
+            {"id": "T9", "role": "implementer", "checks": [["x"]], "tests": ["tests/a.py tests/b.py"]}]})
+        assert any("holds several paths" in x for x in probs), probs
         # blocked -> stop with the provider's summary; no response -> stop
         plan_with(RESPONSE_BLOCKED, "C")
         code, out = run("run", "--target", pj.dir)
@@ -261,6 +278,10 @@ def test_verifier_before_the_gate_protected_tests_and_delegation_policy():
         assert run("confirm", "S1", "--delegated", "verifier said ok", "--target", pj.dir)[0] == 0
         cf = dict(pj.state()["tasks"]["S1"]["confirmed"]); cf.pop("at", None); cf.pop("chongdae", None)
         assert cf == {"delegated": "verifier said ok", "verifier": "accept"}
+        # the rejects before that accept were answered by the accepted work: facts of the record, not charges still owed
+        code, out = run("report", "--target", pj.dir)
+        rej = [f for f in json.loads(out)["findings"] if f["kind"] == "verifier-reject"]
+        assert rej and all(f.get("layer") == "observation" and "later attempt was accepted" in f["text"] for f in rej), rej
         assert run("run", "--target", pj.dir)[0] == 0
         # a build that edits the contract's tests is rejected whoever built it — here the session agent
         plan["providers"] = {"implementer": "session"}
@@ -707,6 +728,7 @@ def test_people_hired_before_and_after_a_task_answer_with_findings_the_record_ke
         assert code == 0 and "accepted 2 finding(s) from quibble on T1" in out, out
         code, out = run("run", "--target", pj.dir)
         assert code == 0, out
+        assert "newbie T1: 1 finding(s) — in the record" in out and "unclear @ : the README has no command — \u201c# todo\u201d" in out, out   # relayed, not only filed
         ts = pj.state()["tasks"]["T1"]
         assert ts["status"] == "done" and ts["stages"]["quibble"]["accepted"]["by"] == "kim"
         assert ts["stages"]["modeler"] == {"skipped": "no provider"} and any("no provider for role 'modeler' (before)" in n for n in ts["non-claims"]), ts
@@ -1334,6 +1356,9 @@ def test_the_lock_says_who_does_a_task_and_the_session_says_why_when_it_does_it_
     with Project() as pj:
         write(os.path.join(pj.dir, "hunsu.lock.json"), {"roles": {"implementer": pj.fake_provider(RESPONSE_DONE),
                                                                   "nitpick": pj.fake_provider({"status": "done", "summary": "wrote", "non-claims": [], "tests": ["test_a.py"]}, name="teujip")}})
+        # the fake nitpick writes the file it names: a build whose protected tests are absent stops at its start
+        with io.open(os.path.join(pj.dir, "teujip.py"), "a", encoding="utf-8") as fh:
+            fh.write("open('test_a.py', 'w').write('# written by the nitpick\\n')\n")
         assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
         code, out = run("add", "plan", "--brief", "a plan section", "--target", pj.dir)
         assert code == 0 and "Work, then" in out, out   # nothing declared for a plan: the session's own
