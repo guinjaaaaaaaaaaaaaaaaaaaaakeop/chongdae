@@ -192,6 +192,35 @@ REVIEW_REJECT = {"artifact-type": "dwitbuk/review@1", "verdict": "reject", "find
 REVIEW_ACCEPT = {"artifact-type": "dwitbuk/review@1", "verdict": "accept", "findings": []}
 
 
+def test_a_build_that_puts_uncommitted_contract_tests_back_to_head_is_caught_and_the_tests_restored():
+    # the contract's newest tests are in the working tree, not yet committed; a build that takes HEAD for the contract and
+    # restores it leaves the file clean — "dirty now" alone never sees that as a change
+    with Project() as pj:
+        write(os.path.join(pj.dir, "check2.py"), "import sys; sys.exit(1)\n")
+        write(os.path.join(pj.dir, "test_x.py"), "# the contract's test, first version\n")
+        subprocess.run(["git", "-c", "core.autocrlf=false", "add", "-A"], cwd=pj.dir, check=True)
+        subprocess.run(["git", "-c", "core.autocrlf=false", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "base"], cwd=pj.dir, check=True)
+        newest = "# the contract's test, rewritten for the new decision (uncommitted)\n"
+        write(os.path.join(pj.dir, "test_x.py"), newest)
+        plan = {"artifact-type": "chongdae/plan@1", "goal": "g", "providers": {"implementer": "session"},
+                "tasks": [{"id": "T1", "role": "implementer", "tests": ["test_x.py"], "checks": [[sys.executable, "check2.py"]]}]}
+        write(os.path.join(pj.dir, "plan.json"), plan)
+        assert run("init", "--plan", "plan.json", "--target", pj.dir)[0] == 0
+        code, out = run("run", "--target", pj.dir)
+        assert code == chongdae.DECISION and "make these checks pass" in out, out   # start taken, the contract's tests kept
+        write(os.path.join(pj.dir, "check2.py"), "import sys; sys.exit(0)\n")
+        subprocess.run(["git", "checkout", "--", "test_x.py"], cwd=pj.dir, check=True)   # the build "restores" HEAD
+        assert chongdae.touched_files(pj.dir, pj.state()["tasks"]["T1"]["start"]) == ["check2.py", "test_x.py"]
+        code, out = run("run", "--target", pj.dir)
+        assert code == chongdae.DECISION and "changed the contract's tests (test_x.py)" in out and "restored as they were when the task started" in out, out
+        assert io.open(os.path.join(pj.dir, "test_x.py"), encoding="utf-8").read() == newest
+        assert pj.state()["tasks"]["T1"]["rejected"]["restored"] == ["test_x.py"]
+        assert run("retry", "T1", "--by", "kim", "--target", pj.dir)[0] == 0
+        code, out = run("run", "--target", pj.dir)
+        assert code == 0 or "human" in out or "produced" in out, out
+        assert pj.state()["tasks"]["T1"]["touched"] == ["check2.py"], pj.state()["tasks"]["T1"]["touched"]
+
+
 def test_verifier_before_the_gate_protected_tests_and_delegation_policy():
     with Project() as pj:
         write(os.path.join(pj.dir, "check.py"), "import sys; sys.exit(0)\n")

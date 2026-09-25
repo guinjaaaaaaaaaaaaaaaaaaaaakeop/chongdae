@@ -833,12 +833,44 @@ def dirty(target, records_too=False):
 
 
 def touched_files(target, start=None):
-    """What changed since the task started: dirty now and not identical at start. Without a start snapshot, the whole dirty set."""
+    """What changed since the task started: every file whose content is not what it was then. Without a start snapshot, the
+    whole dirty set. A file dirty at start and clean now went back to HEAD — a change like any other, and the one a build
+    makes when it takes the committed version of an uncommitted file for the real one (a contract's newest tests)."""
+    import hashlib
     now = dirty(target)
     if now is None:
         return None
     start = start or {}
-    return sorted(p for p, h in now.items() if start.get(p) != h)
+    changed = {p for p, h in now.items() if start.get(p) != h}
+    for p, h in start.items():
+        if p not in now:
+            full = os.path.join(target, p)
+            if (hashlib.sha1(io.open(full, "rb").read()).hexdigest() if os.path.isfile(full) else "gone") != h:
+                changed.add(p)
+    return sorted(changed)
+
+
+def keep_contract_tests(target, run, task):
+    """The contract's tests as they are when the task starts — the working tree, not HEAD: a test written for this contract
+    and not yet committed is its newest version. Kept among the run's work files, so a build that changes them can be undone
+    by the runner instead of by whoever still remembers what they said."""
+    for t in task.get("tests") or []:
+        src = os.path.join(target, t)
+        if os.path.isfile(src):
+            dst = work_path(run, os.path.join("contract-tests", task["id"], t))
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            shutil.copyfile(src, dst)
+
+
+def restore_contract_tests(target, run, task, paths):
+    """Put the contract's tests back as they were kept at the task's start. Returns the paths restored."""
+    back = []
+    for t in paths:
+        kept = work_path(run, os.path.join("contract-tests", task["id"], t))
+        if os.path.isfile(kept):
+            shutil.copyfile(kept, os.path.join(target, t))
+            back.append(t)
+    return back
 
 
 def run_checks(target, checks):
@@ -1225,6 +1257,7 @@ def cmd_run(args):
         path = os.path.join(target, task["path"]) if task.get("path") else None
         if "start" not in ts:
             ts["start"] = dirty(target)   # what the tree already differed in: `touched` is measured from here, not from HEAD
+            keep_contract_tests(target, d, task)
             save_state(d, state)
         if ts["status"] == "todo":
             # People hired before the work: each answers with findings about the contract; a finding is a plan question, so the
@@ -1332,9 +1365,15 @@ def decide_task(ctx, task, ts, who, path):
         if broken:
             # The contract owns its checks. A build that edits them decided its own verdict — that is a reject, whoever built.
             ts["rejected"] = {"by": "contract", "why": "changed protected tests: %s" % ", ".join(broken)}
+            back = restore_contract_tests(target, d, task, broken)
+            if back:
+                ts["rejected"]["restored"] = back
             save_state(d, state)
-            return stop("%s: the build changed the contract's tests (%s) — restore them (the contract decides, not the builder), "
-                        "then `chongdae retry %s --by NAME | --delegated WHY`" % (task["id"], ", ".join(broken), task["id"]))
+            left = [t for t in broken if t not in back]
+            return stop("%s: the build changed the contract's tests (%s) — %s (the contract decides, not the builder), "
+                        "then `chongdae retry %s --by NAME | --delegated WHY`" % (
+                            task["id"], ", ".join(broken),
+                            "restored as they were when the task started" if not left else "restore %s" % ", ".join(left), task["id"]))
         # Independent eyes before the gate: not the hands, and their verdict goes here, not back to the builder.
         code = place_eyes(ctx, task, ts, who, touched)
         if code is not None:
@@ -1766,6 +1805,7 @@ def cmd_add(args):
         ts["self-performed"] = own
     if task["role"] == "session":
         ts["start"] = dirty(args.target)   # the session works between `add` and `run`: what changed is measured from now
+        keep_contract_tests(args.target, d, task)
     # a provider's task starts when `run` spawns it (`start` is taken then): a build added alongside its test task must not see the test-writer's file as its own change
     if not task["checks"]:
         ts["non-claims"] = ["no check decides this task; done means the agent said so"]

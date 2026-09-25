@@ -304,7 +304,8 @@ A plan may declare a `verifier` role — a command, never the hands that built (
 After a task's checks pass and before its gate, the verifier gets the contract, what the task touched (and what
 changed after the builder answered, told apart) and the builder's report, and answers `dwitbuk/review@1`: accept, or
 reject with findings quoted from both sides. Reject is the failed path: `retry`. A task's `tests` are the contract's
-own checks: a build that changes them is rejected by chongdae. A gate written `{"human": true, "delegate":
+own checks, as they are in the tree when the task starts (committed or not — kept then among the run's work files): a
+build that changes them, or puts them back to HEAD, is rejected by chongdae, which restores them from what it kept. A gate written `{"human": true, "delegate":
 "after-verifier"}` refuses `confirm --delegated` until an accept; a plain `"human"` gate records what stood in
 (`verifier: accept` or nothing).
 
