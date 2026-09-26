@@ -275,6 +275,10 @@ def test_verifier_before_the_gate_protected_tests_and_delegation_policy():
         assert code == chongdae.DECISION and "human: review task S1" in out, out
         rd = chongdae.run_dir(pj.dir)
         assert os.path.exists(os.path.join(rd, "local", "S1.verify.request.json")) and os.path.exists(os.path.join(rd, "local", "S1.verify.4.request.json")), os.listdir(os.path.join(rd, "local"))   # every verdict's files survive the retries
+        # the first verification reads the slice; every later one is a re-verification: the last reject's findings, the files changed since
+        assert "recheck" not in json.load(open(os.path.join(rd, "local", "S1.verify.request.json")))
+        again = json.load(open(os.path.join(rd, "local", "S1.verify.2.request.json")))["recheck"]
+        assert again["findings"] == REVIEW_REJECT["findings"] and isinstance(again["changed_since"], list), again
         assert run("confirm", "S1", "--delegated", "verifier said ok", "--target", pj.dir)[0] == 0
         cf = dict(pj.state()["tasks"]["S1"]["confirmed"]); cf.pop("at", None); cf.pop("chongdae", None)
         assert cf == {"delegated": "verifier said ok", "verifier": "accept"}

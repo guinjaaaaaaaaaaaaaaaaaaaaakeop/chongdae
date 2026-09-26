@@ -1450,12 +1450,18 @@ def place_eyes(ctx, task, ts, who, touched):
         extra = {"touched": by_provider if by_provider is not None else touched, "tests": task.get("tests", []), "built": built}
         if by_provider is not None:
             extra["touched_since"] = sorted(set(touched) - set(by_provider))   # changed after the builder answered: a person's plan edits, say — not the builder's
+        last = next((a for a in reversed(ts.get("attempts", [])) if (a.get("review") or {}).get("verdict") == "reject" and isinstance(a.get("reviewed_tree"), dict)), None)
+        if last:
+            # a re-verification: what the last reject found, and what changed since that verdict. Re-reading the whole slice
+            # each round cost the verifier its full time again and found a new edge each time — the rounds did not converge
+            extra["recheck"] = {"findings": last["review"].get("findings", []), "changed_since": touched_files(target, last["reviewed_tree"]) or []}
         code, review, _ = spawn(target, d, task, prov["verifier"], plan, ts.get("attempts", []), stage="verify", extra=extra)
         if code == DISPATCH:
             return stop(dispatch_text(task["id"] + " (verify)", review))
         if code == WAITING:
             return stop(waiting_text(task["id"] + " (verify)", review))
         ts["review"] = review
+        ts["reviewed_tree"] = dirty(target)   # the tree this verdict was about: the next round is measured from here
         ts["verified_by"] = against_run(with_trace(performer(prov["verifier"], argv=prov["verifier"] if isinstance(prov["verifier"], list) else [prov["verifier"]], response=review, target=target), review, d, target), state)
         if native_argv(target, prov["verifier"]):
             ts.setdefault("non-claims", []).append("%s: the verdict was written by the session on a native subagent's behalf; chongdae did not observe the subagent" % task["id"])
@@ -1597,7 +1603,7 @@ def resend(target, d, state, task_id, retried, message=None):
     attempt = {**(response or {"status": "session"}), "retried": {**retried, **stamp()}}
     if response:
         with_trace(attempt, response, d, target)   # what this attempt's worker did stays with the attempt
-    for key in ("review", "rejected"):
+    for key in ("review", "rejected", "reviewed_tree"):
         if key in ts:
             attempt[key] = ts.pop(key)
     if "stages" in ts:
