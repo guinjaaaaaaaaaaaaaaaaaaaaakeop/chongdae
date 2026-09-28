@@ -160,8 +160,9 @@ for session tasks the task's own definition
 
 Committed: yes.
 
-what a provider was asked — the request with this machine taken out (`.`, `~`, `<plugin:…>`, `<tmp>`): what another
-person needs to put the same question to a worker again. Its `contract` points at `contract/`
+what a provider was asked — the request with this machine taken out (`.`, `~`, `<plugin:…>`, `<tmp>`), so a reader on
+another machine sees the question as it was put, not this machine's paths. Its `contract` points at `contract/`. A
+record for reading; no command replays it
 
 ### `.chongdae/run-<id>/contract/<Q>-<hash>.md`
 
@@ -202,13 +203,7 @@ only when its call ran under another), `reviewed` (what the reviewer said and wr
 
 Committed: yes.
 
-a declared delegation: scope, why, by, at
-
-### `.chongdae/rechecks/<time>.json`
-
-Committed: yes.
-
-a `recheck`'s verdict: which completed runs' checks were green, red or without checks on that tree, at that HEAD
+a declared delegation: scope, why, by, at. `report` prints `by` and `why` beside every judgment that references it
 
 ### `plan/questions.json`, `plan/PLAN.md`
 

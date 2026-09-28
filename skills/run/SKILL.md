@@ -20,6 +20,6 @@ The engine is `chongdae.py` at this plugin's root — the session-start line `ch
    - `the provider made N decision(s)` — show them; the person writes the accepted ones into the plan, then `accept <task> --by|--delegated`.
    - `role ... has no provider` — the person declares one in `hunsu.json` `roles` or the plan's `providers`; do not stand in for a role.
 3. Exit 0 with `complete` (or `close` of a session run): report the run's non-claims to the person. The lock's `reviewer` role ran as the run ended (its line is in the output; what it wrote went into the close commit) — you do not run a review yourself; what its findings need from a person, the reviewer says at the next session start. The engine has been notarizing the record all along — every judgment (init, confirm, accept, retry, drop, close, complete, landing) commits `.chongdae/run-<id>/` and only it, so the record needs no commit from you; commit the *work* (code, tests, documents) as usual. If the engine could not commit (no git identity, say), it says nothing and the record simply sits uncommitted — then commit it with the work.
-4. After a merge: `recheck`; anything red is not done on this tree.
+4. After a merge: `recheck`; anything red is not done on this tree. Its output and exit code are the verdict (a merge run's task carries it); it files nothing.
 
 Never edit `.chongdae/` by hand except to reset a task whose result was lost; record why in the run's non-claims.

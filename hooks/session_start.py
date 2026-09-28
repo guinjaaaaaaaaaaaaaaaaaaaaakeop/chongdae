@@ -1,6 +1,7 @@
 """SessionStart hook — one line: which run is in progress, or that none is (and how to start one).
 
-Reads the hook payload (stdin JSON with `cwd`). Never blocks, never writes.
+Reads the hook payload (stdin JSON with `cwd`). Never blocks. Writes one machine-local file when the project keeps a
+record: `.chongdae/sessions/<session id>.json`, the host's transcript path for this session (ignored, never committed).
 """
 import json
 import os
@@ -27,7 +28,7 @@ def remember_session(cwd, payload):
             with open(os.path.join(d, ".gitignore"), "w", encoding="utf-8") as fh:
                 fh.write("*\n")   # the directory ignores itself: transcript paths are this machine's
         with open(os.path.join(d, sid + ".json"), "w", encoding="utf-8") as fh:
-            json.dump({"transcript": path, "agent": os.environ.get("AI_AGENT"), "started": payload.get("source")}, fh)
+            json.dump({"transcript": path}, fh)   # the one field read (chongdae.py `session_transcript`); `agent`/`started` were written and read by nothing
     except OSError:
         pass   # never block a session start over bookkeeping
 

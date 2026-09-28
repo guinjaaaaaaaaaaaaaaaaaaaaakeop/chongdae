@@ -1012,9 +1012,8 @@ def test_added_tasks_run_in_the_order_added_and_a_providers_task_starts_when_spa
         # recheck leaves a record
         assert run("close", "--target", pj.dir)[0] == 0
         code, out = run("recheck", "--target", pj.dir)
-        assert code == 0 and "recorded -> .chongdae/rechecks/" in out, out
-        recs = os.listdir(os.path.join(pj.dir, ".chongdae", "rechecks"))
-        assert len(recs) == 1 and json.load(open(os.path.join(pj.dir, ".chongdae", "rechecks", recs[0])))["green"] == [os.path.basename(chongdae.run_dir(pj.dir)) + "/a-build"]
+        assert code == 0 and "still green  %s/a-build" % os.path.basename(chongdae.run_dir(pj.dir)) in out and "recheck: 1 green" in out, out
+        assert not os.path.exists(os.path.join(pj.dir, ".chongdae", "rechecks")), "the verdict is printed and returned; nothing is filed"
 
 
 def test_run_waits_a_bounded_time_then_hands_back_and_the_next_run_resumes():
@@ -1134,7 +1133,7 @@ def test_session_run_tasks_added_as_the_work_goes_claims_and_the_write_hook():
             assert "t4-work.py" in pj.state()["tasks"]["T4"]["touched"], "what changed in a dropped task's window stays attributed to it"
             code, out = run("close", "--target", pj.dir)
             assert code == 0 and "2 task(s) done, 1 open (T3), 1 dropped (T4)" in out, out
-            assert pj.state()["status"] == "complete" and pj.state()["open"] == ["T3"]
+            assert pj.state()["status"] == "complete" and "open" not in pj.state()   # open tasks are the tasks' statuses; `report`/`status` recount them
             assert run("close", "--target", pj.dir)[0] != 0
             # the report: the open task is a finding that names the way out; the dropped one is a non-claim, not left-open
             code, out = run("report", "--target", pj.dir)
@@ -1262,6 +1261,9 @@ def test_delegation_is_declared_once_and_referenced_scope_enforced_and_stamps_fl
         assert cf == {"delegated": "boss said ship it", "verifier": None}, cf   # a literal reason keeps working as before
         assert run("close", "--target", pj.dir)[0] == 0
         doc = json.loads(run("report", "--target", pj.dir)[1])
+        # the report shows whose words a ref points at — the delegation's `by` and `why` had no reader before 1.12.1
+        refs = [f["text"] for f in doc["findings"] if f["kind"] == "delegated" and "ref %s" % did in f["text"]]
+        assert refs and all("ref %s (kim: owner pre-approved this run)" % did in t for t in refs), refs
         stamps = [f for f in doc["findings"] if f["kind"] == "delegation-stamp"]
         assert len(stamps) == 1 and "boss said ship it" in stamps[0]["text"] and "one judgment claiming to be many" in stamps[0]["text"] and "chongdae delegate" in stamps[0]["text"], stamps
         assert all(x in stamps[0]["where"] for x in ("T4", "T5", "T6")) and did not in stamps[0]["where"], stamps   # refs are exempt: that is their purpose

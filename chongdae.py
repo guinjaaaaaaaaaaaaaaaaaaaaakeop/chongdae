@@ -956,7 +956,7 @@ def merge_back(wt_path, wt, run_name):
                     *failed[:6])
     git(main, "worktree", "remove", "--force", wt_path)
     git(main, "branch", "-d", branch)
-    # the run landed: pin the merge commit into its record (in main), so completed runs order by ancestry, and commit that judgment
+    # the run landed: pin the merge commit into its record (in main) — the fact a reader orders completed runs by — and commit that judgment
     landed = (git(main, "rev-parse", "HEAD").stdout or "").strip()
     rec = os.path.join(main, RUNS, run_name, "state.json")
     if landed and os.path.exists(rec):
@@ -1717,7 +1717,8 @@ def cmd_init(args):
         raise SystemExit("a run is already in progress: %s — finish it or remove it" % run_dir(target))
     # Run ids are unique across machines (date + random), so runs made on different branches merge as distinct directories.
     # UTC, so the id's lexical order approximates creation order regardless of timezone — an approximation for humans only;
-    # real order is `based_on`/`landed` ancestry in git, never a clock (id order can still invert under clock skew).
+    # real order is `based_on`/`landed` ancestry in git, never a clock (id order can still invert under clock skew) — recorded
+    # for a reader; no command sorts by it.
     import secrets, time
     run_name = "run-%s-%s" % (time.strftime("%Y%m%d-%H%M%S", time.gmtime()), secrets.token_hex(2))
     if getattr(args, "worktree", False):
@@ -1924,8 +1925,7 @@ def cmd_close(args):
     if state.get("status") != "running":
         raise SystemExit("no session run in progress")
     open_ = [tid for tid, ts in state["tasks"].items() if ts["status"] not in ("done", "skipped", "dropped")]
-    state["status"] = "complete"
-    state["open"] = open_
+    state["status"] = "complete"   # which tasks stayed open is the tasks' own status; `report`/`status` recount it, nothing read a copy
     save_state(d, state)
     wrote = place_reviewer(args.target, d, state, plan)
     save_state(d, state)
@@ -2089,14 +2089,19 @@ def cmd_report(args):
         findings.append({"kind": "unattributed", "where": ", ".join(unattributed),
                          "text": "these runs completed without recording touched files; changes they made cannot be told from work outside runs"})
     # what no human decided, and what nobody claims
-    def deleg_text(v):
-        return "ref %s" % v.get("ref") if isinstance(v, dict) else v
-
     since_runs = runs_since(target, args.since) if args.since else None
     for r in all_runs(target):
         name, plan, state = os.path.basename(r), load(os.path.join(r, "plan.json")), load_state(r)
         if since_runs is not None and name not in since_runs:
             continue   # --since: what happened since that revision — a run whose record already existed there was reviewed then
+
+        def deleg_text(v, run_d=r):
+            # a ref points at a declared delegation: show whose words it points at, or the report's reader has an id and no reason
+            if not isinstance(v, dict):
+                return v
+            rec = load(os.path.join(run_d, "delegations", "%s.json" % v.get("ref")))
+            return "ref %s (%s: %s)" % (v.get("ref"), rec.get("by") or "?", rec.get("why") or "?") if rec else "ref %s" % v.get("ref")
+
         stamps = {}   # literal delegated reason -> where it was used, within this one run (refs are exempt: pointing at one declared judgment is their purpose)
 
         def stamp(v, where):
@@ -2200,14 +2205,8 @@ def cmd_recheck(args):
     if unchecked:
         print("  no checks    %s (artifact tasks — their shape held then; nothing re-decides them here)" % ", ".join(unchecked))
     print("recheck: %d green · %d red · %d without checks" % (len(green), len(red), len(unchecked)))
-    # the verdict is a record, not a line on a screen: `.chongdae/rechecks/<time>.json`, so "recheck was green" can be pointed at
-    import subprocess
-    head = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=target, capture_output=True, text=True).stdout.strip() or None
-    rec = {"artifact-type": "chongdae/recheck@1", **stamp(), "head": head, "green": [n for n, _ in green],
-           "red": [{"task": n, "failed": f} for n, f in red], "unchecked": unchecked}
-    path = os.path.join(target, RUNS, "rechecks", rec["at"].replace(":", "").replace("+", "p") + ".json")
-    save(path, rec)
-    print("  recorded -> %s" % os.path.relpath(path, target).replace(os.sep, "/"))
+    # the verdict is what is printed and the exit code — a merge run's task carries it. A `.chongdae/rechecks/<time>.json` was
+    # filed here until 1.12.1, read by nothing and never committed while the README said it was
     return 1 if red else 0
 
 
