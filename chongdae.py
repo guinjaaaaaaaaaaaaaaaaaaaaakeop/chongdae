@@ -832,6 +832,16 @@ def dirty(target, records_too=False):
     return out
 
 
+def record_changes(target):
+    """Files under the record paths that differ from HEAD now — the environment (hunsu's manifest, lock, judgments) and the
+    products' records (`mangsang/`, `reviews/`), this run's own directory aside. They are never in `touched` (nobody's work by
+    rule), and a verify request that says only `touched: []` while the tree shows them reads as a record that lies: a task whose
+    whole work is `hunsu lock` or `mangsang confirm` was rejected for exactly that. The request lists them, so the reader knows
+    they were left out by rule, not by omission."""
+    rp = record_paths(target)
+    return sorted(p for p in (dirty(target, records_too=True) or {}) if p.startswith(rp))
+
+
 def touched_files(target, start=None):
     """What changed since the task started: every file whose content is not what it was then. Without a start snapshot, the
     whole dirty set. A file dirty at start and clean now went back to HEAD — a change like any other, and the one a build
@@ -1447,7 +1457,8 @@ def place_eyes(ctx, task, ts, who, touched):
     if not ts.get("review"):
         built = {k: (ts.get("response") or {}).get(k) for k in ("summary", "verified", "non-claims")} if ts.get("response") else None
         by_provider = ts.get("touched_by_provider")
-        extra = {"touched": by_provider if by_provider is not None else touched, "tests": task.get("tests", []), "built": built}
+        extra = {"touched": by_provider if by_provider is not None else touched, "tests": task.get("tests", []), "built": built,
+                 "excluded": {"record-paths": record_changes(target)}}
         if by_provider is not None:
             extra["touched_since"] = sorted(set(touched) - set(by_provider))   # changed after the builder answered: a person's plan edits, say — not the builder's
         last = next((a for a in reversed(ts.get("attempts", [])) if (a.get("review") or {}).get("verdict") == "reject" and isinstance(a.get("reviewed_tree"), dict)), None)

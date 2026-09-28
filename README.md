@@ -301,7 +301,10 @@ the record so the loss is named, not hidden.
 
 A plan may declare a `verifier` role — a command, never the hands that built (dwitbuk's `eyes_worker.py` is one).
 After a task's checks pass and before its gate, the verifier gets the contract, what the task touched (and what
-changed after the builder answered, told apart) and the builder's report, and answers `dwitbuk/review@1`: accept, or
+changed after the builder answered, told apart), what the record paths left out of `touched` (`excluded.record-paths`:
+the environment — hunsu's manifest, lock and judgments — and records such as `mangsang/`, which are never a task's work
+by rule; a task whose whole work is `hunsu lock` has `touched: []`, and without this the verifier read the changed tree as
+an undeclared edit) and the builder's report, and answers `dwitbuk/review@1`: accept, or
 reject with findings quoted from both sides. Reject is the failed path: `retry`. After a reject the next verification
 is a re-verification: the request carries `recheck` — the last reject's findings and the files changed since that verdict
 (the tree is kept at each verdict) — and the verifier checks those, not the whole slice again. A task's `tests` are the contract's

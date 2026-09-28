@@ -250,6 +250,7 @@ def test_verifier_before_the_gate_protected_tests_and_delegation_policy():
                            "checks": [[sys.executable, "check.py"]], "closes": ["Q1"]}]}
         write(os.path.join(pj.dir, "plan.json"), plan)
         assert run("init", "--plan", "plan.json", "--target", pj.dir)[0] == 0
+        write(os.path.join(pj.dir, "hunsu.json"), {"plugins": {"mangsang": {}}})   # the environment changed in the tree: a record path, never `touched`
         # the build passes its checks; the verifier says no -> the failed path, with the findings in the stop message
         code, out = run("run", "--target", pj.dir)
         assert code == chongdae.DECISION and "verifier rejected" in out and "clear resets the counter" in out, out
@@ -263,6 +264,8 @@ def test_verifier_before_the_gate_protected_tests_and_delegation_policy():
         req = json.load(open(os.path.join(chongdae.run_dir(pj.dir), "local", "S1.verify.request.json"), encoding="utf-8"))
         assert req["stage"] == "verify" and req["role"] == "verifier" and req["built"]["summary"] == "added count" and req["tests"] == ["test_x.py"]
         assert req["touched"] == [] and "touched_since" in req, req   # the fake provider changed nothing; a human's edits would be in touched_since
+        # what the record paths left out is said, so `touched: []` beside a changed hunsu.json is not a record that lies (guin-site, 2026-09-28)
+        assert req["excluded"] == {"record-paths": ["hunsu.json"]}, req.get("excluded")
         assert run("confirm", "S1", "--by", "kim", "--target", pj.dir)[0] != 0, "nothing produced yet"
         code, out = run("status", "--target", pj.dir)
         assert code == 0 and "is running" in out and "1 open: S1" in out, out
