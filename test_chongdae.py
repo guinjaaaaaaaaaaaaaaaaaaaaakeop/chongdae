@@ -666,6 +666,72 @@ def test_a_session_task_can_be_handed_to_the_locked_implementer():
         assert code == chongdae.DECISION and "role 'modeler' has no provider" in out, out
 
 
+def test_the_session_takes_a_task_its_hands_could_not_finish_instead_of_dropping_done_work():
+    """guin-site, 2026-09-30: three tasks were `drop`ped although their work was in the tree — a worker's sandbox could not open
+    a port, a tests worker's guard read the tree the session was also writing. A drop records done work as not done. `take`
+    makes the task the session's (self-performed instead of its role, with the reason); the stopped attempt stays in
+    `attempts`, and `run` decides it like any session task: its checks, then the gate."""
+    failed = {"status": "failed", "summary": "could not bind a local port", "verified": [], "decisions": [], "non-claims": ["only-tests-touched: stray src/a.py"]}
+    with Project() as pj:
+        write(os.path.join(pj.dir, "hunsu.lock.json"), {"roles": {"implementer": pj.fake_provider(failed)}})
+        assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
+        ok = sys.executable + " -c 'raise SystemExit(0)'"
+        assert run("add", "s2-build", "--role", "implementer", "--brief", "backup code", "--check", ok, "--requires", "loopback", "--target", pj.dir)[0] == 0
+        code, out = run("run", "--target", pj.dir)
+        assert code == chongdae.DECISION and "did not finish" in out and "chongdae take s2-build --why" in out, out   # the stop names the honest close
+        req = json.load(open(os.path.join(chongdae.run_dir(pj.dir), "local", "s2-build.request.json")))
+        assert req["needs"] == ["loopback"], req   # the plan's `requires` travels as the request's `needs`
+        assert run("take", "s2-build", "--target", pj.dir)[0] != 0, "a take says why"
+        code, out = run("take", "s2-build", "--why", "the worker's sandbox cannot open a local port; the session finishes it", "--by", "kim", "--target", pj.dir)
+        assert code == 0 and "attempt 1 stays in the record" in out, out
+        ts = pj.state()["tasks"]["s2-build"]
+        assert ts["taken"]["from"] == "implementer" and ts["self-performed"]["instead-of"] == "implementer" and ts["self-performed"]["taken-over"], ts
+        assert ts["attempts"][0]["status"] == "failed" and "response" not in ts
+        code, out = run("run", "--target", pj.dir)
+        assert code == 0, out
+        ts = pj.state()["tasks"]["s2-build"]
+        assert ts["status"] == "done" and ts["performed_by"]["provider"] == "session", ts
+        assert run("take", "s2-build", "--why", "again", "--target", pj.dir)[0] != 0, "a done task is not taken"
+        code, out = run("report", "--target", pj.dir)
+        assert "self-performed" in out, out   # the reviewer counts it as the session's own hands
+        assert chongdae.plan_problems({"artifact-type": "chongdae/plan@1", "goal": "g", "tasks": [{"id": "x", "role": "r", "checks": [["x"]], "requires": ["gpu"]}]}) \
+            == ["x: requires gpu — known: network, loopback"]
+
+
+def test_one_reason_with_a_different_tail_each_time_is_still_one_stamp():
+    """guin-site opened ten judgments' reasons with "소유자가 구현을 맡김", each with its own tail, and the exact-string count saw
+    ten different reasons. A shared opening clause used across 3+ judgments is reported as the stamp it is; drops count too."""
+    with Project() as pj:
+        assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
+        for i, tail in enumerate((": the sandbox stopped it", " (tests were rewritten)", " — done by the session")):
+            assert run("add", "T%d" % i, "--brief", "b", "--target", pj.dir)[0] == 0
+            assert run("drop", "T%d" % i, "--why", "소유자가 구현을 맡김" + tail, "--by", "kim", "--target", pj.dir)[0] == 0
+        assert run("add", "U", "--brief", "b", "--target", pj.dir)[0] == 0
+        assert run("drop", "U", "--why", "mis-specified: the plan changed", "--by", "kim", "--target", pj.dir)[0] == 0
+        assert run("close", "--target", pj.dir)[0] == 0
+        doc = json.loads(run("report", "--target", pj.dir)[1])
+        stamps = [f for f in doc["findings"] if f["kind"] == "delegation-stamp"]
+        assert len(stamps) == 1 and "open with the same clause '소유자가 구현을 맡김'" in stamps[0]["text"] and "3 judgments" in stamps[0]["text"], stamps
+        assert all(("T%d" % i) in stamps[0]["where"] for i in range(3)) and "/U " not in stamps[0]["where"] + " ", stamps
+
+
+def test_a_member_that_refuses_before_starting_is_a_hiring_stop_not_a_failed_build():
+    """hacheong refuses a task whose `needs` its member's sandbox cannot give, before any host call: status blocked, the first
+    non-claim "not attempted: …". That is not a decision the contract lacks and not a build to resend — the stop names the
+    two fixes: hire a member whose sandbox can, or take it in the session."""
+    refused = {"status": "blocked", "summary": "needs loopback, which build on codex cannot do", "verified": [], "decisions": [],
+               "non-claims": ["not attempted: needs loopback, which build on codex cannot do"]}
+    with Project() as pj:
+        write(os.path.join(pj.dir, "hunsu.lock.json"), {"roles": {"implementer": pj.fake_provider(refused)}})
+        assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
+        assert run("add", "s3", "--role", "implementer", "--check", sys.executable + " -c 'raise SystemExit(0)'", "--requires", "loopback", "--target", pj.dir)[0] == 0
+        code, out = run("run", "--target", pj.dir)
+        assert code == chongdae.DECISION and "hire a member whose sandbox can" in out and "chongdae take s3 --why" in out, out
+        assert "decision the contract does not give" not in out, out
+        ts = pj.state()["tasks"]["s3"]
+        assert not ts.get("attempts"), "refused before starting: nothing was resent"
+
+
 def test_a_native_provider_is_dispatched_by_the_session_and_its_answer_consumed_as_a_providers():
     """`native:` providers: the host's own subagent does the work, dispatched by the session. chongdae writes the request as for
     a worker, then stops with the dispatch instruction (the worker's `--prompt-only` argv, the response path); the session runs

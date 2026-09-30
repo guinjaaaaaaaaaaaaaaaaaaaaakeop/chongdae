@@ -61,7 +61,10 @@ hired get those sections as the contract), the bootstrap plan (`--goal`), `--pla
 A task in the session run — `--brief`, `--closes`, `--check` (repeatable argv), `--tests` (protected files), `--gate
 human`; its start snapshot is taken now. Who does it is the lock's to say: a task with `--check` goes to the lock's
 `implementer`, a task that writes `--tests` that do not exist yet to its `nitpick`, anything else (a plan section, a
-model) to this session. A check is one command: a shell line (`sh -c 'a && b'`) is refused — give each command its own
+model) to this session. `--requires network loopback` says what the work requires of the sandbox its hands run in: it
+travels in the request as `needs` (a task's `needs` in a plan already names the tasks it waits for), and a hired member
+that cannot give it refuses before starting — chongdae stops with the two fixes (hire a member whose sandbox can, or
+`take` it) instead of resending. A check is one command: a shell line (`sh -c 'a && b'`) is refused — give each command its own
 `--check`. `--role nitpick` with a `--check` is refused (a nitpick task is decided by its tests being red before the
 build; a task with a check is a build). `--role` names a declared role outright; `--role session` where the lock
 declares a provider needs `--why` (and `--by`) — recorded on the task as `self-performed`, reported as an observation,
@@ -73,10 +76,20 @@ its reason counted like a delegation's (one reason stamped on task after task is
 Take a task (`--by`, default git user.name; empty string releases). `run` skips tasks claimed by someone else;
 chongdae never assigns
 
+### `/chongdae:take`
+
+The session finishes a task its hired hands could not — the work is in the tree, and a drop would record it as not done
+(three of guin-site's drops on 2026-09-30 were done work: a worker's sandbox could not open a port, a tests worker's guard
+read the tree the session was also writing). `--why` is required: the task becomes the session's, recorded as
+`self-performed` instead of its role (the reviewer counts it); the stopped attempt, and who made it, stay in `attempts`;
+`run` then decides it like any session task — its checks, the verifier, the gate. Every stop on a provider's unfinished
+answer names it beside `retry`
+
 ### `/chongdae:drop`
 
 A session task that will not be done (mis-specified, superseded, abandoned): `--why` is recorded, the task leaves the
-open set as `dropped`. The alternative was closing the run around it — open forever, nobody looking
+open set as `dropped`. The alternative was closing the run around it — open forever, nobody looking. When the task's hands
+changed the tree, `drop` says so and points at `take`: work that stands is done, not dropped
 
 ### `/chongdae:unstage`
 

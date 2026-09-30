@@ -1028,6 +1028,9 @@ def plan_problems(plan):
             # shell spelled them, the validator compares another spelling, and the record keeps a string nobody can re-run apart
             if isinstance(c, list) and len(c) >= 3 and os.path.basename(str(c[0])) in ("sh", "bash", "zsh", "dash") and str(c[1]).startswith("-") and "c" in str(c[1]):
                 out.append("%s: a check is one command, not a shell line — `%s …` hides what it runs from the worker's report and the record; give each command its own check" % (t.get("id"), " ".join(str(x) for x in c[:2])))
+        bad = [x for x in t.get("requires") or [] if x not in REQUIRES]
+        if bad:
+            out.append("%s: requires %s — known: %s" % (t.get("id"), ", ".join(bad), ", ".join(REQUIRES)))
         for n in t.get("needs", []):
             if n not in ids:
                 out.append("%s: needs unknown task %s" % (t.get("id"), n))
@@ -1108,6 +1111,9 @@ def pid_alive(pid):
         return False
 
 
+REQUIRES = ("network", "loopback")   # what a task may require of the sandbox its hands run in
+
+
 def spawn(target, run, task, provider, plan, attempts=(), stage="build", extra=None):
     """Run a provider command with a request file; read its response file. The provider is argv with {request} and {response}.
 
@@ -1146,6 +1152,10 @@ def spawn(target, run, task, provider, plan, attempts=(), stage="build", extra=N
                "target": os.path.abspath(target).replace(os.sep, "/"), "goal": plan["goal"], "brief": task.get("brief", ""),
                "closes": task.get("closes", []), "contract": sections, "checks": task.get("checks", []) or checks_for_tests(all_tasks(plan, load_state(run)), task), "tests": task.get("tests", []),
                **({"domain": task["domain"]} if task.get("domain") else {}),
+               # what the work requires of the sandbox it runs in (`requires` on the task; `needs` in a task already means the
+               # tasks it waits for): a member that cannot give it refuses before it starts — five attempts on guin-site died
+               # on a worker that could not open a local port, found only by trying
+               **({"needs": list(task["requires"])} if task.get("requires") else {}),
                "response": res_path.replace(os.sep, "/")}
         if attempts:
             # A slice that spans calls: the next call is a fresh process. It resumes from the tree as the last call left it and from
@@ -1258,7 +1268,8 @@ def cmd_run(args):
         if ts.get("claimed_by") and ts["claimed_by"] != ctx["me"]:
             print("  %s is claimed by %s — not this machine's to advance" % (task["id"], ts["claimed_by"]))
             continue
-        who = ctx["providers"].get(task["role"])
+        # a task the session took over (`take`) is the session's from then on, whoever the lock hired for its role
+        who = "session" if ts.get("taken") else ctx["providers"].get(task["role"])
         if who is None:
             if task.get("optional"):
                 ts["status"] = "skipped"
@@ -1331,7 +1342,16 @@ def run_hands(ctx, task, ts, who):
             ts.setdefault("non-claims", []).append("%s: the answer was written by the session on a native subagent's behalf; chongdae did not observe the subagent" % task["id"])
         save_state(d, state)
     response = ts["response"]
-    again = "then `chongdae retry %s --by NAME | --delegated WHY` sends it out again with this attempt attached" % task["id"]
+    again = ("then `chongdae retry %s --by NAME | --delegated WHY` sends it out again with this attempt attached — or, when the work is in the "
+             "tree and the session will finish it, `chongdae take %s --why WHY` (checks, eyes and gate as for any task; a drop would record done work as not done)"
+             % (task["id"], task["id"]))
+    unattempted = [n for n in response.get("non-claims", []) if str(n).startswith("not attempted:")]
+    if response.get("status") == "blocked" and unattempted:
+        # the member refused before starting: the task requires what its sandbox cannot give (`requires`). Resending changes
+        # nothing, and it is not a decision the contract lacks — it is a hiring question
+        return stop("%s: %s — hire a member whose sandbox can (hunsu.json `roles`, then lock, then `chongdae retry %s`), "
+                    "or `chongdae take %s --why WHY` and the session does it" % (task["id"], response.get("summary", "the member cannot do this task here"), task["id"], task["id"]),
+                    *unattempted)
     if response.get("status") == "blocked" and response.get("disputed-tests"):
         setattr(args, "continuing", True)
         if route_dispute(target, d, state, plan, task, response["disputed-tests"]):
@@ -1820,7 +1840,8 @@ def cmd_add(args):
                              "or leave --role out and %r does it" % (due, due))
         own = {"instead-of": due, "why": args.why, "by": args.by if args.by is not None else me(args.target), **stamp()}
     task = {"id": args.id, "role": role, "brief": args.brief or "", "closes": args.closes or [], "needs": [], "checks": checks,
-            "tests": args.tests or [], "gate": "human" if args.gate == "human" else None, **({"domain": args.domain} if args.domain else {})}
+            "tests": args.tests or [], "gate": "human" if args.gate == "human" else None, **({"domain": args.domain} if args.domain else {}),
+            **({"requires": args.requires} if args.requires else {})}
     for when in ("before", "after"):
         if getattr(args, when) is not None:
             task[when] = getattr(args, when)
@@ -1852,6 +1873,45 @@ def cmd_add(args):
     return 0
 
 
+def cmd_take(args):
+    """The session finishes a task its hired hands could not: the work is in the tree (a sandbox stopped the worker, a guard
+    judged the tree the session was also writing), and `drop` would record it as not done — three of guin-site's drops were
+    done work (2026-09-30). The task becomes the session's: self-performed instead of its role, with the reason; the stopped
+    attempt stays in `attempts`; `run` then decides it like any session task — its checks, the verifier, the gate."""
+    d = run_dir(args.target)
+    plan, state = (load(os.path.join(d, "plan.json")), load_state(d)) if d else ({}, {})
+    if plan.get("kind") != "session" or state.get("status") != "running":
+        raise SystemExit("no session run in progress — `take` is for a session run's own tasks")
+    ts = state["tasks"].get(args.task)
+    if not ts:
+        raise SystemExit("no task %s" % args.task)
+    if ts["status"] != "todo":
+        raise SystemExit("%s is %s — only an open task can be taken" % (args.task, ts["status"]))
+    task = ts["def"]
+    hands = providers(args.target, plan).get(task["role"])
+    if ts.get("taken") or hands == "session" or task["role"] == "session":
+        raise SystemExit("%s is already the session's" % args.task)
+    who = args.by if args.by is not None else me(args.target)
+    taken = {"from": task["role"], "why": args.why, "by": who, **stamp()}
+    ts["taken"] = taken
+    ts["self-performed"] = {"instead-of": task["role"], "why": args.why, "by": who, "taken-over": True, **stamp()}
+    for key in ("touched_by_provider", "checks-ran-overruled", "accepted"):
+        ts.pop(key, None)
+    was = ts.pop("performed_by", None)   # who made the stopped attempt goes with that attempt; the task's hands are the session's now
+    ts.setdefault("non-claims", []).append("%s: taken over by the session from %s: %s" % (args.task, task["role"], args.why))
+    if ts.get("response") or ts.get("rejected"):
+        n = resend(args.target, d, state, args.task, {"by": who, "taken": args.why}, message="take %s: %s" % (args.task, args.why))
+        if was:
+            ts["attempts"][-1]["performed_by"] = was
+            save_state(d, state)
+        print("took %s from %s — its attempt %d stays in the record; the session finishes it, then `chongdae run` decides it" % (args.task, task["role"], n))
+    else:
+        save_state(d, state)
+        commit_record(args.target, os.path.basename(d), "take %s: %s" % (args.task, args.why))
+        print("took %s from %s — the session does it; then `chongdae run` decides it" % (args.task, task["role"]))
+    return 0
+
+
 def cmd_drop(args):
     """A session task that will not be done — mis-specified, superseded, abandoned — leaves the open set with its reason, and
     stays in the record as `dropped`. Without this the cheap way out of a task was to close the run around it (or start a
@@ -1865,6 +1925,8 @@ def cmd_drop(args):
         raise SystemExit("no task %s" % args.task)
     if ts["status"] in ("done", "skipped", "dropped"):
         raise SystemExit("%s is %s — nothing to drop" % (args.task, ts["status"]))
+    if ts.get("response") and (ts["response"].get("status") == "done" or touched_files(args.target, ts.get("start"))):
+        print("note: %s's hands changed the tree — if that work stands, `chongdae take %s --why` finishes it as done work instead" % (args.task, args.task))
     ts["status"] = "dropped"
     ts["dropped"] = {"why": args.why, "by": args.by if args.by is not None else me(args.target), **stamp()}
     ts["touched"] = touched_files(args.target, ts.get("start"))   # what changed in its window stays attributed to it, dropped or not
@@ -2161,6 +2223,21 @@ def cmd_report(args):
                                      **({"layer": "observation"} if later_ok else {}),
                                      "text": "%s: %s — record: \u201c%s\u201d — tree: \u201c%s\u201d%s" % (f.get("kind"), f.get("why"), f.get("record_quote"), f.get("tree_quote"),
                                                                           " (a later attempt was accepted by the verifier)" if later_ok else "")})
+        for tid, ts in state.get("tasks", {}).items():   # a drop's reason is a judgment like the rest
+            stamp((ts.get("dropped") or {}).get("why"), "%s/%s drop" % (name, tid))
+        # one reason stamped across judgments with a different tail each time: guin-site opened ten reasons with the same clause
+        # ("소유자가 구현을 맡김"), each with its own suffix, and the exact-string count saw ten judgments
+        leads = {}
+        for reason, wheres in stamps.items():
+            lead = re.split(r"[:(（—–]", " ".join(str(reason).split()), 1)[0].strip()
+            if len(lead) >= 8 and lead != reason.strip():
+                leads.setdefault(lead, set()).add(reason)
+        for lead, reasons in sorted(leads.items()):
+            wheres = [w for r in sorted(reasons) for w in stamps[r]]
+            if len(reasons) >= 2 and len(wheres) >= 3:
+                findings.append({"kind": "delegation-stamp", "where": ", ".join(wheres),
+                                 "text": "%d delegated reasons open with the same clause %r (%d judgments) — one decision written as many; "
+                                         "declare it once (`chongdae delegate`) and reference it, or give each judgment its own reason" % (len(reasons), lead, len(wheres))})
         # one reason string stamped across 3+ judgments: one judgment claiming to be many — the lie is the format's, and the format now has `delegate`
         for reason, wheres in sorted(stamps.items()):
             if len(wheres) >= 3:
@@ -2239,7 +2316,7 @@ def cmd_status(args):
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="chongdae", description=__doc__)
     sub = ap.add_subparsers(dest="cmd", required=True)
-    for name in ("init", "status", "run", "confirm", "accept", "retry", "recheck", "add", "claim", "drop", "unstage", "close", "report", "delegate"):
+    for name in ("init", "status", "run", "confirm", "accept", "retry", "recheck", "add", "claim", "take", "drop", "unstage", "close", "report", "delegate"):
         p = sub.add_parser(name)
         p.add_argument("--target", default=".")
         if name == "init":
@@ -2268,6 +2345,10 @@ def main(argv=None):
             p.add_argument("role", help="a role hired before or after the task (quibble, newbie, ...)")
             p.add_argument("--why", required=True)
             p.add_argument("--by", default=None)
+        if name == "take":
+            p.add_argument("task")
+            p.add_argument("--why", required=True, help="why the session finishes it (the worker's sandbox could not, a guard judged the tree the session was also writing)")
+            p.add_argument("--by", default=None, help="who decided (default: git user.name)")
         if name == "drop":
             p.add_argument("task")
             p.add_argument("--why", required=True, help="why this task will not be done (mis-specified, superseded, abandoned)")
@@ -2288,9 +2369,10 @@ def main(argv=None):
             p.add_argument("--before", nargs="*", default=None, help="roles to run before the work (their findings must be accepted first): --before quibble")
             p.add_argument("--after", nargs="*", default=None, help="roles to run after the checks pass, before the gate; their findings go to the record: --after newbie")
             p.add_argument("--domain", default=None, help="what kind of artifact the task makes (code, site, plan, ...): carried in every request, so a worker reads it in that domain's terms")
+            p.add_argument("--requires", nargs="*", default=None, choices=list(REQUIRES), help="what the work requires of the sandbox its hands run in (network, loopback): sent as the request's `needs`; a member that cannot give it refuses before starting")
     args = ap.parse_args(argv)
     return {"init": cmd_init, "status": cmd_status, "run": cmd_run, "confirm": cmd_confirm, "recheck": cmd_recheck, "accept": cmd_accept, "retry": cmd_retry,
-            "add": cmd_add, "claim": cmd_claim, "drop": cmd_drop, "unstage": cmd_unstage, "close": cmd_close, "report": cmd_report, "delegate": cmd_delegate}[args.cmd](args)
+            "add": cmd_add, "claim": cmd_claim, "take": cmd_take, "drop": cmd_drop, "unstage": cmd_unstage, "close": cmd_close, "report": cmd_report, "delegate": cmd_delegate}[args.cmd](args)
 
 
 if __name__ == "__main__":
