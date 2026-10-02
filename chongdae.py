@@ -4,10 +4,15 @@
   init  --merge [--base REV]            after merging branches: the merge plan — recheck (+ coherence when the lock declares that role) behind a human gate
   init  --session [--goal "..."]        a session run: no plan, tasks added as the work goes (`add`), closed when the session ends (`close`)
   init  ... --worktree                  the run gets its own worktree + branch under .chongdae/wt/ (the shared tree may have other workers); `close` commits and merges it back — a conflict or red recheck becomes a merge run
-  add   <id> [--brief ..] [--closes Q..] [--check ARGV]... [--tests F]... [--gate human] [--role R [--why ..]]   a task in the session run; the start snapshot is taken now.
-                                        The lock says who does it (checks -> implementer, new tests -> nitpick, else the session); `--role session --why` takes one back, recorded
+  add   <id> [--brief ..] [--closes Q..] [--check ARGV]... [--tests F]... [--requires CAP]... [--gate human] [--role R [--why ..]]   a task in the session run;
+                                        the start snapshot is taken now. The lock says who does it (checks -> implementer, new tests -> nitpick, else the
+                                        session; `<role>@<cap>` for a task that --requires cap); `--role session --why` takes one back, recorded.
+                                        --tests: what a nitpick task writes, what a task with --check may not change — `add` says which
   claim <id> [--by NAME]                take a task (defaults to git user.name); `run` skips tasks claimed by someone else
   drop  <id> --why WHY [--by NAME]      a session task that will not be done: leaves the open set, stays in the record with the reason
+  dispute <build> --tests F... --why WHY [--by NAME | --delegated WHY]   a build's protected tests contradict the contract: the task
+                                        that wrote them is reopened to amend them (or a tests task is made); the build then takes the
+                                        amended files as its contract. A provider's build disputes in its answer (`disputed-tests`)
   close [--target DIR] [--run ID]       end a session run (open tasks recorded as such): the lock's `reviewer` role runs and what it wrote goes into the
                                         close commit; a worktree run merges back — a completed plan run too
   report [--since REV]                  what this record says a reviewer should see, as `dwitbuk/findings@1` on stdout: changes no run
@@ -23,7 +28,8 @@
   delegate --scope confirm,accept,... --why "..." --by NAME [--run ID]   declare a batch pre-approval once, as its own judgment; later
                                         judgments reference it: `--delegated D-xxxx` (recorded as {ref}, not the words repeated)
   accept  <task> [--by NAME | --delegated WHY]   a human accepts decisions a provider made beyond the contract (after writing them into the plan)
-  retry   <task> [--by NAME | --delegated WHY]   a human sends a stopped task (blocked, failed, no response) out again; the next call gets the earlier attempts
+  retry   <task> [--by NAME | --delegated WHY] [--requires CAP..]   a human sends a stopped task (blocked, failed, no response) out again; the next call
+                                        gets the earlier attempts. --requires: the sandbox lacked CAP — the task says so now, and goes to `<role>@<cap>` if locked
   recheck [--target DIR]                after a merge: re-run every completed run's checks on this tree. exit 1 if any is red now
 
 A plan may declare a `verifier` role (providers.verifier — a command; never the hands that built). After a task's checks pass and
@@ -34,7 +40,10 @@ them is rejected. A gate `{"human": true, "delegate": "after-verifier"}` refuses
 chongdae has no brain. It does not write questions, plans or code. When a task's provider is `session`, it stops and asks the
 session agent (the brain) to produce the artifact; then it checks the artifact's shape and stops again for the human.
 Roles are names; who provides them comes from hunsu.lock.json `roles` (or the plan's own `providers`). A role with no
-provider is skipped and recorded as a non-claim — never substituted.
+provider is skipped and recorded as a non-claim — never substituted. A role may hold capability alternates, `<role>@<cap>[+<cap>]`
+(`implementer@loopback`: the same member on a host whose sandbox can bind a port): a task that `requires` capabilities goes to the
+alternate covering them (smallest set), else to the plain role; the record says which key (`performed_by.as`).
+The engine and the hooks anchor to the project — the nearest directory holding `.chongdae/` — not to the shell's directory.
 Artifacts a task produces live in the project (task `path` is project-relative). `.chongdae/` holds only how a run went:
 `plan.json` (the intent), `state.json` (status), `tasks/<id>.json` (one file per task, so two people's work on one run merges),
 `asked/` and `contract/` (what each provider was asked) — the record; and under `local/`, ignored, the work this machine
@@ -236,6 +245,45 @@ def run_dir(target, run_id=None):
         return match[0]
     running = [r for r in runs if load_state(r).get("status") == "running"]
     return (running or runs or [None])[-1]
+
+
+def record_root(start):
+    """The nearest directory at or above `start` that holds a record (`.chongdae/`), or None. A run's worktree holds its own
+    record, so a path inside `.chongdae/wt/<run>/` finds the worktree, not the main tree around it."""
+    p = os.path.abspath(start)
+    while True:
+        if os.path.isdir(os.path.join(p, RUNS)):
+            return p
+        up = os.path.dirname(p)
+        if up == p:
+            return None
+        p = up
+
+
+def project_root(start):
+    """The project a shell's directory belongs to: the nearest ancestor holding `.chongdae/`, else git's top level, else `start`.
+    A hook's `cwd` is the shell's: after `cd tests` it was `<project>/tests`, the write hook found no run there and refused
+    writes during a running run (guin-site, 2026-10-02)."""
+    import subprocess
+    found = record_root(start)
+    if found:
+        return found
+    try:
+        top = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=start, capture_output=True, text=True)
+        if top.returncode == 0 and top.stdout.strip():
+            # git names it resolved (/private/var/… for /var/…): the same directory in the caller's spelling, so a file path
+            # given in that spelling is still inside it
+            real, p = os.path.realpath(top.stdout.strip()), os.path.abspath(start)
+            while True:
+                if os.path.realpath(p) == real:
+                    return p
+                up = os.path.dirname(p)
+                if up == p:
+                    return real
+                p = up
+    except OSError:
+        pass
+    return os.path.abspath(start)
 
 
 def me(target):
@@ -591,6 +639,30 @@ def providers(target, plan):
     lock = load(os.path.join(target, "hunsu.lock.json"))
     out = dict(lock.get("roles", {}))
     out.update(plan.get("providers", {}))
+    return out
+
+
+def hire(prov, task):
+    """(the lock's key, its provider) for a task: a role may hold capability alternates — `implementer@loopback`, the same
+    member on a host whose sandbox can bind a port (`<role>@<cap>[+<cap>]`). A task that `requires` capabilities goes to the
+    alternate whose capabilities cover them (the smallest such set, then by name); otherwise, and for a task that requires
+    nothing, to the plain role as before. guin-site, 2026-10-02: 14 of 15 tasks were self-performed because every hired role
+    ran on a host whose sandbox could not bind the local port its tests needed."""
+    role, need = task.get("role"), set(task.get("requires") or [])
+    if need:
+        fits = sorted((len(caps), key) for key, caps in alternates(prov, role) if need <= caps)
+        if fits:
+            return fits[0][1], prov[fits[0][1]]
+    return role, prov.get(role)
+
+
+def alternates(prov, role):
+    """[(key, capabilities)] — the lock's `<role>@<cap>[+<cap>]` keys for `role`."""
+    out = []
+    for key in prov:
+        base, at, caps = str(key).partition("@")
+        if at and base == role and caps:
+            out.append((key, set(c for c in caps.split("+") if c)))
     return out
 
 
@@ -1310,7 +1382,7 @@ def cmd_run(args):
         print("run %s is %s" % (os.path.basename(d), state["status"]))
         return 0
     ctx = {"args": args, "target": target, "d": d, "plan": plan, "state": state, "providers": providers(target, plan),
-           "me": me(target), "claimed_now": set()}   # claimed_now: files the tasks completed in this call recorded as theirs
+           "me": me(target), "claimed_now": set(), "waited": False}   # claimed_now: files the tasks completed in this call recorded as theirs
     for task in all_tasks(plan, state):
         ts = state["tasks"][task["id"]]
         if ts["status"] in ("done", "skipped", "dropped"):
@@ -1320,8 +1392,18 @@ def cmd_run(args):
         if ts.get("claimed_by") and ts["claimed_by"] != ctx["me"]:
             print("  %s is claimed by %s — not this machine's to advance" % (task["id"], ts["claimed_by"]))
             continue
+        if ts.get("rebaseline"):
+            # this build's tests were disputed: it waits for the task amending them, then takes the amended files as its
+            # contract — the next judgment keeps the fix instead of restoring what the dispute was about
+            amenders = amending_tasks(plan, state, task, ts["rebaseline"])
+            if amenders:
+                ctx["waited"] = True
+                print("  %s waits for %s to amend %s" % (task["id"], ", ".join(amenders), ", ".join(ts["rebaseline"])))
+                continue
+            rebaseline(target, d, task, ts)
+            save_state(d, state)
         # a task the session took over (`take`) is the session's from then on, whoever the lock hired for its role
-        who = "session" if ts.get("taken") else ctx["providers"].get(task["role"])
+        who = "session" if ts.get("taken") else hire(ctx["providers"], task)[1]
         if who is None:
             if task.get("optional"):
                 ts["status"] = "skipped"
@@ -1329,7 +1411,9 @@ def cmd_run(args):
                 save_state(d, state)
                 print("  skipped %s (role %s has no provider) — recorded as a non-claim" % (task["id"], task["role"]))
                 continue
-            return stop("role %r has no provider — declare one in hunsu.json `roles` (then lock) or in the plan's `providers`" % task["role"])
+            alts = [k for k, _ in alternates(ctx["providers"], task["role"])]
+            return stop("role %r has no provider — declare one in hunsu.json `roles` (then lock) or in the plan's `providers`%s"
+                        % (task["role"], " (the lock has %s, for tasks that require those capabilities: `chongdae retry %s --requires CAP`)" % (", ".join(alts), task["id"]) if alts else ""))
         # task paths are project-relative: artifacts belong to the project, .chongdae holds only how the run went
         path = os.path.join(target, task["path"]) if task.get("path") else None
         if "start" not in ts:
@@ -1363,6 +1447,11 @@ def cmd_run(args):
         ts["done"] = stamp()   # when it became done: `show` tells a run's durations from it
         save_state(d, state)
         print("  done %s" % task["id"])
+    if ctx["waited"] and not any(state["tasks"][t["id"]].get("rebaseline") and state["tasks"][t["id"]]["status"] == "todo"
+                                 and amending_tasks(plan, state, t, state["tasks"][t["id"]]["rebaseline"]) for t in all_tasks(plan, state)):
+        # a build passed over while its tests were amended by a task later in the order: the amendment is done now
+        setattr(args, "continuing", True)
+        return cmd_run(args)
     return end_of_pass(ctx)
 
 
@@ -1372,13 +1461,6 @@ def run_hands(ctx, task, ts, who):
     over a check's spelling against chongdae's own run of the checks, a `blocked` or unfinished answer to a person,
     decisions beyond the contract to a person's `accept`."""
     args, target, d, state, plan = ctx["args"], ctx["target"], ctx["d"], ctx["state"], ctx["plan"]
-    if ts.get("rebaseline"):
-        # the tests this build disputed were rewritten by the task that owns them; they are the contract again
-        now = dirty(target) or {}
-        for f in ts["rebaseline"]:
-            ts.setdefault("start", {})[f] = now.get(f) or file_hash(target, f)
-        ts.setdefault("rebaselined", []).append({"tests": ts.pop("rebaseline"), **stamp()})
-        save_state(d, state)
     if not ts.get("response"):
         code, response, before = spawn(target, d, task, who, plan, ts.get("attempts", []),
                                        extra={"amending": ts["amending"]} if ts.get("amending") else None)
@@ -1390,6 +1472,9 @@ def run_hands(ctx, task, ts, who):
         ts["answered"] = stamp()   # when the hands' answer came back: the attempt's end, for `show`
         ts["touched_by_provider"] = touched_files(target, before)
         ts["performed_by"] = against_run(with_trace(performer(who, argv=who if isinstance(who, list) else [who], response=response, target=target), response, d, target), state)   # the un-resolved argv: portable, names host/model without machine paths
+        key = hire(ctx["providers"], task)[0]
+        if key != task["role"]:
+            ts["performed_by"]["as"] = key   # the lock's capability alternate this task went to (`implementer@loopback`)
         if native_argv(target, who):
             ts.setdefault("non-claims", []).append("%s: the answer was written by the session on a native subagent's behalf; chongdae did not observe the subagent" % task["id"])
         save_state(d, state)
@@ -1398,18 +1483,22 @@ def run_hands(ctx, task, ts, who):
              "tree and the session will finish it, `chongdae take %s --why WHY` (checks, eyes and gate as for any task; a drop would record done work as not done)"
              % (task["id"], task["id"]))
     unattempted = [n for n in response.get("non-claims", []) if str(n).startswith("not attempted:")]
-    if response.get("status") == "blocked" and unattempted:
-        # the member refused before starting: the task requires what its sandbox cannot give (`requires`). Resending changes
-        # nothing, and it is not a decision the contract lacks — it is a hiring question
-        return stop("%s: %s — hire a member whose sandbox can (hunsu.json `roles`, then lock, then `chongdae retry %s`), "
-                    "or `chongdae take %s --why WHY` and the session does it" % (task["id"], response.get("summary", "the member cannot do this task here"), task["id"], task["id"]),
-                    *unattempted)
+    lacked = sandbox_lacked(response)
+    if (response.get("status") == "blocked" and unattempted) or (response.get("status") in ("blocked", "failed") and lacked is not None):
+        # the member refused before starting (the task requires what its sandbox cannot give), or stopped mid-task because its
+        # sandbox lacked a capability (`sandbox lacked: …`, `lacked: [...]`). Resending to the same member changes nothing, and
+        # it is not a decision the contract lacks — it is a hiring question
+        return hiring_stop(ctx, task, ts, response, lacked if lacked is not None else list(task.get("requires") or []),
+                           unattempted + [n for n in response.get("non-claims", []) if str(n).startswith("sandbox lacked:")])
     if response.get("status") == "blocked" and response.get("disputed-tests"):
         setattr(args, "continuing", True)
         if route_dispute(target, d, state, plan, task, response["disputed-tests"]):
             return cmd_run(args)
     if response.get("status") == "blocked":
-        return stop("%s: the provider stopped — it needs a decision the contract does not give: %s — write it into the plan, %s" % (task["id"], response.get("summary", ""), again),
+        return stop("%s: the provider stopped — it needs a decision the contract does not give: %s — write it into the plan, %s%s" % (
+                        task["id"], response.get("summary", ""), again,
+                        "; it disputes the contract's tests: `chongdae dispute %s --tests FILE... --why WHY` routes them to the task that wrote them" % task["id"]
+                        if response.get("disputed-tests") else ""),
                     *response.get("non-claims", []))
     refused = [n for n in response.get("non-claims", []) if str(n).startswith("checks-ran:")]
     if response.get("status") == "failed" and refused and not ts.get("checks-ran-overruled"):
@@ -1441,6 +1530,47 @@ def run_hands(ctx, task, ts, who):
     return None
 
 
+def sandbox_lacked(response):
+    """The capabilities a member's sandbox lacked mid-task, as hacheong reports them: `lacked: ["loopback"]`, and a non-claim
+    starting `sandbox lacked: `. [] when only the non-claim says so and names no capability chongdae knows; None when
+    neither is there."""
+    said = [str(n) for n in response.get("non-claims") or [] if str(n).startswith("sandbox lacked:")]
+    field = response.get("lacked")
+    if not said and not field:
+        return None
+    caps = [str(c) for c in field] if isinstance(field, list) else ([str(field)] if field else [])
+    for n in said:
+        caps += [c for c in REQUIRES if re.search(r"\b%s\b" % c, n[len("sandbox lacked:"):])]
+    return list(dict.fromkeys(caps))
+
+
+def hiring_stop(ctx, task, ts, response, caps, lines):
+    """A member could not do the task here because of its sandbox: name what it lacked and the ways on — say so on the task
+    (`retry --requires CAP`), which sends it to the lock's `<role>@<cap>` alternate when there is one; declare one when there
+    is none; or the session takes it."""
+    tid, role, prov = task["id"], task["role"], ctx["providers"]
+    have = list(task.get("requires") or [])
+    known = [c for c in caps if c in REQUIRES]
+    want = have + [c for c in known if c not in have]
+    used = (ts.get("performed_by") or {}).get("as") or role
+    alt = hire(prov, {"role": role, "requires": want})[0] if want else role
+    lacks = ", ".join(caps) or "a capability it did not name"
+    ways = []
+    if alt != role and alt != used:
+        ways.append("`chongdae retry %s%s --by NAME | --delegated WHY` sends it to the lock's %s"
+                    % (tid, " --requires " + " ".join(want) if want != have else "", alt))
+    else:
+        if used != role:
+            ways.append("the lock's %s was hired for it and its sandbox lacked it too" % used)
+        if want != have:
+            ways.append("`chongdae retry %s --requires %s --by NAME | --delegated WHY` says on the task what its sandbox must give" % (tid, " ".join(want)))
+        ways.append("hire a member whose sandbox can — `%s@%s` in hunsu.json `roles` (the same member on a host that gives %s), then `hunsu lock` and `chongdae retry %s%s`"
+                    % (role, "+".join(want) or "CAP", "+".join(want) or "it", tid, " --requires " + " ".join(want) if want != have else ""))
+    ways.append("or `chongdae take %s --why WHY` and the session does it" % tid)
+    return stop("%s: %s (%s) — its sandbox lacked %s: a hiring question, not a decision the contract lacks; resending to the same member changes nothing. %s"
+                % (tid, response.get("summary") or "the member cannot do this task here", used, lacks, "; ".join(ways)), *lines)
+
+
 def decide_task(ctx, task, ts, who, path):
     """What makes a task done: its checks passing (a code task), its artifact passing its shape check (a bootstrap task), or
     — with no check — the agent's word, which must at least be the task's own. Then the eyes, then the people hired after,
@@ -1470,6 +1600,14 @@ def decide_task(ctx, task, ts, who, path):
         if code is not None:
             return code
     elif not task.get("path"):
+        if who == "session" and ts.get("amending"):
+            # reopened by a dispute over the tests it wrote: done is the amendment, measured against the tests as the
+            # disputing build protected them — not this task's word that it looked
+            files = sorted({str(x.get("test", "")).split("::")[0].split(" ")[0] for x in ts["amending"] if isinstance(x, dict)})
+            if files and not set(files) & set(touched_files(target, ts.get("start"), ts.get("start-head")) or []):
+                return stop("session agent: %s — its tests were disputed; amend %s as the dispute says, then `chongdae run` (the build that protects "
+                            "them takes the amended files as its contract once this task is done)" % (task["id"], ", ".join(files)),
+                            *["%s: %s" % (x.get("test"), x.get("why")) for x in ts["amending"] if isinstance(x, dict)])
         # a session task with no check: done is the agent's word (a non-claim since `add`). It still has to be the
         # task's own word: a task added ahead of its work would otherwise be done here with the files the task before
         # it changed — a false claim a done task cannot take back
@@ -1492,12 +1630,15 @@ def decide_task(ctx, task, ts, who, path):
     ts["status"] = "produced"
     ts["checks"] = task.get("checks", [])
     ts["touched"] = touched_files(target, ts.get("start"), ts.get("start-head"))   # what this task changed: the reviewer joins runs to files with it
+    earlier = [f for a in ts.get("attempts", []) if a.get("reopened") for f in a.get("touched") or []]
+    if earlier and ts["touched"] is not None:
+        ts["touched"] = sorted(set(ts["touched"]) | set(earlier))   # reopened to amend: what it wrote before is still its own
     ctx["claimed_now"].update(ts["touched"] or [])
     # those files are this task's now: a session task still open measures its own changes from here, not from its `add`
     now = dirty(target) or {}
     for t2 in all_tasks(plan, state):
         other = state["tasks"][t2["id"]]
-        if other is not ts and other.get("status") == "todo" and isinstance(other.get("start"), dict) and prov.get(t2["role"]) == "session":
+        if other is not ts and other.get("status") == "todo" and isinstance(other.get("start"), dict) and (prov.get(t2["role"]) == "session" or other.get("taken")):
             for f in ts["touched"] or []:
                 other["start"][f] = now.get(f) or file_hash(target, f)   # pinned: committed since, it may be clean at a newer HEAD
     if "performed_by" not in ts:
@@ -1724,38 +1865,110 @@ def resend(target, d, state, task_id, retried, message=None):
     return n
 
 
-def route_dispute(target, d, state, plan, task, disputed):
-    """The builder says some of the contract's tests contradict the contract. Tests are not the builder's to change and not a
-    person's to fix by hand between attempts: the task that wrote them is reopened with the dispute (`amending`), and the
-    build waits, re-baselines those tests once they are rewritten, and goes out again. Bounded like any automatic resend.
-    Returns True when routed; False leaves the stop to a person."""
-    files = sorted({str(x.get("test", "")).split("::")[0].split(" ")[0] for x in disputed if isinstance(x, dict)} & set(task.get("tests") or []))
+def disputed_files(disputed):
+    """The files a dispute names: `test_a.py::test_x` -> `test_a.py`."""
+    return sorted({str(x.get("test", "")).split("::")[0].split(" ")[0] for x in disputed if isinstance(x, dict)} - {""})
+
+
+def writes_tests(task):
+    """Is a task's `tests` what it writes (not what it protects)? A nitpick task's are; so are a task's that no check decides
+    (a tests task the session took over, or did itself). A task with a check protects its `tests`: its judgment restores them."""
+    return bool(task.get("tests")) and (task.get("role") == "nitpick" or not task.get("checks"))
+
+
+def tests_writer(plan, state, task, files):
+    """The task that wrote these tests — the newest done one whose `tests` it wrote and that names any of them."""
+    found = [t for t in all_tasks(plan, state) if t.get("id") != task["id"] and writes_tests(t) and set(t.get("tests") or []) & set(files)
+             and state["tasks"].get(t["id"], {}).get("status") == "done"]
+    return found[-1] if found else None
+
+
+def amending_tasks(plan, state, task, files):
+    """The open tasks amending these tests for a dispute: the build that disputed them waits for them."""
+    return [t["id"] for t in all_tasks(plan, state) if t.get("id") != task["id"] and state["tasks"].get(t["id"], {}).get("amending")
+            and state["tasks"][t["id"]]["status"] not in ("done", "skipped", "dropped") and set(t.get("tests") or []) & set(files)]
+
+
+def rebaseline(target, d, task, ts):
+    """The tests this build disputed were amended by the task that owns them; they are the contract again — in the build's
+    start (so the amendment is not read as the build changing them) and in its kept copies (so a judgment that restores
+    the contract's tests restores the amended ones, not what the dispute was about)."""
+    now = dirty(target) or {}
+    files = ts.pop("rebaseline")
+    for f in files:
+        ts.setdefault("start", {})[f] = now.get(f) or file_hash(target, f)
+    keep_contract_tests(target, d, {"id": task["id"], "tests": files})
+    ts.setdefault("rebaselined", []).append({"tests": files, **stamp()})
+
+
+def route_dispute(target, d, state, plan, task, disputed, judgment=None):
+    """Some of the contract's tests contradict the contract. Tests are not the build's to change and not a person's to fix by
+    hand between attempts: the task that wrote them is reopened with the dispute (`amending`), and the build waits,
+    re-baselines those tests once they are amended, and goes out again. `judgment` None: a provider's build said so in its
+    answer — routed by chongdae, bounded like any automatic resend, and only to a writer on record. A judgment (`chongdae
+    dispute`): the session or a person said so — routed as that judgment; with no writer on record, a tests task is made
+    for the lock's nitpick (else the session). Returns the writer's id when routed; None leaves the stop to a person."""
+    files = sorted(set(disputed_files(disputed)) & set(task.get("tests") or []))
     if not files:
-        return False
-    writer = next((t for t in all_tasks(plan, state) if t.get("id") != task["id"] and set(t.get("tests") or []) & set(files)
-                   and state["tasks"].get(t["id"], {}).get("status") == "done"), None)
+        return None
+    writer = tests_writer(plan, state, task, files)
     bts = state["tasks"][task["id"]]
-    routed = sum(1 for a in bts.get("attempts", []) if str((a.get("retried") or {}).get("auto", "")).startswith("tests disputed"))
-    if not writer or routed >= AUTO_RESENDS:
-        return False
+    if judgment is None:
+        routed = sum(1 for a in bts.get("attempts", []) if str((a.get("retried") or {}).get("auto", "")).startswith("tests disputed"))
+        if not writer or routed >= AUTO_RESENDS:
+            return None
+        reopened = {"by": "chongdae", "auto": "tests disputed by %s" % task["id"]}
+    else:
+        reopened = {**{k: v for k, v in judgment.items() if k not in ("at", "chongdae")}, "disputed": "tests disputed by %s" % task["id"]}
+    made = writer is None
+    if made:
+        writer = dispute_tests_task(target, d, state, plan, task, files, disputed)
     wts = state["tasks"][writer["id"]]
-    attempt = {**(wts.pop("response", None) or {}), "reopened": {"by": "chongdae", "auto": "tests disputed by %s" % task["id"], **stamp()},
-               "disputed-tests": disputed, **({"answered": wts.pop("answered")} if "answered" in wts else {})}
-    wts.setdefault("attempts", []).append(attempt)
-    n = len(wts["attempts"])
-    for kind in ("response", "request", "pending", "response.transcript"):
-        ext = "jsonl" if kind.endswith("transcript") else "json"
-        src = work_path(d, "%s.%s.%s" % (writer["id"], kind, ext))
-        if os.path.exists(src):
-            os.replace(src, work_path(d, "%s.%s.%d.%s" % (writer["id"], kind, n, ext)))
+    if not made:
+        attempt = {**(wts.pop("response", None) or {"status": "session"}), "reopened": {**reopened, **stamp()}, "disputed-tests": disputed,
+                   **{k: wts.pop(k) for k in ("answered", "done", "touched") if k in wts}}
+        wts.setdefault("attempts", []).append(attempt)
+        n = len(wts["attempts"])
+        for kind in ("response", "request", "pending", "response.transcript"):
+            ext = "jsonl" if kind.endswith("transcript") else "json"
+            src = work_path(d, "%s.%s.%s" % (writer["id"], kind, ext))
+            if os.path.exists(src):
+                os.replace(src, work_path(d, "%s.%s.%d.%s" % (writer["id"], kind, n, ext)))
     wts["status"] = "todo"
     wts["amending"] = disputed
     wts.pop("reported", None)
+    # the amendment is measured from now, with the disputed files as the build protects them: a fix the session already made
+    # in the tree (and a judgment then restored, or not yet) counts as the amendment
+    wts["start"], wts["start-head"] = dirty(target) or {}, head_sha(target)
+    for f in files:
+        kept = work_path(d, os.path.join("contract-tests", task["id"], f))
+        if os.path.isfile(kept):
+            wts["start"][f] = file_hash(d, os.path.relpath(kept, d))
     bts["rebaseline"] = files
-    resend(target, d, state, task["id"], {"by": "chongdae", "auto": "tests disputed; %s reopened to amend %s" % (writer["id"], ", ".join(files))},
-           "dispute %s: %s reopened to amend %s" % (task["id"], writer["id"], ", ".join(files)))
-    print("  %s disputed %d test(s) in %s: %s reopened with the dispute; the build waits and goes out again after" % (task["id"], len(disputed), ", ".join(files), writer["id"]))
-    return True
+    what = "%s %s to amend %s" % (writer["id"], "made" if made else "reopened", ", ".join(files))
+    retried = {"by": "chongdae", "auto": "tests disputed; " + what} if judgment is None else {**judgment, "disputed": "tests disputed; " + what}
+    resend(target, d, state, task["id"], retried, "dispute %s: %s" % (task["id"], what))
+    print("  %s disputed %d test(s) in %s: %s %s with the dispute (%s does it); the build waits and goes out again after"
+          % (task["id"], len(disputed), ", ".join(files), writer["id"], "made" if made else "reopened",
+             "the session" if wts.get("taken") or writer.get("role") == "session" else writer.get("role")))
+    return writer["id"]
+
+
+def dispute_tests_task(target, d, state, plan, task, files, disputed):
+    """No task on record wrote the disputed tests: a tests task for them, the lock's nitpick when it declares one, else the
+    session's — named after the build, its brief the dispute."""
+    role = "nitpick" if providers(target, plan).get("nitpick") is not None else "session"
+    tid, i = task["id"] + "-tests", 1
+    while tid in state["tasks"] or any(t.get("id") == tid for t in plan.get("tasks", [])):
+        i += 1
+        tid = "%s-tests-%d" % (task["id"], i)
+    tdef = {"id": tid, "role": role, "brief": "Amend %s: %s disputed them — %s" % (", ".join(files), task["id"], "; ".join(
+                "%s: %s" % (x.get("test"), x.get("why")) for x in disputed if isinstance(x, dict))),
+            "closes": list(task.get("closes") or []), "needs": [], "checks": [], "tests": files, "gate": None,
+            **({"domain": task["domain"]} if task.get("domain") else {})}
+    state["tasks"][tid] = {"status": "todo", "def": tdef, "seq": 1 + max([t.get("seq", 0) for t in state["tasks"].values()] or [0]),
+                           "added": now_utc(), "non-claims": ["no check decides this task; done means the agent said so"]}
+    return tdef
 
 
 def auto_resend(target, d, state, task_id, why):
@@ -1876,7 +2089,7 @@ def cmd_add(args):
     # delegation, so a record can show how much of the work the brain did with its own hands.
     declared = providers(args.target, plan)
     due = "implementer" if checks else ("nitpick" if args.tests and not all(os.path.exists(os.path.join(args.target, f)) for f in args.tests) else None)
-    due = due if due in declared else None
+    due = due if hire(declared, {"role": due, "requires": args.requires})[1] is not None else None
     role, own = args.role, None
     if role is None:
         role = due or "session"
@@ -1904,6 +2117,20 @@ def cmd_add(args):
         problems += ["--tests %s: does not exist yet — a session build's start is taken at `add`, so writing its tests after "
                      "would read as the build changing them; write the tests in their own task first (`add`, work, `run`), "
                      "then add this one" % f for f in task["tests"] if not os.path.exists(os.path.join(args.target, f))]
+    # `--tests` is two things by role: the tests a task writes (nitpick's, or a task no check decides), or the files a build
+    # may not change — its judgment restores them. A task that changes tests cannot also protect them: guin-site's
+    # `tests-fix` named the files it corrected with --tests, and its own judgment restored its fix (2026-10-02)
+    protects = bool(task["tests"]) and not writes_tests(task)
+    if protects:
+        for t2 in all_tasks(plan, state):
+            o = state["tasks"].get(t2["id"], {})
+            restored = set(((o.get("rejected") or {}).get("restored")) or []) & set(task["tests"])
+            if o.get("status") == "todo" and restored and o.get("rejected", {}).get("by") == "contract":
+                problems.append("--tests %s: %s's judgment restored %s because it changed them — a task with a check protects its --tests the same way, "
+                                "so a task that corrects them would have its own fix restored too. If they contradict the contract: "
+                                "`chongdae dispute %s --tests %s --why WHY` reopens the task that wrote them (or makes one) and %s keeps the fix; "
+                                "if this task builds against them as they are, drop %s first"
+                                % (" ".join(task["tests"]), t2["id"], ", ".join(sorted(restored)), t2["id"], " ".join(sorted(restored)), t2["id"], t2["id"]))
     if problems:
         raise SystemExit("task rejected:\n  " + "\n  ".join(problems))
     ts = {"status": "todo", "def": task, "seq": 1 + max([t.get("seq", 0) for t in state["tasks"].values()] or [0]), "added": now_utc()}
@@ -1922,7 +2149,21 @@ def cmd_add(args):
         print("added %s to %s%s%s. Work, then `chongdae run`." % (args.id, os.path.basename(d), " (no checks — done will be a claim, recorded as such)" if not task["checks"] else "",
                                                                   " — the session does it itself, instead of the lock's %s: recorded" % own["instead-of"] if own else ""))
     else:
-        print("added %s to %s — %s does it (%s). `chongdae run` sends it out." % (args.id, os.path.basename(d), task["role"], "the lock's provider" if args.role is None else "as asked"))
+        key = hire(declared, task)[0]
+        print("added %s to %s — %s does it (%s). `chongdae run` sends it out." % (args.id, os.path.basename(d), key,
+              ("the lock's alternate for %s" % ", ".join(task["requires"])) if key != task["role"] else "the lock's provider" if args.role is None else "as asked"))
+    if task["tests"]:
+        if protects:
+            print("  --tests: files %s may not change — %s (the contract decides, not the builder). A task that corrects tests "
+                  "names them without a check; when a build's tests are wrong, `chongdae dispute %s --tests FILE... --why WHY`."
+                  % (args.id, "its judgment restores any change it makes to them", args.id))
+            others = [t2["id"] for t2 in all_tasks(plan, state) if t2["id"] != args.id and state["tasks"].get(t2["id"], {}).get("status") == "todo"
+                      and set(t2.get("tests") or []) & set(task["tests"]) and not writes_tests(t2)]
+            if others:
+                print("  note: %s protect%s %s too" % (", ".join(others), "s" if len(others) == 1 else "", ", ".join(sorted(set(task["tests"]) & {f for t2 in all_tasks(plan, state) if t2["id"] in others for f in t2.get("tests") or []}))))
+        else:
+            print("  --tests: the tests %s writes (%s) — a build that names them protects them; this task may change them."
+                  % (args.id, "the lock gives it to nitpick" if task["role"] == "nitpick" else "no check decides it"))
     return 0
 
 
@@ -2128,8 +2369,67 @@ def cmd_retry(args):
         raise SystemExit("%s is not stopped on a provider response or a rejection (status %s, response %s)" % (args.task, ts.get("status"), (ts.get("response") or {}).get("status")))
     if not (args.by or args.delegated):
         raise SystemExit("say who sent it again (--by) or why the human delegated it (--delegated)")
-    n = resend(args.target, d, state, args.task, {"by": args.by} if args.by else delegation_record(d, args.delegated, "retry"))
-    print("retry %s: attempt %d kept in the record; `chongdae run` sends the task out again with it attached" % (args.task, n))
+    judgment = {"by": args.by} if args.by else delegation_record(d, args.delegated, "retry")
+    plan, to = load(os.path.join(d, "plan.json")), ""
+    if args.requires:
+        # what the work requires of its sandbox, said on the task now that a member's sandbox lacked it: the request names it
+        # (`needs`), and the lock's `<role>@<cap>` alternate, when it has one, is hired instead of the plain role
+        task = ts["def"] if "def" in ts else next((t for t in plan.get("tasks", []) if t.get("id") == args.task), None)
+        if task is None:
+            raise SystemExit("no task %s in the plan" % args.task)
+        task["requires"] = list(dict.fromkeys(list(task.get("requires") or []) + list(args.requires)))
+        judgment["requires"] = task["requires"]
+        if "def" not in ts:
+            save(os.path.join(d, "plan.json"), plan)
+        key = hire(providers(args.target, plan), task)[0]
+        to = " — it requires %s now; %s" % (", ".join(task["requires"]), "the lock's %s does it" % key if key != task["role"]
+                                             else "the lock has no %s@%s, so the plain %s does it again" % (task["role"], "+".join(task["requires"]), task["role"]))
+    n = resend(args.target, d, state, args.task, judgment)
+    print("retry %s: attempt %d kept in the record%s; `chongdae run` sends the task out again with it attached" % (args.task, n, to))
+    return 0
+
+
+def cmd_dispute(args):
+    """The session (or a person) says some of a build's protected tests contradict the contract — the route a provider's
+    build has in its answer's `disputed-tests`. guin-site, 2026-10-02: a session build found two test errors and a parser
+    the machine could not load; every judgment of the build restored the tests, so the fix could not land, and a fix task
+    added with `--tests` protected the very files it fixed. Recorded as a judgment; the task that wrote those tests is
+    reopened with the dispute (or a tests task is made when none is on record), and once it is done the build takes the
+    amended files as its contract, so its next judgment keeps the fix."""
+    d = run_dir(args.target)
+    plan, state = (load(os.path.join(d, "plan.json")), load_state(d)) if d else ({}, {})
+    if state.get("status") != "running":
+        raise SystemExit("no run in progress")
+    ts = state["tasks"].get(args.task)
+    task = next((t for t in all_tasks(plan, state) if t.get("id") == args.task), None)
+    if not ts or not task:
+        raise SystemExit("no task %s" % args.task)
+    if ts["status"] != "todo":
+        raise SystemExit("%s is %s — a dispute is about the contract of an open build" % (args.task, ts["status"]))
+    protected = list(task.get("tests") or []) if not writes_tests(task) else []
+    if not protected:
+        raise SystemExit("%s protects no tests (it has %s) — nothing of its contract to dispute; a task that writes tests changes them itself"
+                         % (args.task, "no --tests" if not task.get("tests") else "no check: its --tests are what it writes"))
+    files = []
+    for f in args.tests:
+        f = f.replace("\\", "/").strip()
+        while f.startswith("./"):
+            f = f[2:]
+        files.append(f.split("::")[0])
+    stray = [f for f in files if f not in protected]
+    if stray:
+        raise SystemExit("%s: not among %s's protected tests (%s)" % (", ".join(stray), args.task, ", ".join(protected)))
+    judgment = {**({"delegated": delegation_record(d, args.delegated, "dispute")["delegated"]} if args.delegated else
+                   {"by": args.by if args.by is not None else me(args.target)}), "why": args.why}
+    owner = tests_writer(plan, state, task, files)
+    if owner is None and amending_tasks(plan, state, task, files):
+        raise SystemExit("%s: already being amended by %s — `chongdae run` once it is done" % (", ".join(files), ", ".join(amending_tasks(plan, state, task, files))))
+    writer = route_dispute(args.target, d, state, plan, task, [{"test": f, "why": args.why, "by": "session"} for f in files], judgment=judgment)
+    wdef = next(t for t in all_tasks(plan, state) if t.get("id") == writer)
+    hands = "the session" if state["tasks"][writer].get("taken") or hire(providers(args.target, plan), wdef)[1] == "session" else wdef.get("role")
+    print("dispute %s: %s %s to amend %s — %s; %s waits for it, then takes the amended tests as its contract. `chongdae run` next."
+          % (args.task, writer, "made" if owner is None else "reopened", ", ".join(files),
+             "the session amends them (`run` stops for it until they change)" if hands == "the session" else "%s amends them" % hands, args.task))
     return 0
 
 
@@ -2439,12 +2739,14 @@ def judged_by(run_d, j):
     if not isinstance(j, dict):
         return "?"
     if "delegated" in j:
-        return "delegated: " + deleg_words(run_d, j["delegated"])
+        extra = [x for x in ("%s: %s" % (k, j[k] if not isinstance(j[k], list) else ", ".join(j[k])) for k in ("disputed", "why", "requires") if j.get(k))]
+        return "delegated: " + deleg_words(run_d, j["delegated"]) + (" (%s)" % "; ".join(extra) if extra else "")
     if j.get("auto"):
         return "by %s (auto: %s)" % (j.get("by", "chongdae"), j["auto"])
     if j.get("taken"):
         return "by %s (taken: %s)" % (j.get("by", "?"), j["taken"])
-    return "by %s" % (j.get("by") or "?")
+    extra = [x for x in ("%s: %s" % (k, j[k] if not isinstance(j[k], list) else ", ".join(j[k])) for k in ("disputed", "why", "requires") if j.get(k))]
+    return "by %s%s" % (j.get("by") or "?", " (%s)" % "; ".join(extra) if extra else "")
 
 
 def author_text(by):
@@ -2498,8 +2800,10 @@ def task_story(run_d, task, ts, day, run_end):
     if isinstance(ts.get("taken"), dict):
         tk = ts["taken"]
         out.append("  taken from %s by %s at %s: %s" % (tk.get("from"), tk.get("by"), when(tk.get("at"), day), tk.get("why")))
+    if ts.get("amending") and ts.get("status") not in ("done", "dropped", "skipped"):
+        out.append("  amending (disputed): %s" % "; ".join("%s — %s" % (x.get("test"), x.get("why")) for x in ts["amending"] if isinstance(x, dict)))
     if ts.get("performed_by"):
-        hands = "session" if ts.get("taken") or role == "session" else role
+        hands = "session" if ts.get("taken") or role == "session" else (ts["performed_by"].get("as") or role)
         out.append("  who: %s%s" % ("" if hands == "session" else hands + " → ", author_text(ts["performed_by"])))
     # the attempts: each one's answer, its verdict with every finding, and the judgment that sent it again
     attempts = list(ts.get("attempts") or [])
@@ -2677,7 +2981,7 @@ def cmd_show(args):
             print("%s  %s  %s — %s" % (os.path.basename(r), when(created) if created else "?", state.get("status", "?"), plan.get("goal", "")))
             for t, ts in reversed(hits):
                 found += 1
-                hands = "session (taken from %s)" % t.get("role") if ts.get("taken") else t.get("role", "?")
+                hands = "session (taken from %s)" % t.get("role") if ts.get("taken") else ((ts.get("performed_by") or {}).get("as") or t.get("role", "?"))
                 print("  %s  %s  %s%s — %s" % (t["id"], ts.get("status", "?"), "" if hands == "session" else hands + " → ", author_text(ts.get("performed_by")), t.get("brief") or "(no brief)"))
                 if want not in (ts.get("touched") or []):
                     print("    touched there: %s" % ", ".join(f for f in ts["touched"] if f.startswith(want + "/")))
@@ -2735,11 +3039,11 @@ def cmd_show(args):
 # ---------------------------------------------------------------- main
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(prog="chongdae", description=__doc__)
+    ap = argparse.ArgumentParser(prog="chongdae", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
-    for name in ("init", "status", "run", "confirm", "accept", "retry", "recheck", "add", "claim", "take", "drop", "unstage", "close", "report", "delegate", "show"):
+    for name in ("init", "status", "run", "confirm", "accept", "retry", "recheck", "add", "claim", "take", "drop", "dispute", "unstage", "close", "report", "delegate", "show"):
         p = sub.add_parser(name)
-        p.add_argument("--target", default=".")
+        p.add_argument("--target", default=None, help="the project (default: the nearest directory at or above this one that holds .chongdae/, else this one)")
         if name == "init":
             p.add_argument("--goal", default=None)
             p.add_argument("--plan", default=None, help="a plan the session agent wrote (chongdae/plan@1): a path, or `-` for stdin (no file to write before the run exists); without it, the bootstrap plan")
@@ -2754,6 +3058,14 @@ def main(argv=None):
             p.add_argument("task")
             p.add_argument("--by", default=None)
             p.add_argument("--delegated", default=None)
+        if name == "retry":
+            p.add_argument("--requires", nargs="+", default=None, choices=list(REQUIRES), help="say on the task what its sandbox must give (a member's sandbox lacked it): added to its `requires`; the lock's `<role>@<cap>` alternate, when it has one, is hired")
+        if name == "dispute":
+            p.add_argument("task", help="the open build whose protected tests are wrong")
+            p.add_argument("--tests", nargs="+", required=True, help="the protected test files that contradict the contract (FILE or FILE::test)")
+            p.add_argument("--why", required=True, help="what in them contradicts the contract (or cannot run here) — the brief of the amendment")
+            p.add_argument("--by", default=None, help="who disputes (default: git user.name)")
+            p.add_argument("--delegated", default=None, help="instead of --by: why the human handed this off (or D-xxxx)")
         if name == "report":
             p.add_argument("--since", default=None, help="the revision the last review covered; changes since it are checked against the runs' `touched`")
         if name == "show":
@@ -2790,15 +3102,18 @@ def main(argv=None):
             p.add_argument("--brief", default=None)
             p.add_argument("--closes", nargs="*", default=None)
             p.add_argument("--check", action="append", default=None, help="a check argv (quoted); repeatable")
-            p.add_argument("--tests", nargs="*", default=None, help="the contract's test files, protected from the build")
+            p.add_argument("--tests", nargs="*", default=None, help="test files. For a nitpick task (or one no --check decides): the tests it writes. For a task with --check: files it may not change — its judgment restores them (`add` says which). A task that corrects a build's tests does not protect them: `chongdae dispute BUILD --tests F --why`")
             p.add_argument("--gate", choices=["human"], default=None)
             p.add_argument("--before", nargs="*", default=None, help="roles to run before the work (their findings must be accepted first): --before quibble")
             p.add_argument("--after", nargs="*", default=None, help="roles to run after the checks pass, before the gate; their findings go to the record: --after newbie")
             p.add_argument("--domain", default=None, help="what kind of artifact the task makes (code, site, plan, ...): carried in every request, so a worker reads it in that domain's terms")
-            p.add_argument("--requires", nargs="*", default=None, choices=list(REQUIRES), help="what the work requires of the sandbox its hands run in (network, loopback): sent as the request's `needs`; a member that cannot give it refuses before starting")
+            p.add_argument("--requires", nargs="*", default=None, choices=list(REQUIRES), help="what the work requires of the sandbox its hands run in (network, loopback): sent as the request's `needs`; a member that cannot give it refuses before starting. The lock's `<role>@<cap>[+<cap>]` alternate whose capabilities cover it is hired instead of the plain role")
     args = ap.parse_args(argv)
+    if args.target is None:
+        # the shell's directory is not the project: `cd tests` and then `chongdae run` found no run there
+        args.target = record_root(os.getcwd()) or "."
     return {"init": cmd_init, "status": cmd_status, "run": cmd_run, "confirm": cmd_confirm, "recheck": cmd_recheck, "accept": cmd_accept, "retry": cmd_retry,
-            "add": cmd_add, "claim": cmd_claim, "take": cmd_take, "drop": cmd_drop, "unstage": cmd_unstage, "close": cmd_close, "report": cmd_report, "delegate": cmd_delegate, "show": cmd_show}[args.cmd](args)
+            "add": cmd_add, "claim": cmd_claim, "take": cmd_take, "drop": cmd_drop, "dispute": cmd_dispute, "unstage": cmd_unstage, "close": cmd_close, "report": cmd_report, "delegate": cmd_delegate, "show": cmd_show}[args.cmd](args)
 
 
 if __name__ == "__main__":

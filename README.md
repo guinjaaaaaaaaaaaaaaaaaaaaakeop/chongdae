@@ -33,7 +33,7 @@ main and `init --merge`, and the worktree stays until the merge landed.
 
 ## Git as notary
 
-Every judgment is one record-only commit, made by the engine itself: `init`, `confirm`, `accept`, `retry`, `drop`,
+Every judgment is one record-only commit, made by the engine itself: `init`, `confirm`, `accept`, `retry`, `dispute`, `drop`,
 `close`, `complete`, and a worktree run's landing each commit `.chongdae/run-<id>/` — that path pinned, so someone
 else's work in flight is never swept in (the one addition: what the reviewer wrote when the run ended goes into the
 close commit). `init` and `close` name the run's goal in the commit, so the log reads without opening the record.
@@ -50,7 +50,11 @@ approximate. `git log -- .chongdae/run-<id>` joins the record to the changes.
 
 ## Commands
 
-Each runs the engine and shows its output. `chongdae.py --help` for arguments; every command takes `--target DIR`.
+Each runs the engine and shows its output. `chongdae.py --help` for arguments; every command takes `--target DIR` —
+by default the nearest directory at or above the shell's that holds `.chongdae/` (a `cd tests` does not lose the run),
+else the shell's own. The hooks anchor the same way: their payload's `cwd` is the shell's, so the project is the nearest
+ancestor holding `.chongdae/`, else git's top level (guin-site, 2026-10-02: after `cd tests` the write hook found no run
+there and would refuse writes during a running run). A shell inside a run's worktree anchors to that worktree.
 
 ### `/chongdae:init`
 
@@ -60,13 +64,21 @@ hired get those sections as the contract), the bootstrap plan (`--goal`), `--pla
 
 ### `/chongdae:add`
 
-A task in the session run — `--brief`, `--closes`, `--check` (repeatable argv), `--tests` (protected files), `--gate
-human`; its start snapshot is taken now. Who does it is the lock's to say: a task with `--check` goes to the lock's
+A task in the session run — `--brief`, `--closes`, `--check` (repeatable argv), `--tests`, `--gate
+human`; its start snapshot is taken now. `--tests` is two things, and `add` prints which: for a nitpick task (or any task
+no `--check` decides) the tests it writes; for a task with a `--check`, files it may not change — its judgment restores
+them if it does. A task that corrects tests therefore names them without a check: guin-site's `tests-fix` (2026-10-02)
+named the files it corrected with `--tests` and a check, and its own judgment restored its fix. `add` refuses that shape
+when an open build's judgment just restored those files, and points at `dispute`. Who does it is the lock's to say: a task with `--check` goes to the lock's
 `implementer`, a task that writes `--tests` that do not exist yet to its `nitpick`, anything else (a plan section, a
 model) to this session. `--requires network loopback` says what the work requires of the sandbox its hands run in: it
 travels in the request as `needs` (a task's `needs` in a plan already names the tasks it waits for), and a hired member
 that cannot give it refuses before starting — chongdae stops with the two fixes (hire a member whose sandbox can, or
-`take` it) instead of resending. A check is one command: a shell line (`sh -c 'a && b'`) is refused — give each command its own
+`take` it) instead of resending. A role may hold capability alternates in the lock's `roles`: `"implementer@loopback"`
+(the same member on a host whose sandbox can bind a port), `"<role>@<cap>+<cap>"`. A task that requires capabilities is
+sent to the alternate whose capabilities cover them (the smallest set), else to the plain role as before; `add` says which
+key does it, and the record keeps it (`performed_by.as`; `show` prints `implementer@loopback → …`). hunsu passes such
+keys through to the lock unchanged. A check is one command: a shell line (`sh -c 'a && b'`) is refused — give each command its own
 `--check`. `--role nitpick` with a `--check` is refused (a nitpick task is decided by its tests being red before the
 build; a task with a check is a build). `--role` names a declared role outright; `--role session` where the lock
 declares a provider needs `--why` (and `--by`) — recorded on the task as `self-performed`, reported as an observation,
@@ -86,6 +98,19 @@ read the tree the session was also writing). `--why` is required: the task becom
 `self-performed` instead of its role (the reviewer counts it); the stopped attempt, and who made it, stay in `attempts`;
 `run` then decides it like any session task — its checks, the verifier, the gate. Every stop on a provider's unfinished
 answer names it beside `retry`
+
+### `/chongdae:dispute`
+
+`dispute BUILD --tests FILE... --why WHY [--by NAME | --delegated WHY]`: some of an open build's protected tests
+contradict the contract (or cannot run here). A provider's build says so in its answer (`disputed-tests`); this is the
+same route for a build the session performs, or for a person. Recorded as a judgment: the task that wrote those tests —
+nitpick's task, or a tests task the session took or did itself — is reopened with the dispute (`amending`); with none on
+record, a tests task `<build>-tests` is made for the lock's `nitpick`, else the session, and printed. The build waits for
+it; once it is done, the build takes the amended files as its contract (its start and its kept copies are re-baselined),
+so its next judgment keeps the fix instead of restoring it. When the session amends, `run` stops until the disputed files
+differ from what the build protected — a fix already in the tree counts. guin-site, 2026-10-02: a session build found two
+test errors and a parser the machine could not load; each judgment restored the tests, and dropping the build, adding a
+fix task (with `--tests`, by mistake) and dropping that too took about an hour
 
 ### `/chongdae:drop`
 
@@ -155,14 +180,20 @@ Accept decisions a provider made beyond the contract (after writing them into th
 ### `/chongdae:retry`
 
 Send a stopped or rejected task out again; the earlier attempt (and its review) stays in the record and travels with
-the next request. Two stops go back to the hands without a person, twice per task at most: a verifier's reject (its
+the next request. `--requires CAP...` says on the task what its sandbox must give, when a member's sandbox lacked it: the
+task's `requires` grows, the request names it, and the lock's `<role>@<cap>` alternate, when there is one, is hired. A
+member that stopped mid-task because its sandbox lacked a capability (status `blocked` or `failed`, `lacked: ["loopback"]`,
+a non-claim starting `sandbox lacked: `) is a hiring stop like a refusal before starting: the stop names the capability
+and the ways on — `retry --requires CAP` (to the alternate, if locked), declaring `<role>@<cap>`, or `take` — and
+nothing is resent to the same member. Two stops go back to the hands without a person, twice per task at most: a verifier's reject (its
 findings attached) and an answer a validator refused for naming a check the session did not run — that one only when
 the task's checks fail here too: chongdae runs the checks itself, and when they pass the refusal was about the
 report's spelling of a command, not the tree; the report stands with the mismatch on record (`checks-ran-overruled`, a
 non-claim). Past that, the stop is a person's. When the hands are the session itself, a reject stops at once — the
 session reads it and fixes the tree; resending would only run the verifier again on the same tree. A builder that
 disputes a contract test (`disputed-tests`) sends it back to the task that wrote it: that task reopens with the
-dispute (`amending` in its request), rewrites the test, the build re-baselines the file and goes out again
+dispute (`amending` in its request), rewrites the test, the build re-baselines the file and goes out again; with no
+writer on record the stop names `dispute`
 
 ### `/chongdae:recheck`
 

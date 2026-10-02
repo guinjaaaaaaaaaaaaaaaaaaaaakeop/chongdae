@@ -1754,6 +1754,164 @@ def test_a_move_records_both_paths_and_a_korean_name_is_itself():
         assert outside == [], outside
 
 
+def test_the_session_disputes_its_own_builds_tests_and_the_fix_survives_the_next_judgment():
+    """guin-site, 2026-10-02: a session build found its contract tests wrong. Every judgment of the build restored them, so the
+    fix could not land; a fix task added with --tests protected the very files it fixed and restored its own fix. `dispute`
+    is the session's route a provider's build has in `disputed-tests`: recorded as a judgment, the task that wrote the tests
+    is reopened to amend them (or one is made), and once it is done the build takes the amended files as its contract."""
+    with Project() as pj:
+        os.environ["CHONGDAE_USER"] = "kim"
+        try:
+            write(os.path.join(pj.dir, "hunsu.lock.json"), {"roles": {"implementer": pj.fake_provider(RESPONSE_DONE)}})
+            assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
+            code, out = run("add", "tests", "--tests", "test_a.py", "--brief", "contract tests", "--target", pj.dir)
+            assert code == 0 and "--tests: the tests tests writes (no check decides it)" in out, out
+            write(os.path.join(pj.dir, "test_a.py"), "# wrong\n")
+            assert run("run", "--target", pj.dir)[0] == 0
+            check = sys.executable + " -c \"import sys; sys.exit(0 if open('test_a.py').read() == '# right\\n' and open('src.py').read() else 1)\""
+            code, out = run("add", "build", "--role", "session", "--why", "the worker's sandbox cannot bind a port", "--tests", "test_a.py", "--check", check, "--target", pj.dir)
+            assert code == 0 and "--tests: files build may not change — its judgment restores any change it makes to them" in out and "chongdae dispute build" in out, out
+            write(os.path.join(pj.dir, "src.py"), "x = 1\n")
+            write(os.path.join(pj.dir, "test_a.py"), "# right\n")   # the session fixes the test while building
+            code, out = run("run", "--target", pj.dir)
+            assert code == chongdae.DECISION and "changed the contract's tests" in out, out
+            assert open(os.path.join(pj.dir, "test_a.py")).read() == "# wrong\n", "the judgment restored the contract's tests"
+            # the self-defeating fix: a task with a check that protects the very tests it would correct
+            code, out = run("add", "tests-fix", "--role", "session", "--why", "fix", "--tests", "test_a.py", "--check", check, "--target", pj.dir)
+            assert code != 0 and "build's judgment restored test_a.py" in out and "chongdae dispute build --tests test_a.py" in out, out
+            assert run("dispute", "build", "--tests", "nope.py", "--why", "x", "--target", pj.dir)[0] != 0, "only the build's protected tests"
+            assert run("dispute", "tests", "--tests", "test_a.py", "--why", "x", "--target", pj.dir)[0] != 0, "a tests task protects nothing"
+            code, out = run("dispute", "build", "--tests", "test_a.py::test_x", "--why", "test_x expects the wrong order", "--target", pj.dir)
+            assert code == 0 and "tests reopened to amend test_a.py" in out and "the session amends them" in out, out
+            st = pj.state()["tasks"]
+            assert st["tests"]["status"] == "todo" and st["tests"]["amending"][0]["why"] == "test_x expects the wrong order", st["tests"]
+            assert st["tests"]["attempts"][0]["reopened"]["by"] == "kim" and st["tests"]["attempts"][0]["touched"] == ["test_a.py"], st["tests"]["attempts"]
+            assert st["build"]["attempts"][0]["retried"]["disputed"].startswith("tests disputed") and st["build"]["attempts"][0]["rejected"]["by"] == "contract", st["build"]
+            code, out = run("run", "--target", pj.dir)
+            assert code == chongdae.DECISION and "amend test_a.py as the dispute says" in out and "test_x expects the wrong order" in out, out
+            write(os.path.join(pj.dir, "test_a.py"), "# right\n")
+            code, out = run("run", "--target", pj.dir)
+            assert code == 0 and "done tests" in out and "done build" in out, out
+            st = pj.state()["tasks"]
+            assert st["build"]["rebaselined"][0]["tests"] == ["test_a.py"] and "test_a.py" not in st["build"]["touched"], st["build"]
+            assert st["tests"]["touched"] == ["test_a.py"], st["tests"]
+            kept = chongdae.work_path(chongdae.run_dir(pj.dir), os.path.join("contract-tests", "build", "test_a.py"))
+            assert open(kept).read() == "# right\n", "the build's kept copy is the amended test: a later restore keeps the fix"
+            code, out = run("show", "--target", pj.dir)
+            assert "(disputed: tests disputed by build; why: test_x expects the wrong order)" in out and "re-baselined at" in out, out
+        finally:
+            os.environ.pop("CHONGDAE_USER", None)
+
+
+def test_a_dispute_with_no_writer_on_record_makes_a_tests_task_and_the_build_waits_for_it():
+    """Tests committed before the run have no task on record that wrote them: the dispute makes one — the lock's nitpick when
+    it declares one, else the session's — named and printed; the build waits for it even though it comes later in order."""
+    with Project() as pj:
+        write(os.path.join(pj.dir, "test_b.py"), "# old\n")
+        subprocess.run(["git", "add", "-A"], cwd=pj.dir, check=True)
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "base"], cwd=pj.dir, check=True)
+        assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
+        check = sys.executable + " -c \"import sys; sys.exit(0 if open('test_b.py').read() == '# new\\n' else 1)\""
+        assert run("add", "b", "--tests", "test_b.py", "--check", check, "--target", pj.dir)[0] == 0
+        code, out = run("dispute", "b", "--tests", "test_b.py", "--why", "the fixture predates Q-x", "--by", "kim", "--target", pj.dir)
+        assert code == 0 and "b-tests made to amend test_b.py" in out, out
+        st = pj.state()["tasks"]
+        assert st["b-tests"]["def"]["role"] == "session" and st["b-tests"]["def"]["tests"] == ["test_b.py"] and "the fixture predates Q-x" in st["b-tests"]["def"]["brief"], st["b-tests"]
+        code, out = run("run", "--target", pj.dir)
+        assert code == chongdae.DECISION and "b waits for b-tests" in out and "amend test_b.py" in out, out
+        write(os.path.join(pj.dir, "test_b.py"), "# new\n")
+        code, out = run("run", "--target", pj.dir)
+        assert code == 0 and "done b-tests" in out and "done b" in out, out
+        assert pj.state()["tasks"]["b"]["touched"] == [], pj.state()["tasks"]["b"]
+
+
+def test_hooks_and_engine_anchor_to_the_project_not_the_shells_directory():
+    """guin-site, 2026-10-02: after `cd tests` the hook payload's cwd was `<project>/tests`; the write hook found no run there and
+    would refuse writes during a running run. The hooks and the engine anchor to the nearest directory holding `.chongdae/`
+    (else git's top level); a path inside a run's worktree is still that worktree's."""
+    with Project() as pj:
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "base"], cwd=pj.dir, check=True)
+        sub = os.path.join(pj.dir, "tests")
+        os.makedirs(sub)
+        write_hook = lambda cwd, *parts: hook("pre_write.py", {"cwd": cwd, "tool_name": "Write", "tool_input": {"file_path": os.path.join(*parts)}})[0]
+        assert write_hook(sub, sub, "test_x.py") == 2, "no run: refused from a subdirectory too"
+        assert chongdae.project_root(sub) == pj.dir, "no record yet: git's top level"
+        assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
+        assert write_hook(sub, sub, "test_x.py") == 0 and write_hook(sub, pj.dir, "a.py") == 0, "a running run, seen from tests/"
+        out = hook("session_start.py", {"cwd": sub, "session_id": "s1", "transcript_path": "/x/s1.jsonl"})[1]
+        assert "in progress" in out, out
+        assert os.path.exists(os.path.join(pj.dir, chongdae.SESSIONS, "s1.json")) and not os.path.exists(os.path.join(sub, chongdae.RUNS))
+        here = os.getcwd()
+        try:
+            os.chdir(sub)
+            code, out = run("status")
+            assert code == 0 and "is running" in out, out   # the engine, too: no --target from tests/
+        finally:
+            os.chdir(here)
+        assert run("close", "--target", pj.dir)[0] == 0
+        # a worktree run: its record is in the worktree; a shell inside it anchors there, not at the main tree around it
+        assert run("init", "--session", "--goal", "w", "--worktree", "--target", pj.dir)[0] == 0
+        wt = os.path.join(pj.dir, ".chongdae", "wt", os.listdir(os.path.join(pj.dir, ".chongdae", "wt"))[0])
+        os.makedirs(os.path.join(wt, "tests"))
+        assert chongdae.project_root(os.path.join(wt, "tests")) == wt
+        assert write_hook(os.path.join(wt, "tests"), wt, "a.py") == 0, "the worktree's run is running"
+        assert write_hook(pj.dir, wt, "a.py") == 0, "from the main tree, a path in the worktree re-anchors there"
+        assert write_hook(os.path.join(pj.dir, "tests"), pj.dir, "a.py") == 2, "the main tree has no run of its own"
+
+
+def test_a_task_that_requires_a_capability_goes_to_the_roles_alternate_and_the_record_says_which():
+    """A role may hold capability alternates (`implementer@loopback`: the same member on a host whose sandbox can bind a port).
+    A task that requires capabilities goes to the alternate covering them, the smallest set; otherwise to the plain role."""
+    plain = {"status": "failed", "summary": "should not be hired", "verified": [], "decisions": [], "non-claims": []}
+    with Project() as pj:
+        lock = {"implementer": pj.fake_provider(plain, "plain"), "implementer@loopback": pj.fake_provider(RESPONSE_DONE, "loop"),
+                "implementer@loopback+network": pj.fake_provider(plain, "both")}
+        write(os.path.join(pj.dir, "hunsu.lock.json"), {"roles": lock})
+        assert chongdae.hire(lock, {"role": "implementer"})[0] == "implementer"
+        assert chongdae.hire(lock, {"role": "implementer", "requires": ["network"]})[0] == "implementer@loopback+network"
+        assert chongdae.hire(lock, {"role": "implementer", "requires": ["loopback"]})[0] == "implementer@loopback", "the smallest set that covers"
+        assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
+        code, out = run("add", "w", "--check", sys.executable + " -c 'raise SystemExit(0)'", "--requires", "loopback", "--target", pj.dir)
+        assert code == 0 and "implementer@loopback does it (the lock's alternate for loopback)" in out, out
+        code, out = run("run", "--target", pj.dir)
+        assert code == 0, out
+        ts = pj.state()["tasks"]["w"]
+        assert ts["status"] == "done" and ts["performed_by"]["as"] == "implementer@loopback" and "loop.py" in " ".join(ts["performed_by"]["argv"]), ts["performed_by"]
+        assert ts["def"]["role"] == "implementer"
+        assert "who: implementer@loopback → command" in run("show", "--target", pj.dir)[1]
+
+
+def test_a_sandbox_that_lacked_a_capability_mid_task_is_a_hiring_stop_and_retry_says_so_on_the_task():
+    """hacheong reports a member that failed mid-task for a missing sandbox capability: status blocked or failed, `lacked`, a
+    non-claim `sandbox lacked: …`. Like a refusal before starting, that is a hiring stop — the stop names the capability,
+    `retry --requires CAP` (which sends it to the lock's `<role>@<cap>` when there is one), or `take`."""
+    lacked = {"status": "failed", "summary": "the tests need wrangler dev", "verified": [], "decisions": [], "lacked": ["loopback"],
+              "non-claims": ["sandbox lacked: loopback — wrangler dev could not bind 127.0.0.1:8787"]}
+    with Project() as pj:
+        write(os.path.join(pj.dir, "hunsu.lock.json"), {"roles": {"implementer": pj.fake_provider(lacked, "plain")}})
+        assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
+        assert run("add", "w", "--check", sys.executable + " -c 'raise SystemExit(0)'", "--target", pj.dir)[0] == 0
+        code, out = run("run", "--target", pj.dir)
+        assert code == chongdae.DECISION and "its sandbox lacked loopback" in out and "`implementer@loopback` in hunsu.json" in out, out
+        assert "retry w --requires loopback" in out and "chongdae take w --why" in out and "decision the contract does not give" not in out, out
+        assert not pj.state()["tasks"]["w"].get("attempts"), "nothing resent to the same member"
+        write(os.path.join(pj.dir, "hunsu.lock.json"), {"roles": {"implementer": pj.fake_provider(lacked, "plain"),
+                                                                  "implementer@loopback": pj.fake_provider(RESPONSE_DONE, "loop")}})
+        code, out = run("run", "--target", pj.dir)
+        assert code == chongdae.DECISION and "`chongdae retry w --requires loopback --by NAME | --delegated WHY` sends it to the lock's implementer@loopback" in out, out
+        code, out = run("retry", "w", "--requires", "loopback", "--by", "kim", "--target", pj.dir)
+        assert code == 0 and "it requires loopback now; the lock's implementer@loopback does it" in out, out
+        assert pj.state()["tasks"]["w"]["attempts"][0]["retried"]["requires"] == ["loopback"]
+        code, out = run("run", "--target", pj.dir)
+        assert code == 0, out
+        ts = pj.state()["tasks"]["w"]
+        assert ts["status"] == "done" and ts["def"]["requires"] == ["loopback"] and ts["performed_by"]["as"] == "implementer@loopback", ts
+        req = json.load(open(os.path.join(chongdae.run_dir(pj.dir), "local", "w.request.json")))
+        assert req["needs"] == ["loopback"], req
+        assert chongdae.sandbox_lacked({"non-claims": ["sandbox lacked: network (npm install)"]}) == ["network"]
+        assert chongdae.sandbox_lacked({"non-claims": ["nothing"]}) is None
+
+
 if __name__ == "__main__":
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")

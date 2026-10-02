@@ -1,7 +1,9 @@
 """PreToolUse hook on Edit/Write — the run is the agent's container, enforced at write time, not in prose.
 
 Payload (stdin JSON): {"cwd": ..., "tool_name": "Edit"|"Write"|..., "tool_input": {"file_path": ...}}.
-  file outside cwd                       -> allow (not this project's)
+The payload's `cwd` is the shell's (`cd tests` makes it `<project>/tests`): the project is the nearest ancestor holding
+`.chongdae/`, else git's top level (chongdae.project_root) — never the shell's directory as given.
+  file outside the project               -> allow (not this project's)
   file under .chongdae/, .claude/, hunsu* -> allow (the record and the environment are written by their own engines)
   file under declared outside-runs       -> allow (the project's own procedure: hunsu.json settings.chongdae.outside-runs)
   a run in progress                      -> allow
@@ -26,7 +28,7 @@ def main():
         payload = json.loads(sys.stdin.read() or "{}")
     except ValueError:
         return 0
-    cwd = os.path.abspath(payload.get("cwd") or os.getcwd())
+    cwd = chongdae.project_root(payload.get("cwd") or os.getcwd())
     path = (payload.get("tool_input") or {}).get("file_path") or (payload.get("tool_input") or {}).get("notebook_path") or ""
     if not path:
         return 0

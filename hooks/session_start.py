@@ -1,6 +1,6 @@
 """SessionStart hook — one line: which run is in progress, or that none is (and how to start one).
 
-Reads the hook payload (stdin JSON with `cwd`). Never blocks. Writes one machine-local file when the project keeps a
+Reads the hook payload (stdin JSON with `cwd` — the shell's directory, anchored to the project: chongdae.project_root). Never blocks. Writes one machine-local file when the project keeps a
 record: `.chongdae/sessions/<session id>.json`, the host's transcript path for this session (ignored, never committed).
 Inside a worker session (AGENT_WORKER=1 — a builder, a judge, the eyes, a newcomer are host sessions too, and the host runs
 the project's hooks in them): silent. The run is the hiring session's; a worker that is told about it reads what its role
@@ -43,7 +43,7 @@ def main():
         return 0
     if os.environ.get("AGENT_WORKER"):
         return 0
-    cwd = payload.get("cwd") or os.getcwd()
+    cwd = chongdae.project_root(payload.get("cwd") or os.getcwd())
     remember_session(cwd, payload)
     d = chongdae.run_dir(cwd) if os.path.isdir(os.path.join(cwd, chongdae.RUNS)) else None
     state = chongdae.load_state(d) if d else {}
