@@ -1,6 +1,6 @@
 {
   "name": "chongdae",
-  "version": "1.16.0",
+  "version": "1.17.0",
   "engines": {
     "python": ">=3.11"
   },
@@ -40,6 +40,24 @@
       "show",
       "--since",
       "{since}",
+      "--target",
+      "{target}"
+    ],
+    "note": [
+      "python3",
+      "{plugin:chongdae}/chongdae.py",
+      "show",
+      "--path",
+      "{path}",
+      "--brief",
+      "--target",
+      "{target}"
+    ],
+    "map": [
+      "python3",
+      "{plugin:chongdae}/chongdae.py",
+      "show",
+      "--brief",
       "--target",
       "{target}"
     ]

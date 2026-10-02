@@ -716,21 +716,26 @@ def test_one_reason_with_a_different_tail_each_time_is_still_one_stamp():
         assert all(("T%d" % i) in stamps[0]["where"] for i in range(3)) and "/U " not in stamps[0]["where"] + " ", stamps
 
 
-def test_a_member_that_refuses_before_starting_is_a_hiring_stop_not_a_failed_build():
+def test_a_member_that_refuses_before_starting_is_taken_by_the_session_not_a_failed_build():
     """hacheong refuses a task whose `needs` its member's sandbox cannot give, before any host call: status blocked, the first
-    non-claim "not attempted: …". That is not a decision the contract lacks and not a build to resend — the stop names the
-    two fixes: hire a member whose sandbox can, or take it in the session."""
+    non-claim "not attempted: …". That is not a decision the contract lacks and not a build to resend; with no alternate in
+    the lock and nothing decided in hunsu.json `capabilities`, the session takes it — no person is asked mid-run."""
     refused = {"status": "blocked", "summary": "needs loopback, which build on codex cannot do", "verified": [], "decisions": [],
                "non-claims": ["not attempted: needs loopback, which build on codex cannot do"]}
     with Project() as pj:
         write(os.path.join(pj.dir, "hunsu.lock.json"), {"roles": {"implementer": pj.fake_provider(refused)}})
         assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
-        assert run("add", "s3", "--role", "implementer", "--check", sys.executable + " -c 'raise SystemExit(0)'", "--requires", "loopback", "--target", pj.dir)[0] == 0
+        assert run("add", "s3", "--role", "implementer", "--check", sys.executable + " -c 'raise SystemExit(1)'", "--requires", "loopback", "--target", pj.dir)[0] == 0
         code, out = run("run", "--target", pj.dir)
-        assert code == chongdae.DECISION and "hire a member whose sandbox can" in out and "chongdae take s3 --why" in out, out
-        assert "decision the contract does not give" not in out, out
+        last = out.strip().splitlines()[-1]
+        assert code == chongdae.DECISION and last.startswith("decision: session agent: s3:") and "taken by the session" in last, out
+        assert "no implementer@loopback in the lock (hunsu.json capabilities: loopback: undecided)" in last, last
+        assert "decision the contract does not give" not in out and "human" not in last, out
         ts = pj.state()["tasks"]["s3"]
-        assert not ts.get("attempts"), "refused before starting: nothing was resent"
+        assert ts["taken"]["by"] == "chongdae" and ts["self-performed"]["taken-over"], ts
+        assert ts["attempts"][0]["status"] == "blocked" and "taken" in ts["attempts"][0]["retried"], "the refused attempt is kept"
+        code, out = run("run", "--target", pj.dir)
+        assert code == chongdae.DECISION and "session agent: s3 — make these checks pass" in out, "the session's task now, decided by its checks"
 
 
 def test_a_native_provider_is_dispatched_by_the_session_and_its_answer_consumed_as_a_providers():
@@ -1881,36 +1886,172 @@ def test_a_task_that_requires_a_capability_goes_to_the_roles_alternate_and_the_r
         assert "who: implementer@loopback → command" in run("show", "--target", pj.dir)[1]
 
 
-def test_a_sandbox_that_lacked_a_capability_mid_task_is_a_hiring_stop_and_retry_says_so_on_the_task():
+def test_a_sandbox_that_lacked_a_capability_mid_task_with_no_alternate_is_taken_by_the_session_with_the_reason():
     """hacheong reports a member that failed mid-task for a missing sandbox capability: status blocked or failed, `lacked`, a
-    non-claim `sandbox lacked: …`. Like a refusal before starting, that is a hiring stop — the stop names the capability,
-    `retry --requires CAP` (which sends it to the lock's `<role>@<cap>` when there is one), or `take`."""
+    non-claim `sandbox lacked: …`. guin-site, 2026-10-02: twice the stop listed the ways on and waited, and the session took the
+    task itself. The run must go on without a person: the capability was decided once at setup (hunsu.json `capabilities`);
+    decided `session`, or not decided, the session takes the task, recorded with the reason, and `run` stops only for the
+    session to do the work. `report` adds one observation per run."""
     lacked = {"status": "failed", "summary": "the tests need wrangler dev", "verified": [], "decisions": [], "lacked": ["loopback"],
               "non-claims": ["sandbox lacked: loopback — wrangler dev could not bind 127.0.0.1:8787"]}
     with Project() as pj:
-        write(os.path.join(pj.dir, "hunsu.lock.json"), {"roles": {"implementer": pj.fake_provider(lacked, "plain")}})
+        write(os.path.join(pj.dir, "hunsu.json"), {"capabilities": {"loopback": "session"}})
+        write(os.path.join(pj.dir, "hunsu.lock.json"), {"roles": {"implementer": pj.fake_provider(lacked, "plain") + ["--member", "dakdol", "--host", "codex"]}})
         assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
         assert run("add", "w", "--check", sys.executable + " -c 'raise SystemExit(0)'", "--target", pj.dir)[0] == 0
+        assert run("add", "x", "--check", sys.executable + " -c 'raise SystemExit(0)'", "--target", pj.dir)[0] == 0
         code, out = run("run", "--target", pj.dir)
-        assert code == chongdae.DECISION and "its sandbox lacked loopback" in out and "`implementer@loopback` in hunsu.json" in out, out
-        assert "retry w --requires loopback" in out and "chongdae take w --why" in out and "decision the contract does not give" not in out, out
-        assert not pj.state()["tasks"]["w"].get("attempts"), "nothing resent to the same member"
-        write(os.path.join(pj.dir, "hunsu.lock.json"), {"roles": {"implementer": pj.fake_provider(lacked, "plain"),
-                                                                  "implementer@loopback": pj.fake_provider(RESPONSE_DONE, "loop")}})
-        code, out = run("run", "--target", pj.dir)
-        assert code == chongdae.DECISION and "`chongdae retry w --requires loopback --by NAME | --delegated WHY` sends it to the lock's implementer@loopback" in out, out
-        code, out = run("retry", "w", "--requires", "loopback", "--by", "kim", "--target", pj.dir)
-        assert code == 0 and "it requires loopback now; the lock's implementer@loopback does it" in out, out
-        assert pj.state()["tasks"]["w"]["attempts"][0]["retried"]["requires"] == ["loopback"]
-        code, out = run("run", "--target", pj.dir)
-        assert code == 0, out
+        last = out.strip().splitlines()[-1]
+        assert code == chongdae.DECISION and last.startswith("decision: session agent: w: the tests need wrangler dev (implementer) — taken by the session: "
+                                                              "dakdol on codex lacked loopback; no implementer@loopback in the lock (hunsu.json capabilities: loopback: session)"), out
+        assert "human" not in last and "decision the contract does not give" not in out, out
         ts = pj.state()["tasks"]["w"]
-        assert ts["status"] == "done" and ts["def"]["requires"] == ["loopback"] and ts["performed_by"]["as"] == "implementer@loopback", ts
-        req = json.load(open(os.path.join(chongdae.run_dir(pj.dir), "local", "w.request.json")))
-        assert req["needs"] == ["loopback"], req
+        assert ts["taken"]["for-lack"] == {"role": "implementer", "lacked": ["loopback"], "capabilities": {"loopback": "session"}, "member": "dakdol", "host": "codex"}, ts["taken"]
+        assert ts["attempts"][0]["performed_by"], "who made the stopped attempt stays with it"
+        code, out = run("run", "--target", pj.dir)   # w's checks pass: done; x goes out and lacks loopback too
+        assert code == chongdae.DECISION and "done w" in out and "decision: session agent: x:" in out, out
+        assert run("run", "--target", pj.dir)[0] == 0
+        assert run("close", "--target", pj.dir)[0] == 0
+        doc = json.loads(run("report", "--target", pj.dir)[1])
+        lack = [f for f in doc["findings"] if f["kind"] == "taken-for-lack"]
+        assert len(lack) == 1 and lack[0]["layer"] == "observation", lack
+        assert lack[0]["text"] == "taken for lack: 2 task(s) — implementer lacked loopback (no implementer@loopback; capabilities: loopback: session)", lack
+        assert not [f for f in doc["findings"] if f["kind"] == "delegation-stamp"], "chongdae's own reason is not a stamp"
         assert chongdae.sandbox_lacked({"non-claims": ["sandbox lacked: network (npm install)"]}) == ["network"]
         assert chongdae.sandbox_lacked({"non-claims": ["nothing"]}) is None
 
+
+def test_a_capability_stop_with_the_alternate_in_the_lock_sends_the_task_there_with_no_question():
+    """The lock already holds the hire the question would ask for: a member that lacked loopback mid-task (its task said nothing
+    of it) goes to `<role>@loopback` — the task requires loopback now, the attempt is kept, no person is asked."""
+    lacked = {"status": "failed", "summary": "the tests need wrangler dev", "verified": [], "decisions": [], "lacked": ["loopback"],
+              "non-claims": ["sandbox lacked: loopback — wrangler dev could not bind 127.0.0.1:8787"]}
+    with Project() as pj:
+        write(os.path.join(pj.dir, "hunsu.lock.json"), {"roles": {"implementer": pj.fake_provider(lacked, "plain"),
+                                                                  "implementer@loopback": pj.fake_provider(RESPONSE_DONE, "loop")}})
+        assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
+        assert run("add", "w", "--check", sys.executable + " -c 'raise SystemExit(0)'", "--target", pj.dir)[0] == 0
+        code, out = run("run", "--target", pj.dir)
+        assert code == 0 and "decision:" not in out and "goes to implementer@loopback" in out, out
+        ts = pj.state()["tasks"]["w"]
+        assert ts["status"] == "done" and ts["def"]["requires"] == ["loopback"] and ts["performed_by"]["as"] == "implementer@loopback", ts
+        assert ts["attempts"][0]["retried"]["by"] == "chongdae" and ts["attempts"][0]["retried"]["requires"] == ["loopback"], ts["attempts"]
+        req = json.load(open(os.path.join(chongdae.run_dir(pj.dir), "local", "w.request.json")))
+        assert req["needs"] == ["loopback"], req
+        # a person's retry can say it on the task too, for a stop of another kind
+        blocked = {"status": "blocked", "summary": "the contract is silent on the port", "verified": [], "decisions": [], "non-claims": []}
+        write(os.path.join(pj.dir, "hunsu.lock.json"), {"roles": {"implementer": pj.fake_provider(blocked, "plain"),
+                                                                  "implementer@loopback": pj.fake_provider(RESPONSE_DONE, "loop")}})
+        assert run("add", "v", "--check", sys.executable + " -c 'raise SystemExit(0)'", "--target", pj.dir)[0] == 0
+        code, out = run("run", "--target", pj.dir)
+        assert code == chongdae.DECISION and "decision the contract does not give" in out, out
+        code, out = run("retry", "v", "--requires", "loopback", "--by", "kim", "--target", pj.dir)
+        assert code == 0 and "it requires loopback now; the lock's implementer@loopback does it" in out, out
+        assert run("run", "--target", pj.dir)[0] == 0
+        assert pj.state()["tasks"]["v"]["performed_by"]["as"] == "implementer@loopback"
+
+
+
+def test_two_open_session_tasks_the_first_to_finish_does_not_silently_own_the_others_file():
+    """guin-site run-20261002-065900-f588: escape-tests (added first, a check that did not look at the code) and escape-build were
+    open together. The session wrote src/lib/outputs.ts for escape-build before adding it, so escape-build's start held it;
+    escape-tests finished first and counted it as its own; escape-build's diff was empty, the verifier rejected it on every
+    retry (retry did not measure again), and the drop-and-add that followed recorded nothing. Now `run` says whose the file
+    might be, `retry` measures again and names it, and `adopt` is the judgment that moves it."""
+    with Project() as pj:
+        os.environ["CHONGDAE_USER"] = "kim"
+        try:
+            eyes = os.path.join(pj.dir, "eyes.py")
+            write(eyes, "import json, sys\nreq = json.load(open(sys.argv[1], encoding='utf-8'))\nok = bool(req.get('touched'))\n"
+                        "json.dump({'artifact-type': 'dwitbuk/review@1', 'verdict': 'accept' if ok else 'reject', 'findings': [] if ok else "
+                        "[{'kind': 'record-vs-tree', 'where': 'src/out.ts', 'why': 'touched is empty beside the work', 'record_quote': 'touched: []', "
+                        "'tree_quote': 'escaped'}]}, open(sys.argv[2], 'w', encoding='utf-8'))\n")
+            write(os.path.join(pj.dir, "hunsu.lock.json"), {"roles": {"verifier": [sys.executable, eyes, "{request}", "{response}"]}})
+            write(os.path.join(pj.dir, "src", "out.ts"), "plain\n")
+            write(os.path.join(pj.dir, "tests", "test_bots.py"), "# old\n")
+            subprocess.run(["git", "add", "-A"], cwd=pj.dir, check=True)
+            subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "base"], cwd=pj.dir, check=True)
+            assert run("init", "--session", "--goal", "escape", "--target", pj.dir)[0] == 0
+            assert run("add", "escape-tests", "--check", sys.executable + " -c pass", "--brief", "PLAN Q-bots: link text escapes [ and ]; tests/test_bots.py checks it", "--target", pj.dir)[0] == 0
+            write(os.path.join(pj.dir, "PLAN.md"), "## Q-bots\nescape [ and ]\n")
+            write(os.path.join(pj.dir, "tests", "test_bots.py"), "# new\n")
+            write(os.path.join(pj.dir, "src", "out.ts"), "escaped\n")   # escape-build's work, written before escape-build was added
+            check = sys.executable + " -c \"import sys; sys.exit(0 if open('src/out.ts').read() == 'escaped\\n' else 1)\""
+            assert run("add", "escape-build", "--check", check, "--tests", "tests/test_bots.py", "--brief", "src/out.ts llmsTxt: escape [ and ] in link text", "--target", pj.dir)[0] == 0
+            code, out = run("run", "--target", pj.dir)
+            assert code == chongdae.DECISION and "done escape-tests" in out and "verifier rejected" in out, out
+            assert ("note: src/out.ts was already changed when escape-build was added" in out and "`chongdae adopt escape-build src/out.ts --why WHY`" in out), out
+            st = pj.state()["tasks"]
+            assert "src/out.ts" in st["escape-tests"]["touched"] and st["escape-tests"]["shared"] == {"src/out.ts": ["escape-build"]}, st["escape-tests"]
+            req = json.load(open(os.path.join(chongdae.run_dir(pj.dir), "local", "escape-build.verify.request.json"), encoding="utf-8"))
+            assert req["touched"] == [] and req["attribution"] == {"held-at-start": ["src/out.ts"]}, req
+            # a dispute on a file the build does not protect says what to do
+            code, out = run("dispute", "escape-build", "--tests", "PLAN.md", "--why", "x", "--target", pj.dir)
+            assert code != 0 and "PLAN.md: no open build protects it" in out and "change it in this task (escape-build)" in out, out
+            # retry measures again and names what the measure leaves out
+            code, out = run("retry", "escape-build", "--by", "kim", "--target", pj.dir)
+            assert code == 0 and "measured now: nothing" in out and "src/out.ts: already changed when escape-build was added" in out and "chongdae adopt escape-build src/out.ts" in out, out
+            assert pj.state()["tasks"]["escape-build"]["attempts"][-1]["retried"]["measured"] == [], pj.state()["tasks"]["escape-build"]["attempts"]
+            assert run("adopt", "escape-build", "nope.ts", "--why", "x", "--target", pj.dir)[0] != 0, "nothing changed it: nothing to attribute"
+            code, out = run("adopt", "escape-build", "src/out.ts", "--why", "written for it before it was added", "--target", pj.dir)
+            assert code == 0 and "adopted src/out.ts into escape-build (from escape-tests: src/out.ts)" in out and "`chongdae run` decides it" in out, out
+            st = pj.state()["tasks"]
+            assert "src/out.ts" not in st["escape-tests"]["touched"] and st["escape-tests"]["gave"][0]["to"] == "escape-build" and "shared" not in st["escape-tests"], st["escape-tests"]
+            assert st["escape-build"]["adopted"][0]["by"] == "kim" and st["escape-build"]["adopted"][0]["from"] == {"escape-tests": ["src/out.ts"]}, st["escape-build"]
+            code, out = run("run", "--target", pj.dir)
+            assert code == 0 and "done escape-build" in out, out
+            assert pj.state()["tasks"]["escape-build"]["touched"] == ["src/out.ts"], pj.state()["tasks"]["escape-build"]
+            code, out = run("show", "--target", pj.dir)
+            assert "adopted src/out.ts (from escape-tests: src/out.ts) — by kim at" in out and "gave src/out.ts to escape-build at" in out, out
+            # the brief reads (jokbo): a note on the file, the map
+            code, out = run("show", "--path", "src/out.ts", "--brief", "--target", pj.dir)
+            lines = out.strip().splitlines()
+            assert code == 0 and len(lines) == 1 and lines[0].startswith("last changed in run-") and "task escape-build: src/out.ts llmsTxt" in lines[0], out
+            assert run("show", "--path", "nothing.txt", "--brief", "--target", pj.dir) == (0, ""), "nothing on record: nothing printed"
+            code, out = run("show", "--brief", "--target", pj.dir)
+            assert code == 0 and out == "1 run (1 this week), none closed yet\n", out
+            assert run("close", "--target", pj.dir)[0] == 0
+            code, out = run("show", "--brief", "--target", pj.dir)
+            assert code == 0 and out.startswith("1 run (1 this week), last closed: escape (") and len(out.strip().splitlines()) == 1, out
+            assert run("show", "--run", os.path.basename(chongdae.run_dir(pj.dir)), "--brief", "--target", pj.dir)[0] != 0
+        finally:
+            os.environ.pop("CHONGDAE_USER", None)
+
+
+def test_a_file_both_open_tasks_measure_is_said_and_left_to_both_until_adopted():
+    """The other order: both tasks open, the file written after both were added, the second one's brief naming it. The first to
+    finish counts it and says so; it is not pinned away from the second (a guess), which keeps measuring it; a file the second
+    does not name is pinned as before. `adopt` settles it; a dropped or open task that changed a file is the note's second line."""
+    with Project() as pj:
+        os.environ["CHONGDAE_USER"] = "kim"
+        try:
+            write(os.path.join(pj.dir, "README.md"), "# r\n")
+            subprocess.run(["git", "add", "-A"], cwd=pj.dir, check=True)
+            subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "base"], cwd=pj.dir, check=True)
+            assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
+            assert run("add", "a", "--brief", "the plan section", "--target", pj.dir)[0] == 0
+            assert run("add", "b", "--brief", "write src/x.py", "--target", pj.dir)[0] == 0
+            write(os.path.join(pj.dir, "PLAN.md"), "# plan\n")
+            write(os.path.join(pj.dir, "src", "x.py"), "x = 1\n")
+            code, out = run("show", "--path", "src/x.py", "--brief", "--target", pj.dir)
+            assert out.startswith("open now: task b in run-") or out.startswith("open now: task a in run-"), out
+            code, out = run("run", "--target", pj.dir)
+            assert code == 0 and "done a" in out and "done b" in out and "note: src/x.py changed after b was added, and b's brief names it" in out, out
+            st = pj.state()["tasks"]
+            assert st["a"]["touched"] == ["PLAN.md", "src/x.py"] and st["a"]["shared"] == {"src/x.py": ["b"]}, st["a"]
+            assert "src/x.py: also b's by its own word — whose it is was not settled (`adopt`)" in run("show", "--target", pj.dir)[1]
+            assert st["b"]["touched"] == ["src/x.py"] and st["b"]["pinned"] == {"PLAN.md": "a"}, st["b"]
+            code, out = run("adopt", "b", "src/x.py", "--why", "b's work", "--delegated", "owner: settle it", "--target", pj.dir)
+            assert code == 0 and "from a: src/x.py" in out, out
+            st = pj.state()["tasks"]
+            assert st["a"]["touched"] == ["PLAN.md"] and "shared" not in st["a"] and st["b"]["adopted"][0]["delegated"] == "owner: settle it", st
+            assert run("add", "c", "--brief", "try README", "--target", pj.dir)[0] == 0
+            write(os.path.join(pj.dir, "README.md"), "# r2\n")
+            assert run("drop", "c", "--why", "superseded", "--target", pj.dir)[0] == 0
+            code, out = run("show", "--path", "README.md", "--brief", "--target", pj.dir)
+            assert code == 0 and out.startswith("dropped: task c in run-") and "superseded" in out and len(out.strip().splitlines()) == 1, out
+        finally:
+            os.environ.pop("CHONGDAE_USER", None)
 
 if __name__ == "__main__":
     if hasattr(sys.stdout, "reconfigure"):

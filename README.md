@@ -73,8 +73,8 @@ when an open build's judgment just restored those files, and points at `dispute`
 `implementer`, a task that writes `--tests` that do not exist yet to its `nitpick`, anything else (a plan section, a
 model) to this session. `--requires network loopback` says what the work requires of the sandbox its hands run in: it
 travels in the request as `needs` (a task's `needs` in a plan already names the tasks it waits for), and a hired member
-that cannot give it refuses before starting — chongdae stops with the two fixes (hire a member whose sandbox can, or
-`take` it) instead of resending. A role may hold capability alternates in the lock's `roles`: `"implementer@loopback"`
+that cannot give it refuses before starting — chongdae sends it to the lock's alternate that can, or the session takes it
+(below, `retry`), instead of resending. A role may hold capability alternates in the lock's `roles`: `"implementer@loopback"`
 (the same member on a host whose sandbox can bind a port), `"<role>@<cap>+<cap>"`. A task that requires capabilities is
 sent to the alternate whose capabilities cover them (the smallest set), else to the plain role as before; `add` says which
 key does it, and the record keeps it (`performed_by.as`; `show` prints `implementer@loopback → …`). hunsu passes such
@@ -97,7 +97,8 @@ The session finishes a task its hired hands could not — the work is in the tre
 read the tree the session was also writing). `--why` is required: the task becomes the session's, recorded as
 `self-performed` instead of its role (the reviewer counts it); the stopped attempt, and who made it, stay in `attempts`;
 `run` then decides it like any session task — its checks, the verifier, the gate. Every stop on a provider's unfinished
-answer names it beside `retry`
+answer names it beside `retry`. chongdae takes a task itself the same way when a member's sandbox lacked a capability and
+the lock has no alternate that can (`taken.by: chongdae`, `taken.for-lack`)
 
 ### `/chongdae:dispute`
 
@@ -110,7 +111,25 @@ it; once it is done, the build takes the amended files as its contract (its star
 so its next judgment keeps the fix instead of restoring it. When the session amends, `run` stops until the disputed files
 differ from what the build protected — a fix already in the tree counts. guin-site, 2026-10-02: a session build found two
 test errors and a parser the machine could not load; each judgment restored the tests, and dropping the build, adding a
-fix task (with `--tests`, by mistake) and dropping that too took about an hour
+fix task (with `--tests`, by mistake) and dropping that too took about an hour. A dispute naming a file the build does not
+protect is refused with the next step: if an open build protects it, the dispute that names that build; if none does, it is
+not the contract — change it in this task, as its work
+
+### `/chongdae:adopt`
+
+`adopt TASK FILE... --why WHY [--by NAME | --delegated WHY]`: a judgment that these files are TASK's work. Two open
+session tasks share one tree and each measures `touched` from its own `add`, so the tree cannot say whose a change is when
+both were open — nor whose work was written before its task was added (the contract edited before its task, the order slip
+every guin-site review found: it sits in that task's start snapshot, and its measure counts nothing there). `adopt` moves
+the attribution: out of every other task's `touched` (each keeps a `gave` record), pinned into an open one's start, out of
+TASK's own start, and into TASK (`adopted`, with who and why, and where from). A file nothing in the run or the tree
+changed is refused. `run` says when it cannot tell: a finishing task that counted a file another open session task's brief
+(or the tests it writes) names, and that changed after that task was added or was already changed when it was, prints a
+`note:` with both `adopt` commands — and the file is not pinned away from the other task (that would be a guess); it stays
+in both measures until the judgment. A verify request carries `attribution` (adopted, pinned at another task's finish,
+held at start) when `touched` alone would mislead. guin-site run-20261002-065900-f588: escape-tests finished first and
+counted `src/lib/outputs.ts`, written for escape-build before it was added; escape-build's diff was empty, the verifier
+rejected it on every retry, and the drop-and-add that followed recorded nothing
 
 ### `/chongdae:drop`
 
@@ -155,7 +174,16 @@ the times; then what is left (open tasks, what the reviewer said at close). A ru
 is timed from its own record commits, and says so. `--since REV`: one line per run whose record was not complete at REV
 (the runs `report --since` reads) — goal, status, tasks done/dropped/open, self-performed and taken, attempts, verifier
 rejects, delegated judgments, duration — and a totals line. `--path FILE`: the runs and tasks whose `touched` holds that
-file (or a file under that directory), newest first, with who did each
+file (or a file under that directory), newest first, with who did each. A judgment that moved a file (`adopt`) is told on
+both tasks, and a file two open tasks measured is told as not settled.
+
+`--brief` is the reader's first look, one line per fact (jokbo's `note` and `map` reads; full outputs pasted into an
+agent's context were ignored): `show --path FILE --brief` prints at most two lines — `last changed in run-… (date), task ID:
+<brief>` and, if any, a task that changed it and is open or dropped now — and nothing at all when no task on record touched
+it; `show --brief` prints one line, `N runs (K this week), last closed: <goal> (date)` (this week: the last 7 days). The
+running run and its open tasks are the SessionStart line's, and are not repeated. The manifests declare them in `reads`
+(kind -> argv, for a reader plugin): `file` (`show --path {path}`), `since` (`show --since {since}`), `note`
+(`show --path {path} --brief`) and `map` (`show --brief`), each with `--target {target}`
 
 ### `/chongdae:run`
 
@@ -184,8 +212,16 @@ the next request. `--requires CAP...` says on the task what its sandbox must giv
 task's `requires` grows, the request names it, and the lock's `<role>@<cap>` alternate, when there is one, is hired. A
 member that stopped mid-task because its sandbox lacked a capability (status `blocked` or `failed`, `lacked: ["loopback"]`,
 a non-claim starting `sandbox lacked: `) is a hiring stop like a refusal before starting: the stop names the capability
-and the ways on — `retry --requires CAP` (to the alternate, if locked), declaring `<role>@<cap>`, or `take` — and
-nothing is resent to the same member. Two stops go back to the hands without a person, twice per task at most: a verifier's reject (its
+and nothing is resent to the same member. When the lock has the `<role>@<cap>` alternate that can, the task requires CAP
+now and goes there with no stop (`retried.by: chongdae`, the attempt kept): the lock is the person's hiring, already
+decided. With none, no person is asked mid-run: a run must go on without stopping for one, and what a project does about a
+capability its members' hosts lack is decided once, at setup — hunsu.json `capabilities` (`{"loopback": "session" |
+"alternates", "network": ...}`, written by hunsu; hunsu.local.json overlays it, as for settings). Decided `session`, or
+not decided, the session takes the task: recorded as taken and self-performed with the reason (`dakdol on codex lacked
+loopback; no implementer@loopback in the lock (hunsu.json capabilities: loopback: session)`), and `run` stops only for the
+session to do the work (`decision: session agent: …`) — then its checks, the verifier and the gate decide it as for any
+task. `report` adds one observation per run: `taken for lack: N task(s) — <role> lacked <cap> (no <role>@<cap>;
+capabilities: <decision>)`, so a review sees what the setup cost without it being a charge. Two stops go back to the hands without a person, twice per task at most: a verifier's reject (its
 findings attached) and an answer a validator refused for naming a check the session did not run — that one only when
 the task's checks fail here too: chongdae runs the checks itself, and when they pass the refusal was about the
 report's spelling of a command, not the tree; the report stands with the mismatch on record (`checks-ran-overruled`, a
@@ -193,7 +229,10 @@ non-claim). Past that, the stop is a person's. When the hands are the session it
 session reads it and fixes the tree; resending would only run the verifier again on the same tree. A builder that
 disputes a contract test (`disputed-tests`) sends it back to the task that wrote it: that task reopens with the
 dispute (`amending` in its request), rewrites the test, the build re-baselines the file and goes out again; with no
-writer on record the stop names `dispute`
+writer on record the stop names `dispute`. A session task is measured again at `retry` — the measure is kept with the attempt
+(`retried.measured`) and printed, and the files its own word names that the measure leaves out (already changed when it
+was added, or pinned into its start when another task finished) are named with the `adopt` that settles them: resending
+the same empty `touched` only gets the same reject
 
 ### `/chongdae:recheck`
 

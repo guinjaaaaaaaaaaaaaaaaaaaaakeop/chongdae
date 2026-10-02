@@ -1,5 +1,5 @@
 ---
-description: A build's protected tests contradict the contract — reopen the task that wrote them (or make one) to amend them; the build then keeps the fix
+description: A build's protected tests contradict the contract — reopen the task that wrote them (or make one) to amend them; the build then keeps the fix. A file the build does not protect: the refusal says what to do
 argument-hint: <build> --tests FILE.. --why ".." [--by NAME | --delegated WHY]
 ---
 !`python3 "${CLAUDE_PLUGIN_ROOT}/chongdae.py" dispute $ARGUMENTS`
