@@ -813,22 +813,44 @@ def record_paths(target):
     return tuple([RUNS + "/", ".claude/", "hunsu"] + others)
 
 
+def status_paths(target):
+    """Every path `git status` says differs from HEAD (tracked or untracked), relative to the repository root: both sides of a
+    rename or copy (`git mv a b` is a change to a and to b), never quoted (`-z`: a Korean or spaced name is itself). None
+    when there is no git. The porcelain's text form wrote a rename as one string, `a -> b`, which named no file — a
+    content move recorded that way claimed nothing, and the reviewer charged it as work outside any run."""
+    import subprocess
+    try:
+        done = subprocess.run(["git", "status", "--porcelain", "-z", "--untracked-files=all", "--", "."], cwd=target, capture_output=True, text=True, encoding="utf-8", errors="surrogateescape")
+    except OSError:
+        return None
+    if done.returncode:
+        return None
+    out, parts, i = [], done.stdout.split("\0"), 0
+    while i < len(parts):
+        entry = parts[i]
+        i += 1
+        if len(entry) < 4:
+            continue
+        out.append(entry[3:])
+        if entry[0] in "RC" or entry[1] in "RC":   # the next field is where it came from
+            if i < len(parts) and parts[i]:
+                out.append(parts[i])
+            i += 1
+    return [p.replace("\\", "/") for p in out]
+
+
 def dirty(target, records_too=False):
     """{path: content hash} of every file that differs from HEAD (tracked or untracked) under target, paths relative to target.
     None when there is no git — then nothing can be attributed, and the record says so. The products' records are left out
     (nobody's work) unless `records_too`: what the reviewer wrote at close is a record, and the close commit wants it."""
     import hashlib, subprocess
-    try:
-        done = subprocess.run(["git", "status", "--porcelain", "--untracked-files=all", "--", "."], cwd=target, capture_output=True, text=True, encoding="utf-8")
-    except OSError:
-        return None
-    if done.returncode:
+    paths = status_paths(target)
+    if paths is None:
         return None
     # porcelain paths are relative to the repository root; the record is relative to the target (a project can live in a subdirectory)
     prefix = subprocess.run(["git", "rev-parse", "--show-prefix"], cwd=target, capture_output=True, text=True, encoding="utf-8").stdout.strip().replace("\\", "/")
     out = {}
-    for line in done.stdout.splitlines():
-        path = line[3:].strip().replace("\\", "/") if len(line) > 3 else ""
+    for path in paths:
         path = path[len(prefix):] if prefix and path.startswith(prefix) else path
         if path and not path.startswith((RUNS + "/",) if records_too else record_paths(target)) and not re.search(r"(^|/)__pycache__/|\.py[co]$", path):   # records, machine-local state and interpreter leftovers are nobody's work
             full = os.path.join(target, path)
@@ -859,12 +881,12 @@ def committed_since(target, head):
     import hashlib, subprocess
     if not head or head == head_sha(target):
         return {}
-    done = subprocess.run(["git", "diff", "--name-only", "--no-renames", "--relative", head, "HEAD", "--", "."], cwd=target, capture_output=True, text=True, encoding="utf-8")
+    done = subprocess.run(["git", "diff", "--name-only", "-z", "--no-renames", "--relative", head, "HEAD", "--", "."], cwd=target, capture_output=True, text=True, encoding="utf-8", errors="surrogateescape")
     if done.returncode:
         return {}
     out = {}
-    for path in done.stdout.splitlines():
-        path = path.strip().replace("\\", "/")
+    for path in done.stdout.split("\0"):
+        path = path.replace("\\", "/")
         if path and not path.startswith(record_paths(target)) and not re.search(r"(^|/)__pycache__/|\.py[co]$", path):
             then = subprocess.run(["git", "show", "%s:./%s" % (head, path)], cwd=target, capture_output=True)
             out[path] = hashlib.sha1(then.stdout).hexdigest() if then.returncode == 0 else "gone"
@@ -2162,11 +2184,10 @@ def cmd_report(args):
     # the tree vs the ledger: which changed files does no completed run claim?
     changed = set()
     if args.since:
-        for line in (git("diff", "--name-only", "%s..HEAD" % args.since, "--", ".") or "").splitlines():
-            changed.add(line.strip().replace("\\", "/"))
-    for line in (git("status", "--porcelain", "--untracked-files=all", "--", ".") or "").splitlines():
-        if len(line) > 3:
-            changed.add(line[3:].strip().replace("\\", "/"))
+        for path in (git("diff", "--name-only", "-z", "--no-renames", "%s..HEAD" % args.since, "--", ".") or "").split("\0"):
+            if path:
+                changed.add(path.replace("\\", "/"))
+    changed.update(status_paths(target) or [])
     prefix = (git("rev-parse", "--show-prefix") or "").strip().replace("\\", "/")
     changed = {p[len(prefix):] if prefix and p.startswith(prefix) else p for p in changed}
     changed = {p for p in changed if not p.startswith(record_paths(target)) and p != ".gitignore"}   # records, machine-local state, the host's settings, the environment: the lock says which paths those are (each product declares its own); hunsu's own report covers the environment

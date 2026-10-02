@@ -1722,6 +1722,38 @@ def test_work_the_session_committed_before_run_is_still_the_tasks():
             os.environ.pop("CHONGDAE_USER", None)
 
 
+def test_a_move_records_both_paths_and_a_korean_name_is_itself():
+    """`git status --porcelain` wrote a rename as one string, `a -> b`, and quoted a non-ASCII name: guin-site's content move
+    recorded `content/about.md -> tests/fixtures/content/about.md` as touched, which named no file, and the reviewer charged
+    the three moved directories as work outside any run. Both sides of a move are the task's, and a name is itself."""
+    with Project() as pj:
+        subprocess.run(["git", "config", "user.email", "t@t"], cwd=pj.dir, check=True)
+        subprocess.run(["git", "config", "user.name", "t"], cwd=pj.dir, check=True)
+        write(os.path.join(pj.dir, "content", "a.md"), "a\n")
+        write(os.path.join(pj.dir, "글.md"), "가\n")
+        subprocess.run(["git", "add", "-A"], cwd=pj.dir, check=True)
+        subprocess.run(["git", "commit", "-qm", "base"], cwd=pj.dir, check=True)
+        base = subprocess.run(["git", "rev-parse", "HEAD"], cwd=pj.dir, capture_output=True, text=True).stdout.strip()
+        os.environ["CHONGDAE_USER"] = "kim"
+        try:
+            assert run("init", "--session", "--goal", "move", "--target", pj.dir)[0] == 0
+            assert run("add", "T1", "--brief", "move content", "--target", pj.dir)[0] == 0
+            os.makedirs(os.path.join(pj.dir, "tests", "fixtures"))
+            subprocess.run(["git", "mv", "content", "tests/fixtures/content"], cwd=pj.dir, check=True)
+            write(os.path.join(pj.dir, "글.md"), "나\n")
+            assert run("run", "--target", pj.dir)[0] == 0
+            touched = pj.state()["tasks"]["T1"]["touched"]
+            assert touched == sorted(["content/a.md", "tests/fixtures/content/a.md", "글.md"]), touched
+            subprocess.run(["git", "add", "-A"], cwd=pj.dir, check=True)
+            subprocess.run(["git", "commit", "-qm", "the move"], cwd=pj.dir, check=True)
+            assert run("close", "--target", pj.dir)[0] == 0
+        finally:
+            os.environ.pop("CHONGDAE_USER", None)
+        doc = json.loads(run("report", "--since", base, "--target", pj.dir)[1])
+        outside = [f for f in doc["findings"] if f["kind"] == "outside-run"]
+        assert outside == [], outside
+
+
 if __name__ == "__main__":
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
