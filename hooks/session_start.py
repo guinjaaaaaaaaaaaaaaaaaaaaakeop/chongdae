@@ -2,6 +2,9 @@
 
 Reads the hook payload (stdin JSON with `cwd`). Never blocks. Writes one machine-local file when the project keeps a
 record: `.chongdae/sessions/<session id>.json`, the host's transcript path for this session (ignored, never committed).
+Inside a worker session (AGENT_WORKER=1 — a builder, a judge, the eyes, a newcomer are host sessions too, and the host runs
+the project's hooks in them): silent. The run is the hiring session's; a worker that is told about it reads what its role
+may not see (guin-site 2026-10-01: the newcomer's premise, judged an authority conflict).
 """
 import json
 import os
@@ -37,6 +40,8 @@ def main():
     try:
         payload = json.loads(sys.stdin.read() or "{}")
     except ValueError:
+        return 0
+    if os.environ.get("AGENT_WORKER"):
         return 0
     cwd = payload.get("cwd") or os.getcwd()
     remember_session(cwd, payload)

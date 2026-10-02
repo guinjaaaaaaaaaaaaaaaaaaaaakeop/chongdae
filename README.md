@@ -41,7 +41,9 @@ git's immutability then notarizes the judgment: its content, its time, any later
 the engine's, not a habit of whoever remembered to commit (best effort: no repo or an identity-less git config never
 stops the run; the reviewer sees uncommitted records as what they are).
 
-Order between machines is never a clock's. Every judgment carries `at` in UTC — for display and honesty only. The
+Order between machines is never a clock's. Every judgment carries `at` in UTC — for display and honesty only — and so do
+the moments `show` reads durations from: a task's `done`, each attempt's `answered` (the hands' answer came back) and
+`verdict-given` (the verifier's), the run's `ended`. The
 run's place in history is `created: {at, based_on}` (the commit it started from) and, when a worktree run lands,
 `landed: {at, commit}` (the merge commit, pinned into the record in main): ancestry decides, run-id timestamps only
 approximate. `git log -- .chongdae/run-<id>` joins the record to the changes.
@@ -108,12 +110,27 @@ What this record says a reviewer should see, typed `dwitbuk/findings@1`: outside
 self-performed, stage-finding, verifier-reject (every rejected attempt's findings), left-open, non-claims (the same
 sentence on several tasks of a run is said once, with the tasks), unreleased-writer (a committed record a working
 source wrote) — with `--since REV`, changes since that revision and the runs whose record was not complete there
-(earlier runs were the previous review's). Declared as a reporter in hunsu.json; dwitbuk collects it without knowing
+(earlier runs were the previous review's). Only those runs claim a change since REV: an earlier run's `touched` names
+paths it worked on before the review, and once hid any later change made there outside a run. Declared as a reporter in hunsu.json; dwitbuk collects it without knowing
 chongdae
 
 ### `/chongdae:status`
 
 The run in progress (or the newest) and its open tasks; never fails
+
+### `/chongdae:show`
+
+What happened in a run, for whoever reads it after — a person, or an agent that would otherwise `cat` the task files and
+guess their keys (a retrospective of one day on guin-site took ~50 tool calls that way). Read-only, plain text, nothing
+cut. `--run ID` (default: the running run, else the newest): the goal, kind, created (time, the commit it started on), when
+it ended and how long it took; each task in order — who did it (role → provider, host, model; or the session, and why it
+took the work), every attempt with its answer, its verdict and every finding whole, the retry, accept, confirm and drop
+judgments with who made them or the delegation's words, the checks and what the record says of them, the touched files and
+the times; then what is left (open tasks, what the reviewer said at close). A run recorded before chongdae kept these times
+is timed from its own record commits, and says so. `--since REV`: one line per run whose record was not complete at REV
+(the runs `report --since` reads) — goal, status, tasks done/dropped/open, self-performed and taken, attempts, verifier
+rejects, delegated judgments, duration — and a totals line. `--path FILE`: the runs and tasks whose `touched` holds that
+file (or a file under that directory), newest first, with who did each
 
 ### `/chongdae:run`
 
@@ -165,7 +182,9 @@ Committed: yes.
 
 one file per task (so two people's tasks in one run merge as distinct files): status, claim, touched, response,
 review, `stages` (the before/after roles' answers and who gave them), attempts, confirmation, non-claims,
-`self-performed` (the session took a task the lock had hired someone for, and why), `performed_by` and `verified_by` —
+`self-performed` (the session took a task the lock had hired someone for, and why), `done` (when it became done),
+`answered` and `verdict-given` (when an attempt's answer and its verdict came back; a retried attempt keeps both),
+`performed_by` and `verified_by` —
 each author line with its `trace` (the files that call changed, how many commands it ran and how many failed) — and
 for session tasks the task's own definition
 
@@ -208,7 +227,7 @@ model
 
 Committed: yes.
 
-the run's status, `created`, `environment.locked` (the lock every call ran under — a task's author line says `locked`
+the run's status, `created`, `ended`, `environment.locked` (the lock every call ran under — a task's author line says `locked`
 only when its call ran under another), `reviewed` (what the reviewer said and wrote when the run ended), `landed`
 (older runs kept their tasks here; still read)
 
@@ -242,9 +261,9 @@ its call (`worker` in its response). A verifier's call is recorded the same way 
 
 **The run is the agent's container.** The plugin's PreToolUse hook refuses Edit/Write in a project with no run in
 progress (the record, `.claude/` and `hunsu*` are exempt — their own engines write them); the SessionStart line says
-which run is open. So runs must be cheap: `init --session` opens one with no plan, `add <id>` names each piece as the
+which run is open (not inside a worker session, `AGENT_WORKER=1`: the run is the hiring session's). So runs must be cheap: `init --session` opens one with no plan, `add <id>` names each piece as the
 work starts (a task with no check is allowed — done is then the agent's word, recorded as a non-claim), `run` records
-what each piece touched, `close` ends it. A task's word stays its own: when a task is done, the files it recorded are
+what each piece touched (since its start, committed or not: work committed before `run` is still the task's), `close` ends it. A task's word stays its own: when a task is done, the files it recorded are
 measured from there for the session tasks still open, and a no-check task that changed nothing of its own is not swept
 to done by the same `run` right after the task before it. A session build's `--tests` must exist when it is added (its
 start is taken then); write them in their own task first. Bash writes are not covered; dwitbuk's `outside-run` catches

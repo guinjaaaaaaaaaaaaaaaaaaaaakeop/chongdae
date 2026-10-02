@@ -322,8 +322,9 @@ def test_verifier_before_the_gate_protected_tests_and_delegation_policy():
         assert run("confirm", "S3", "--by", "kim", "--target", pj.dir)[0] == 0
 
 
-def hook(name, payload):
-    done = subprocess.run([sys.executable, os.path.join(HERE, "hooks", name)], input=json.dumps(payload), capture_output=True, text=True, encoding="utf-8")
+def hook(name, payload, **env):
+    done = subprocess.run([sys.executable, os.path.join(HERE, "hooks", name)], input=json.dumps(payload), capture_output=True, text=True, encoding="utf-8",
+                          env=dict(os.environ, **env))
     return done.returncode, done.stdout + done.stderr
 
 
@@ -1171,6 +1172,7 @@ def test_session_run_tasks_added_as_the_work_goes_claims_and_the_write_hook():
             assert run("init", "--session", "--goal", "tidy", "--target", pj.dir)[0] == 0
             assert hook("pre_write.py", {"cwd": pj.dir, "tool_name": "Edit", "tool_input": {"file_path": os.path.join(pj.dir, "a.py")}})[0] == 0
             assert "run %s in progress" % os.path.basename(chongdae.run_dir(pj.dir)) in hook("session_start.py", {"cwd": pj.dir})[1]
+            assert hook("session_start.py", {"cwd": pj.dir}, AGENT_WORKER="1") == (0, ""), "a worker session: the run is the hiring session's"
             write(os.path.join(pj.dir, "old.py"), "x = 0\n")   # dirt before the task: not the task's
             assert run("add", "T1", "--brief", "fix a typo", "--target", pj.dir)[0] == 0
             assert run("add", "T1", "--target", pj.dir)[0] != 0, "ids are unique"
@@ -1542,22 +1544,122 @@ def test_the_runner_places_the_reviewer_when_a_run_ends():
         assert st["status"] == "complete" and st["reviewed"]["exit"] == 1 and "not linked" in st["reviewed"]["said"], st["reviewed"]
 
 
-if __name__ == "__main__":
-    if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    failed = 0
-    for name, fn in sorted(globals().items()):
-        if name.startswith("test_"):
-            try:
-                fn()
-                print("PASS", name)
-            except Skip as why:
-                print("SKIP", name, "--", why)
-            except (Exception, SystemExit) as err:   # a self-check that dies between tests lies by omission
-                failed += 1
-                print("FAIL", name, "--", "%s: %s" % (type(err).__name__, err))
-    print("all passed" if not failed else "%d failed" % failed)
-    sys.exit(1 if failed else 0)
+def test_show_tells_what_happened_in_a_run_with_its_times_and_nothing_cut():
+    """Nobody could see what happened in a run after it ran: `status` shows the open run, `report` is findings for a reviewer, and
+    agents read tasks/*.json with cat and guessed keys — a retrospective of one day took ~50 tool calls. `show` tells a run in
+    order (who did each task, every attempt with its verdict and findings whole, the judgments, checks, touched files, times),
+    `--since` gives one line per run and the totals, `--path` the tasks that touched a file. The record now keeps the times it
+    lacked: when a task became done, when an attempt's answer and its verdict came back, when the run ended."""
+    long_why = "the counter restarts after clear, so the next id repeats an old one — " + "a reader needs every word of this. " * 12
+    reject = {**REVIEW_REJECT, "findings": [{**REVIEW_REJECT["findings"][0], "why": long_why}]}
+    with Project() as pj:
+        subprocess.run(["git", "config", "user.email", "t@t"], cwd=pj.dir, check=True)
+        subprocess.run(["git", "config", "user.name", "t"], cwd=pj.dir, check=True)
+        write(os.path.join(pj.dir, "hunsu.lock.json"), {"roles": {"implementer": pj.fake_provider(RESPONSE_DONE), "verifier": pj.fake_provider(reject, "verifier")}})
+        write(os.path.join(pj.dir, ".gitignore"), "*.py\n")   # the fake providers are not the work
+        subprocess.run(["git", "add", "-A"], cwd=pj.dir, check=True)
+        subprocess.run(["git", "commit", "-qm", "base"], cwd=pj.dir, check=True)
+        base = subprocess.run(["git", "rev-parse", "HEAD"], cwd=pj.dir, capture_output=True, text=True).stdout.strip()
+        os.environ["CHONGDAE_USER"] = "kim"
+        try:
+            assert run("show", "--target", pj.dir) == (0, "no run\n")
+            assert run("init", "--session", "--goal", "count memos", "--target", pj.dir)[0] == 0
+            assert run("add", "T1", "--brief", "the plan section", "--target", pj.dir)[0] == 0
+            write(os.path.join(pj.dir, "plan.md"), "## Q1\n")
+            assert run("run", "--target", pj.dir)[0] == 0
+            assert run("add", "B", "--brief", "count", "--check", sys.executable + " -c pass", "--gate", "human", "--target", pj.dir)[0] == 0
+            code, out = run("run", "--target", pj.dir)
+            assert code == chongdae.DECISION and "verifier rejected" in out, out
+            ts = pj.state()["tasks"]["B"]
+            # every attempt keeps when its answer and its verdict came back
+            assert all(a["answered"]["at"].endswith("+00:00") and a["verdict-given"]["at"].endswith("+00:00") for a in ts["attempts"]), ts["attempts"]
+            assert ts["answered"]["at"] and ts["verdict-given"]["at"] and ts["review"]["verdict"] == "reject"
+            pj.fake_provider(REVIEW_ACCEPT, "verifier")
+            assert run("retry", "B", "--delegated", "the owner handed this run off", "--target", pj.dir)[0] == 0
+            assert run("run", "--target", pj.dir)[0] == chongdae.DECISION
+            assert run("confirm", "B", "--by", "kim", "--target", pj.dir)[0] == 0
+            assert run("run", "--target", pj.dir)[0] == 0
+            assert run("add", "D", "--brief", "superseded piece", "--target", pj.dir)[0] == 0
+            assert run("drop", "D", "--why", "superseded by B", "--target", pj.dir)[0] == 0
+            assert run("add", "O", "--brief", "left for later", "--target", pj.dir)[0] == 0
+            assert run("close", "--target", pj.dir)[0] == 0
+        finally:
+            os.environ.pop("CHONGDAE_USER", None)
+        st = pj.state()
+        assert st["ended"]["at"].endswith("+00:00") and st["tasks"]["T1"]["done"]["at"] and st["tasks"]["B"]["done"]["at"] == st["tasks"]["B"]["confirmed"]["at"]
+        code, out = run("show", "--target", pj.dir)
+        assert code == 0, out
+        name = os.path.basename(chongdae.run_dir(pj.dir))
+        assert out.startswith("run %s — session, complete\ngoal: count memos\n" % name), out
+        assert "· ended " in out and "· took " in out and "(from git" not in out, out   # the record's own times
+        assert "tasks 4: 2 done, 1 dropped, 1 open · 0 self-performed (0 taken) · 5 attempt(s) · 3 verifier reject(s) · 1 delegated" in out, out
+        assert long_why in out, "a finding is never cut"
+        assert "attempt 4: done, answered " in out and "verifier: accept at " in out and "retried at " in out and "delegated: the owner handed this run off" in out, out
+        assert "by chongdae (auto: the verifier rejected: 1 finding(s))" in out, out
+        assert "who: implementer → command " in out and "verified by: command " in out, out
+        assert "checks (passed here when the task was produced):" in out and "confirmed at " in out and "by kim" in out, out
+        assert "dropped at " in out and "superseded by B" in out and "touched: plan.md" in out, out
+        assert "\nleft open: O (todo)\n" in out and "reviewer" in out, out
+        b = out[out.index("\nB  done"):out.index("\nD  dropped")]
+        assert "added " in b and " done " in b and "took " in b, b
+        # --since: one line per run, and the totals
+        code, out = run("show", "--since", base, "--target", pj.dir)
+        lines = out.strip().split("\n")
+        assert code == 0 and len(lines) == 2 and lines[0].startswith(name + "  complete  ") and lines[0].endswith("— count memos"), out
+        assert lines[1].startswith("total: 1 run(s) · tasks 4: 2 done, 1 dropped, 1 open") and "3 verifier reject(s) · 1 delegated" in lines[1], out
+        assert run("show", "--since", "HEAD", "--target", pj.dir)[1] == "no run since HEAD\n"
+        # --path: the tasks that touched a file, newest first
+        code, out = run("show", "--path", "./plan.md", "--target", pj.dir)
+        assert code == 0 and out.startswith(name) and "\n  T1  done  session (" in out and "the plan section" in out, out
+        assert "no task in any run recorded touching nope.py" in run("show", "--path", "nope.py", "--target", pj.dir)[1]
+        # a run recorded before these times existed: its end comes from the close commit, and says so
+        rd = chongdae.run_dir(pj.dir)
+        sf = os.path.join(rd, "state.json")
+        old = chongdae.load(sf); old.pop("ended"); write(sf, old)
+        for tid in ("T1", "B"):
+            tf = os.path.join(rd, "tasks", tid + ".json")
+            t = chongdae.load(tf); t.pop("done"); write(tf, t)
+        code, out = run("show", "--run", name, "--target", pj.dir)
+        assert "ended " in out and "(from git)" in out and "· took " in out, out
+        assert "done — its time not recorded (an older chongdae); by the run's end, " in out, out
+        assert run("show", "--run", "run-nope", "--target", pj.dir)[0] != 0
+
+
+def test_a_run_reviewed_before_since_does_not_claim_a_change_made_after_it():
+    """`report --since REV` asks which changes since REV no run claims. Every completed run's `touched` used to claim, so a path
+    some old run once touched hid a later change made outside any run. Only the runs whose work falls in the range claim it:
+    the runs whose record was not complete at REV (the ones `--since` already reviews); an earlier run's work was in the tree
+    there. Without --since the range is the whole history, and every completed run claims."""
+    with Project() as pj:
+        subprocess.run(["git", "config", "user.email", "t@t"], cwd=pj.dir, check=True)
+        subprocess.run(["git", "config", "user.name", "t"], cwd=pj.dir, check=True)
+        write(os.path.join(pj.dir, "a.py"), "x = 0\n")
+        subprocess.run(["git", "add", "-A"], cwd=pj.dir, check=True)
+        subprocess.run(["git", "commit", "-qm", "base"], cwd=pj.dir, check=True)
+        os.environ["CHONGDAE_USER"] = "kim"
+        try:
+            assert run("init", "--session", "--goal", "old work", "--target", pj.dir)[0] == 0
+            assert run("add", "T1", "--brief", "a", "--target", pj.dir)[0] == 0
+            write(os.path.join(pj.dir, "a.py"), "x = 1\n")
+            assert run("run", "--target", pj.dir)[0] == 0
+            subprocess.run(["git", "commit", "-qam", "the old run's work"], cwd=pj.dir, check=True)
+            assert run("close", "--target", pj.dir)[0] == 0
+            reviewed = subprocess.run(["git", "rev-parse", "HEAD"], cwd=pj.dir, capture_output=True, text=True).stdout.strip()   # the last review covered up to here
+            write(os.path.join(pj.dir, "a.py"), "x = 2\n")   # outside any run, after the review
+            subprocess.run(["git", "commit", "-qam", "a change no run made"], cwd=pj.dir, check=True)
+            write(os.path.join(pj.dir, "b.py"), "y = 0\n")
+            assert run("init", "--session", "--goal", "new work", "--target", pj.dir)[0] == 0
+            assert run("add", "T2", "--brief", "b", "--target", pj.dir)[0] == 0
+            write(os.path.join(pj.dir, "b.py"), "y = 1\n")
+            assert run("run", "--target", pj.dir)[0] == 0
+            assert run("close", "--target", pj.dir)[0] == 0
+        finally:
+            os.environ.pop("CHONGDAE_USER", None)
+        doc = json.loads(run("report", "--since", reviewed, "--target", pj.dir)[1])
+        outside = [f["where"] for f in doc["findings"] if f["kind"] == "outside-run"]
+        assert outside == ["a.py"], outside   # the old run's T1 touched a.py before the review; b.py is the new run's
+        doc = json.loads(run("report", "--target", pj.dir)[1])   # the whole history: the old run claims a.py, as it always did
+        assert [f["where"] for f in doc["findings"] if f["kind"] == "outside-run"] == [], doc
 
 
 def test_the_other_products_records_are_known_from_the_lock_not_by_name():
@@ -1581,3 +1683,58 @@ def test_the_other_products_records_are_known_from_the_lock_not_by_name():
             assert chongdae.record_paths(pj.dir) == (".chongdae/", ".claude/", "hunsu", ".mangsang/", ".dwitbuk/", "reviews/"), "no lock: the old names"
         finally:
             os.environ.pop("CHONGDAE_USER", None)
+
+
+def test_work_the_session_committed_before_run_is_still_the_tasks():
+    """`touched` measured only what differed from HEAD, so a session that committed its work before `run` recorded
+    `touched: []` (guin-site's drop-nojekyll: three committed files nobody claimed, later reported as outside-run). The start
+    keeps the commit it stood on; a file a commit since then changed is measured against what it was there. A task still
+    open does not inherit what the done one committed, and a change committed and then undone is no change."""
+    with Project() as pj:
+        subprocess.run(["git", "config", "user.email", "t@t"], cwd=pj.dir, check=True)
+        subprocess.run(["git", "config", "user.name", "t"], cwd=pj.dir, check=True)
+        for f in ("a.py", "b.py", "c.py"):
+            write(os.path.join(pj.dir, f), "x = 0\n")
+        subprocess.run(["git", "add", "-A"], cwd=pj.dir, check=True)
+        subprocess.run(["git", "commit", "-qm", "base"], cwd=pj.dir, check=True)
+        os.environ["CHONGDAE_USER"] = "kim"
+        try:
+            assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
+            assert run("add", "T1", "--brief", "a", "--target", pj.dir)[0] == 0
+            assert run("add", "T2", "--brief", "b", "--target", pj.dir)[0] == 0
+            write(os.path.join(pj.dir, "a.py"), "x = 1\n")
+            subprocess.run(["git", "commit", "-qam", "T1's work, committed before run"], cwd=pj.dir, check=True)
+            code, out = run("run", "--target", pj.dir)
+            assert code == 2 and "T2 has changed nothing of its own" in out, out   # T1 done; T2 has not started
+            st = pj.state()
+            assert st["tasks"]["T1"]["touched"] == ["a.py"], st["tasks"]["T1"]
+            # T2 was open over the same window: a.py is T1's, not T2's; its own committed change is its
+            write(os.path.join(pj.dir, "b.py"), "x = 2\n")
+            subprocess.run(["git", "commit", "-qam", "T2's work"], cwd=pj.dir, check=True)
+            write(os.path.join(pj.dir, "c.py"), "x = 3\n")
+            subprocess.run(["git", "commit", "-qam", "tried"], cwd=pj.dir, check=True)
+            write(os.path.join(pj.dir, "c.py"), "x = 0\n")
+            subprocess.run(["git", "commit", "-qam", "and undone"], cwd=pj.dir, check=True)
+            assert run("run", "--target", pj.dir)[0] == 0
+            st = pj.state()
+            assert st["tasks"]["T2"]["touched"] == ["b.py"], st["tasks"]["T2"]
+        finally:
+            os.environ.pop("CHONGDAE_USER", None)
+
+
+if __name__ == "__main__":
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    failed = 0
+    for name, fn in sorted(globals().items()):
+        if name.startswith("test_"):
+            try:
+                fn()
+                print("PASS", name)
+            except Skip as why:
+                print("SKIP", name, "--", why)
+            except (Exception, SystemExit) as err:   # a self-check that dies between tests lies by omission
+                failed += 1
+                print("FAIL", name, "--", "%s: %s" % (type(err).__name__, err))
+    print("all passed" if not failed else "%d failed" % failed)
+    sys.exit(1 if failed else 0)

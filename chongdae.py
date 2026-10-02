@@ -14,6 +14,10 @@
                                         claims (outside-run), runs that recorded no `touched` (unattributed), gates/decisions/retries passed
                                         by delegation, and every non-claim. chongdae knows its runs and git; a reviewer knows the type
   status [--target DIR]                 the run in progress (or the newest) and its open tasks; exit 0 always — for a skill's first look
+  show  [--run ID | --since REV | --path FILE]   what happened, for a reader after the fact (read-only, plain text, nothing cut):
+                                        a run's tasks in order — who did each, every attempt with its verdict and findings, the
+                                        judgments, checks, touched files and times; `--since`: one line per run and the totals;
+                                        `--path`: the tasks that touched a file, newest first
   run   [--target DIR]                  advance one step. Exit 2 = stopped for the session agent or a human; the last line says what to do
   confirm <task> [--by NAME | --delegated "why"] [--target DIR]   record the human's confirmation of a produced artifact
   delegate --scope confirm,accept,... --why "..." --by NAME [--run ID]   declare a batch pre-approval once, as its own judgment; later
@@ -122,7 +126,7 @@ def save(path, data):
 LOCAL = "local"
 
 
-PRIVATE_KEYS = ("session", "transcript", "kept-locally", "start",   # the host session behind an author line; the snapshot a task measures from
+PRIVATE_KEYS = ("session", "transcript", "kept-locally", "start", "start-head",   # the host session behind an author line; the snapshot a task measures from, and the commit it stood on
                 "commands", "read",                                 # a worker's command lines and what it read: the record keeps the summary (`trace`)
                 "reported", "rebaseline")                           # flags the engine keeps between two `run` calls
 
@@ -842,21 +846,47 @@ def record_changes(target):
     return sorted(p for p in (dirty(target, records_too=True) or {}) if p.startswith(rp))
 
 
-def touched_files(target, start=None):
+def file_hash(target, path):
+    """A file's content hash as `dirty` writes it, or "gone"."""
+    import hashlib
+    full = os.path.join(target, path)
+    return hashlib.sha1(io.open(full, "rb").read()).hexdigest() if os.path.isfile(full) else "gone"
+
+
+def committed_since(target, head):
+    """{path: content hash at `head`} for every file a commit since `head` changed (records and leftovers aside, as in `dirty`):
+    work the session committed before `run` measured it. Empty when HEAD has not moved or there is no git."""
+    import hashlib, subprocess
+    if not head or head == head_sha(target):
+        return {}
+    done = subprocess.run(["git", "diff", "--name-only", "--no-renames", "--relative", head, "HEAD", "--", "."], cwd=target, capture_output=True, text=True, encoding="utf-8")
+    if done.returncode:
+        return {}
+    out = {}
+    for path in done.stdout.splitlines():
+        path = path.strip().replace("\\", "/")
+        if path and not path.startswith(record_paths(target)) and not re.search(r"(^|/)__pycache__/|\.py[co]$", path):
+            then = subprocess.run(["git", "show", "%s:./%s" % (head, path)], cwd=target, capture_output=True)
+            out[path] = hashlib.sha1(then.stdout).hexdigest() if then.returncode == 0 else "gone"
+    return out
+
+
+def touched_files(target, start=None, head=None):
     """What changed since the task started: every file whose content is not what it was then. Without a start snapshot, the
     whole dirty set. A file dirty at start and clean now went back to HEAD — a change like any other, and the one a build
-    makes when it takes the committed version of an uncommitted file for the real one (a contract's newest tests)."""
-    import hashlib
+    makes when it takes the committed version of an uncommitted file for the real one (a contract's newest tests).
+    `head`, the commit the tree stood on at start: a file a commit since then changed is measured against what it was there,
+    so work the session committed before `run` is still this task's (guin-site's drop-nojekyll recorded `touched: []`
+    for three committed files, and the report then had nobody to attribute them to)."""
     now = dirty(target)
     if now is None:
         return None
     start = start or {}
-    changed = {p for p, h in now.items() if start.get(p) != h}
-    for p, h in start.items():
-        if p not in now:
-            full = os.path.join(target, p)
-            if (hashlib.sha1(io.open(full, "rb").read()).hexdigest() if os.path.isfile(full) else "gone") != h:
-                changed.add(p)
+    then = committed_since(target, head)
+    changed = {p for p, h in now.items() if start.get(p, then.get(p)) != h}
+    for p, h in list(start.items()) + [(p, h) for p, h in then.items() if p not in start]:
+        if p not in now and file_hash(target, p) != h:
+            changed.add(p)
     return sorted(changed)
 
 
@@ -1286,6 +1316,7 @@ def cmd_run(args):
                 return stop("%s: its protected tests do not exist (%s) — the guard would watch nothing; the task that writes them runs first, "
                             "or fix the paths (`chongdae drop` and `add` again)" % (task["id"], ", ".join(absent)))
             ts["start"] = dirty(target)   # what the tree already differed in: `touched` is measured from here, not from HEAD
+            ts["start-head"] = head_sha(target)   # and the commit under it: a commit made during the task is still the task's work
             keep_contract_tests(target, d, task)
             save_state(d, state)
         if ts["status"] == "todo":
@@ -1307,6 +1338,7 @@ def cmd_run(args):
             return stop("human: review %s (%s) — then `chongdae confirm %s --by <name>` or `--delegated \"<why the human handed this off>\"`"
                         % (task.get("produces", "task %s (checks passed: %s)" % (task["id"], "; ".join(" ".join(c) for c in task.get("checks", [])))), path or task.get("closes", ""), task["id"]))
         ts["status"] = "done"
+        ts["done"] = stamp()   # when it became done: `show` tells a run's durations from it
         save_state(d, state)
         print("  done %s" % task["id"])
     return end_of_pass(ctx)
@@ -1322,10 +1354,7 @@ def run_hands(ctx, task, ts, who):
         # the tests this build disputed were rewritten by the task that owns them; they are the contract again
         now = dirty(target) or {}
         for f in ts["rebaseline"]:
-            if f in now:
-                ts.setdefault("start", {})[f] = now[f]
-            else:
-                (ts.get("start") or {}).pop(f, None)
+            ts.setdefault("start", {})[f] = now.get(f) or file_hash(target, f)
         ts.setdefault("rebaselined", []).append({"tests": ts.pop("rebaseline"), **stamp()})
         save_state(d, state)
     if not ts.get("response"):
@@ -1336,6 +1365,7 @@ def run_hands(ctx, task, ts, who):
         if code == WAITING:
             return stop(waiting_text(task["id"], response))
         ts["response"] = response
+        ts["answered"] = stamp()   # when the hands' answer came back: the attempt's end, for `show`
         ts["touched_by_provider"] = touched_files(target, before)
         ts["performed_by"] = against_run(with_trace(performer(who, argv=who if isinstance(who, list) else [who], response=response, target=target), response, d, target), state)   # the un-resolved argv: portable, names host/model without machine paths
         if native_argv(target, who):
@@ -1399,7 +1429,7 @@ def decide_task(ctx, task, ts, who, path):
         failed = run_checks(target, task["checks"])
         if failed:
             return stop("session agent: %s — make these checks pass, then `chongdae run`" % task["id"], task.get("brief", ""), *failed)
-        touched = touched_files(target, ts.get("start")) or []
+        touched = touched_files(target, ts.get("start"), ts.get("start-head")) or []
         broken = [t for t in task.get("tests", []) if t in touched]
         if broken:
             # The contract owns its checks. A build that edits them decided its own verdict — that is a reject, whoever built.
@@ -1421,7 +1451,7 @@ def decide_task(ctx, task, ts, who, path):
         # a session task with no check: done is the agent's word (a non-claim since `add`). It still has to be the
         # task's own word: a task added ahead of its work would otherwise be done here with the files the task before
         # it changed — a false claim a done task cannot take back
-        if who == "session" and ctx["claimed_now"] and not touched_files(target, ts.get("start")):
+        if who == "session" and ctx["claimed_now"] and not touched_files(target, ts.get("start"), ts.get("start-head")):
             return stop("session agent: %s has changed nothing of its own — %s were the task before it — do its work, then "
                         "`chongdae run`; `chongdae drop %s --why` if it will not be done" % (task["id"], ", ".join(sorted(ctx["claimed_now"])), task["id"]),
                         task.get("brief", ""))
@@ -1434,12 +1464,12 @@ def decide_task(ctx, task, ts, who, path):
     # People hired after the work: they see the result (touched files, the builder's report) and answer with findings for
     # the record — not a verdict; the gate stands as declared, and the reviewer's report carries what they found.
     built = {k: (ts.get("response") or {}).get(k) for k in ("summary", "verified", "non-claims")} if ts.get("response") else None
-    code = run_stage(target, d, task, ts, state, plan, prov, "after", {"touched": touched_files(target, ts.get("start")) or [], "tests": task.get("tests", []), "built": built})
+    code = run_stage(target, d, task, ts, state, plan, prov, "after", {"touched": touched_files(target, ts.get("start"), ts.get("start-head")) or [], "tests": task.get("tests", []), "built": built})
     if code is not None:
         return code
     ts["status"] = "produced"
     ts["checks"] = task.get("checks", [])
-    ts["touched"] = touched_files(target, ts.get("start"))   # what this task changed: the reviewer joins runs to files with it
+    ts["touched"] = touched_files(target, ts.get("start"), ts.get("start-head"))   # what this task changed: the reviewer joins runs to files with it
     ctx["claimed_now"].update(ts["touched"] or [])
     # those files are this task's now: a session task still open measures its own changes from here, not from its `add`
     now = dirty(target) or {}
@@ -1447,10 +1477,7 @@ def decide_task(ctx, task, ts, who, path):
         other = state["tasks"][t2["id"]]
         if other is not ts and other.get("status") == "todo" and isinstance(other.get("start"), dict) and prov.get(t2["role"]) == "session":
             for f in ts["touched"] or []:
-                if f in now:
-                    other["start"][f] = now[f]
-                else:
-                    other["start"].pop(f, None)
+                other["start"][f] = now.get(f) or file_hash(target, f)   # pinned: committed since, it may be clean at a newer HEAD
     if "performed_by" not in ts:
         ts["performed_by"] = against_run(performer(who, target=target), state)   # the session did the work: record which host/model/session, like a commit author
     if who == "session" and not ts.get("response"):
@@ -1492,6 +1519,7 @@ def place_eyes(ctx, task, ts, who, touched):
         if code == WAITING:
             return stop(waiting_text(task["id"] + " (verify)", review))
         ts["review"] = review
+        ts["verdict-given"] = stamp()   # when the eyes answered: the verification's end, for `show`
         ts["reviewed_tree"] = dirty(target)   # the tree this verdict was about: the next round is measured from here
         ts["verified_by"] = against_run(with_trace(performer(prov["verifier"], argv=prov["verifier"] if isinstance(prov["verifier"], list) else [prov["verifier"]], response=review, target=target), review, d, target), state)
         if native_argv(target, prov["verifier"]):
@@ -1500,6 +1528,7 @@ def place_eyes(ctx, task, ts, who, touched):
     review = ts["review"]
     if review.get("verdict") not in ("accept", "reject"):
         ts.pop("review", None)
+        ts.pop("verdict-given", None)
         save_state(d, state)
         return stop("%s: the verifier did not answer (%s) — fix the verifier or its provider argv, then `chongdae run`" % (task["id"], review.get("summary") or review.get("status") or "no verdict"))
     if review["verdict"] == "reject":
@@ -1527,6 +1556,7 @@ def end_of_pass(ctx):
     if any(state["tasks"][t["id"]]["status"] not in ("done", "skipped", "dropped") for t in all_tasks(plan, state)):
         return stop("nothing this machine can advance — the open tasks are claimed elsewhere (or blocked on them); pull and `chongdae run` again")
     state["status"] = "complete"
+    state["ended"] = stamp()   # when the run ended: `show` gives its duration from `created` to here
     save_state(d, state)
     wrote = place_reviewer(target, d, state, plan)
     save_state(d, state)
@@ -1634,7 +1664,7 @@ def resend(target, d, state, task_id, retried, message=None):
     attempt = {**(response or {"status": "session"}), "retried": {**retried, **stamp()}}
     if response:
         with_trace(attempt, response, d, target)   # what this attempt's worker did stays with the attempt
-    for key in ("review", "rejected", "reviewed_tree"):
+    for key in ("review", "rejected", "reviewed_tree", "answered", "verdict-given"):   # the attempt keeps its verdict and its times
         if key in ts:
             attempt[key] = ts.pop(key)
     if "stages" in ts:
@@ -1688,7 +1718,7 @@ def route_dispute(target, d, state, plan, task, disputed):
         return False
     wts = state["tasks"][writer["id"]]
     attempt = {**(wts.pop("response", None) or {}), "reopened": {"by": "chongdae", "auto": "tests disputed by %s" % task["id"], **stamp()},
-               "disputed-tests": disputed}
+               "disputed-tests": disputed, **({"answered": wts.pop("answered")} if "answered" in wts else {})}
     wts.setdefault("attempts", []).append(attempt)
     n = len(wts["attempts"])
     for kind in ("response", "request", "pending", "response.transcript"):
@@ -1859,6 +1889,7 @@ def cmd_add(args):
         ts["self-performed"] = own
     if task["role"] == "session":
         ts["start"] = dirty(args.target)   # the session works between `add` and `run`: what changed is measured from now
+        ts["start-head"] = head_sha(args.target)
         keep_contract_tests(args.target, d, task)
     # a provider's task starts when `run` spawns it (`start` is taken then): a build added alongside its test task must not see the test-writer's file as its own change
     if not task["checks"]:
@@ -1925,11 +1956,11 @@ def cmd_drop(args):
         raise SystemExit("no task %s" % args.task)
     if ts["status"] in ("done", "skipped", "dropped"):
         raise SystemExit("%s is %s — nothing to drop" % (args.task, ts["status"]))
-    if ts.get("response") and (ts["response"].get("status") == "done" or touched_files(args.target, ts.get("start"))):
+    if ts.get("response") and (ts["response"].get("status") == "done" or touched_files(args.target, ts.get("start"), ts.get("start-head"))):
         print("note: %s's hands changed the tree — if that work stands, `chongdae take %s --why` finishes it as done work instead" % (args.task, args.task))
     ts["status"] = "dropped"
     ts["dropped"] = {"why": args.why, "by": args.by if args.by is not None else me(args.target), **stamp()}
-    ts["touched"] = touched_files(args.target, ts.get("start"))   # what changed in its window stays attributed to it, dropped or not
+    ts["touched"] = touched_files(args.target, ts.get("start"), ts.get("start-head"))   # what changed in its window stays attributed to it, dropped or not
     ts.setdefault("non-claims", []).append("dropped, not done: %s" % args.why)
     save_state(d, state)
     commit_record(args.target, os.path.basename(d), "drop %s: %s" % (args.task, args.why))
@@ -1999,6 +2030,7 @@ def cmd_close(args):
         raise SystemExit("no session run in progress")
     open_ = [tid for tid, ts in state["tasks"].items() if ts["status"] not in ("done", "skipped", "dropped")]
     state["status"] = "complete"   # which tasks stayed open is the tasks' own status; `report`/`status` recount it, nothing read a copy
+    state["ended"] = stamp()
     save_state(d, state)
     wrote = place_reviewer(args.target, d, state, plan)
     save_state(d, state)
@@ -2027,6 +2059,7 @@ def cmd_confirm(args):
     # Delegation is recorded with what stood in for the reader: a verifier's accept, or nothing. The reviewer counts the two apart.
     ts["confirmed"] = {**({"by": args.by} if args.by else {**delegation_record(d, args.delegated, "confirm"), "verifier": verdict}), **stamp()}
     ts["status"] = "done"
+    ts["done"] = {k: ts["confirmed"][k] for k in ("at", "chongdae")}   # the confirmation is the moment it became done
     save_state(d, state)
     commit_record(args.target, os.path.basename(d), "confirm %s (%s)" % (args.task, "by " + args.by if args.by else "delegated"))
     print("confirmed %s (%s)" % (args.task, "by " + args.by if args.by else "delegated: " + args.delegated))
@@ -2145,9 +2178,14 @@ def cmd_report(args):
                          "text": "%s: the project's own procedure, declared in hunsu.json; %d file(s) changed there since %s are not reported as outside-run"
                                  % (", ".join(declared), len(by_procedure), args.since or "the beginning")})
     claimed, unattributed = set(), []
+    # Only a run whose work falls in the range claims a change in it: with --since, the runs whose record was not complete at
+    # REV (the ones this report reviews). An earlier run's work was in the tree at REV already — its `touched` names paths, not
+    # changes, and a path it once touched hid any later change made there outside a run. A run complete at REV whose work was
+    # committed only after REV now shows as outside-run: a change the reviewer looks at, rather than one nobody sees.
+    since_runs = runs_since(target, args.since) if args.since else None
     for r in all_runs(target):
         name, plan, state = os.path.basename(r), load(os.path.join(r, "plan.json")), load_state(r)
-        if state.get("status") != "complete":
+        if state.get("status") != "complete" or (since_runs is not None and name not in since_runs):
             continue
         for task in all_tasks(plan, state):
             ts = state["tasks"].get(task["id"], {})
@@ -2157,12 +2195,12 @@ def cmd_report(args):
                 unattributed.append("%s/%s" % (name, task["id"]))
     for path in sorted(changed - claimed):
         findings.append({"kind": "outside-run", "where": path, "files": [path],
-                         "text": "changed since %s; no completed run recorded touching it" % (args.since or "the beginning")})
+                         "text": "changed since %s; no run completed since then recorded touching it" % args.since if args.since
+                                 else "changed; no completed run recorded touching it"})
     if unattributed:
         findings.append({"kind": "unattributed", "where": ", ".join(unattributed),
                          "text": "these runs completed without recording touched files; changes they made cannot be told from work outside runs"})
     # what no human decided, and what nobody claims
-    since_runs = runs_since(target, args.since) if args.since else None
     for r in all_runs(target):
         name, plan, state = os.path.basename(r), load(os.path.join(r, "plan.json")), load_state(r)
         if since_runs is not None and name not in since_runs:
@@ -2311,12 +2349,374 @@ def cmd_status(args):
     return 0
 
 
+# ---------------------------------------------------------------- show: what happened in a run, for a reader
+
+def as_utc(at):
+    """A recorded time (ours: `+00:00`; git's: the committer's offset; a host's: `Z`) as an aware UTC datetime, or None."""
+    import datetime
+    try:
+        t = datetime.datetime.fromisoformat(str(at).strip().replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return None
+    return (t if t.tzinfo else t.replace(tzinfo=datetime.timezone.utc)).astimezone(datetime.timezone.utc)
+
+
+def when(at, day=None):
+    """A time for a reader: `2026-09-30 07:40:03Z`, or only `07:40:03Z` on the day already named."""
+    t = as_utc(at)
+    if t is None:
+        return str(at) if at else "?"
+    return t.strftime("%H:%M:%SZ") if day and t.strftime("%Y-%m-%d") == day else t.strftime("%Y-%m-%d %H:%M:%SZ")
+
+
+def span(a, b):
+    """The time between two recorded moments, `1h 38m` / `4m 12s`; None when either is unknown."""
+    ta, tb = as_utc(a), as_utc(b)
+    if ta is None or tb is None:
+        return None
+    s = int((tb - ta).total_seconds())
+    return seconds_text(s) if s >= 0 else None
+
+
+def seconds_text(s):
+    return "%dd %dh" % (s // 86400, s % 86400 // 3600) if s >= 86400 else "%dh %02dm" % (s // 3600, s % 3600 // 60) if s >= 3600 else "%dm %02ds" % (s // 60, s % 60)
+
+
+def record_commits(target, run_name):
+    """The run's record commits, oldest first: [(committer time, subject)]. A run recorded before chongdae kept `ended` and
+    `done` is timed from these — the engine committed each judgment as it was made."""
+    import subprocess
+    done = subprocess.run(["git", "log", "--reverse", "--format=%cI%x1f%s", "--", "%s/%s/" % (RUNS, run_name)], cwd=target,
+                          capture_output=True, text=True, encoding="utf-8", errors="replace")
+    return [tuple(l.split("\x1f", 1)) for l in (done.stdout if done.returncode == 0 else "").splitlines() if "\x1f" in l]
+
+
+def run_times(target, d, state, commits=None):
+    """(created at, its source, ended at, its source) — the record's own times, else the record commits' (source "git")."""
+    name = os.path.basename(d)
+    commits = record_commits(target, name) if commits is None else commits
+    created, c_src = (state.get("created") or {}).get("at"), "record"
+    if not created and commits:
+        created, c_src = commits[0][0], "git"
+    ended, e_src = (state.get("ended") or {}).get("at"), "record"
+    if not ended and state.get("status") == "complete":
+        closing = [at for at, subj in commits if re.match(r"%s: (close|complete) — " % re.escape(name), subj)]
+        ended, e_src = (closing[-1], "git") if closing else ((commits[-1][0], "git: the run's last record commit") if commits else (None, None))
+    return created, c_src, ended, e_src
+
+
+def deleg_words(run_d, v):
+    """A delegated judgment's reason: its own words, or the declared delegation a ref points at (who, why)."""
+    if not isinstance(v, dict):
+        return str(v)
+    rec = load(os.path.join(run_d, "delegations", "%s.json" % v.get("ref")))
+    return "ref %s (%s: %s)" % (v.get("ref"), rec.get("by") or "?", rec.get("why") or "?") if rec else "ref %s" % v.get("ref")
+
+
+def judged_by(run_d, j):
+    """Who made a judgment: `by NAME`, `delegated: WHY`, or chongdae itself (`auto: WHY`)."""
+    if not isinstance(j, dict):
+        return "?"
+    if "delegated" in j:
+        return "delegated: " + deleg_words(run_d, j["delegated"])
+    if j.get("auto"):
+        return "by %s (auto: %s)" % (j.get("by", "chongdae"), j["auto"])
+    if j.get("taken"):
+        return "by %s (taken: %s)" % (j.get("by", "?"), j["taken"])
+    return "by %s" % (j.get("by") or "?")
+
+
+def author_text(by):
+    """An author line for a reader: provider, what ran, host, model, effort — and what its trace says it did."""
+    if not isinstance(by, dict) or not by:
+        return "nobody recorded"
+    p = by.get("provider", "?")
+    head = [p]
+    if p in ("command", "native"):
+        argv = [str(a) for a in by.get("argv") or []]
+        head.append(next((a for a in argv if "{plugin:" in a), None) or (argv[1] if len(argv) > 1 else (argv[0] if argv else "?")))
+    detail = [x for x in (by.get("host"), by.get("model"), "effort %s" % by["effort"] if by.get("effort") else None,
+                          "%s turns" % by["turns"] if by.get("turns") is not None else None,
+                          "$%s" % by["cost_usd"] if by.get("cost_usd") is not None else None) if x]
+    if by.get("model-unknown"):
+        detail.append("model unknown: %s" % by["model-unknown"])
+    text = " ".join(head) + (" (%s)" % ", ".join(detail) if detail else "")
+    tr = by.get("trace") or {}
+    if tr:
+        bits = ["changed %d file(s)" % len(tr.get("changed") or [])]
+        if "commands-run" in tr:
+            bits.append("%s command(s)%s" % (tr["commands-run"], " (%s failed)" % tr["commands-failed"] if tr.get("commands-failed") else ""))
+        text += " — " + ", ".join(bits)
+    if isinstance(by.get("relayed_by"), dict):
+        text += "; relayed by " + author_text({k: v for k, v in by["relayed_by"].items() if k != "trace"})
+    return text
+
+
+def task_story(run_d, task, ts, day, run_end):
+    """Every line a reader needs about one task, in the order it happened — text whole, never cut."""
+    tid, role = task.get("id"), task.get("role", "?")
+    out = ["", "%s  %s  (%s)" % (tid, ts.get("status", "?"), role)]
+    pad = "    "
+    if task.get("brief"):
+        out.append("  brief: %s" % task["brief"])
+    facts = [("closes " + ", ".join(task["closes"])) if task.get("closes") else None,
+             ("domain " + task["domain"]) if task.get("domain") else None,
+             ("tests " + ", ".join(task["tests"])) if task.get("tests") else None,
+             ("requires " + ", ".join(task["requires"])) if task.get("requires") else None,
+             ("needs " + ", ".join(task["needs"])) if task.get("needs") else None,
+             ("gate " + json.dumps(task["gate"], ensure_ascii=False) if isinstance(task.get("gate"), dict) else "gate human") if task.get("gate") else None,
+             ("before " + ", ".join(task["before"])) if task.get("before") else None,
+             ("after " + ", ".join(task["after"])) if task.get("after") else None,
+             ("claimed by " + ts["claimed_by"]) if ts.get("claimed_by") else None]
+    if any(facts):
+        out.append("  " + " · ".join(f for f in facts if f))
+    # who did it: the role, and who stood in it
+    own = ts.get("self-performed")
+    if isinstance(own, dict):
+        out.append("  self-performed: the session instead of the lock's %s — by %s at %s: %s" % (own.get("instead-of"), own.get("by"), when(own.get("at"), day), own.get("why")))
+    if isinstance(ts.get("taken"), dict):
+        tk = ts["taken"]
+        out.append("  taken from %s by %s at %s: %s" % (tk.get("from"), tk.get("by"), when(tk.get("at"), day), tk.get("why")))
+    if ts.get("performed_by"):
+        hands = "session" if ts.get("taken") or role == "session" else role
+        out.append("  who: %s%s" % ("" if hands == "session" else hands + " → ", author_text(ts["performed_by"])))
+    # the attempts: each one's answer, its verdict with every finding, and the judgment that sent it again
+    attempts = list(ts.get("attempts") or [])
+    current = {k: ts[k] for k in ("review", "rejected", "answered", "verdict-given") if k in ts}
+    if ts.get("response"):
+        current = {**ts["response"], **current}
+    if current:
+        attempts.append({**current, "_current": True})
+    for i, a in enumerate(attempts, 1):
+        status = a.get("status") or ("session" if a.get("_current") else "?")
+        line = "  attempt %d: %s" % (i, status)
+        if (a.get("answered") or {}).get("at"):
+            line += ", answered %s" % when(a["answered"]["at"], day)
+        out.append(line)
+        if a.get("summary"):
+            out.append(pad + "said: %s" % a["summary"])
+        if isinstance(a.get("performed_by"), dict):
+            out.append(pad + "by: %s" % author_text(a["performed_by"]))
+        for v in a.get("verified") or []:
+            out.append(pad + "it ran: %s -> exit %s" % (v.get("check"), v.get("exit")) if isinstance(v, dict) else pad + "it ran: %s" % v)
+        for x in a.get("decisions") or []:
+            out.append(pad + "decided: %s — chose %r (alternatives: %s)" % (x.get("what"), x.get("chosen"), ", ".join(x.get("alternatives") or []) or "-"))
+        failed = (a.get("validation") or {}).get("failed")
+        if failed:
+            out.append(pad + "its report was refused: %s" % ", ".join(str(f) for f in failed))
+        for n in a.get("non-claims") or []:
+            out.append(pad + "does not claim: %s" % n)
+        rv = a.get("review") or {}
+        if rv:
+            out.append(pad + "verifier: %s%s%s" % (rv.get("verdict") or rv.get("status") or "?",
+                                                   " at %s" % when(a["verdict-given"]["at"], day) if (a.get("verdict-given") or {}).get("at") else "",
+                                                   " — %d finding(s)" % len(rv.get("findings") or []) if rv.get("findings") else ""))
+            for f in rv.get("findings") or []:
+                out.append(pad + "  %s @ %s: %s — record: “%s” — tree: “%s”" % (f.get("kind"), f.get("where"), f.get("why"), f.get("record_quote"), f.get("tree_quote")))
+        rj = a.get("rejected")
+        if isinstance(rj, dict) and rj.get("by") != "verifier":
+            out.append(pad + "rejected by %s: %s%s" % (rj.get("by"), rj.get("why"), " (restored: %s)" % ", ".join(rj["restored"]) if rj.get("restored") else ""))
+        for role_, rec in (a.get("stages") or {}).items():
+            out += stage_lines(run_d, role_, rec, day, pad)
+        if isinstance(a.get("reopened"), dict):
+            out.append(pad + "reopened at %s %s" % (when(a["reopened"].get("at"), day), judged_by(run_d, a["reopened"])))
+        if isinstance(a.get("retried"), dict):
+            out.append(pad + "retried at %s %s" % (when(a["retried"].get("at"), day), judged_by(run_d, a["retried"])))
+    if ts.get("verified_by"):
+        out.append("  verified by: %s" % author_text(ts["verified_by"]))
+    for role_, rec in (ts.get("stages") or {}).items():
+        out += stage_lines(run_d, role_, rec, day, "  ")
+    for role_, rec in (ts.get("unstaged") or {}).items():
+        out.append("  %s taken off at %s by %s: %s" % (role_, when(rec.get("at"), day), rec.get("by"), rec.get("why")))
+    # the checks, and what the record says of their outcome
+    checks = task.get("checks") or []
+    if checks:
+        outcome = ("passed here when the task was produced" if "checks" in ts and ts.get("status") in ("produced", "done")
+                   else "never passed here" if ts.get("status") in ("done", "dropped", "skipped") else "not passed yet")
+        out.append("  checks (%s):" % outcome)
+        out += ["    %s" % " ".join(str(x) for x in c) for c in checks]
+    elif ts.get("status") in ("done", "produced") and not task.get("path"):
+        out.append("  checks: none — done is the agent's word")
+    if isinstance(ts.get("checks-ran-overruled"), dict):
+        out.append("  the validator's refusal overruled at %s — the checks passed here: %s" % (when(ts["checks-ran-overruled"].get("at"), day), "; ".join(ts["checks-ran-overruled"].get("refused") or [])))
+    for rb in ts.get("rebaselined") or []:
+        out.append("  re-baselined at %s: %s" % (when(rb.get("at"), day), ", ".join(rb.get("tests") or [])))
+    if isinstance(ts.get("accepted"), dict):
+        out.append("  decisions accepted at %s %s" % (when(ts["accepted"].get("at"), day), judged_by(run_d, ts["accepted"])))
+    if isinstance(ts.get("confirmed"), dict):
+        c = ts["confirmed"]
+        stood = "" if "by" in c else (" (verifier: %s)" % c.get("verifier") if c.get("verifier") else " (no verifier)")
+        out.append("  confirmed at %s %s%s" % (when(c.get("at"), day), judged_by(run_d, c), stood))
+    if isinstance(ts.get("dropped"), dict):
+        dr = ts["dropped"]
+        out.append("  dropped at %s by %s: %s" % (when(dr.get("at"), day), dr.get("by"), dr.get("why")))
+    if "touched" in ts:
+        out.append("  touched: %s" % (", ".join(ts["touched"] or []) or "nothing"))
+    # its times
+    end = (ts.get("done") or {}).get("at") or (ts.get("dropped") or {}).get("at")
+    times = ["added %s" % when(ts["added"], day)] if ts.get("added") else []
+    if ts.get("status") == "done":
+        if end:
+            times.append("done %s" % when(end, day))
+        elif run_end:
+            times.append("done — its time not recorded (an older chongdae); by the run's end, %s" % when(run_end, day))
+        else:
+            times.append("done — its time not recorded")
+    elif ts.get("status") == "dropped" and end:
+        times.append("dropped %s" % when(end, day))
+    took = span(ts.get("added"), end) if ts.get("added") and end else None
+    if took:
+        times.append("took %s" % took)
+    if times:
+        out.append("  " + " · ".join(times))
+    for n in ts.get("non-claims") or []:
+        if not str(n).startswith("(provider) "):   # the provider's own are its attempt's, said above
+            out.append("  non-claim: %s" % n)
+    return out
+
+
+def stage_lines(run_d, role, rec, day, pad):
+    """A role hired before or after a task: who answered, what it found (whole), and who accepted it."""
+    if rec.get("skipped"):
+        return [pad + "%s: skipped (%s)" % (role, rec["skipped"])]
+    resp = rec.get("response") or {}
+    out = [pad + "%s (%s): %s — %d finding(s)%s" % (role, rec.get("when", "?"), resp.get("status", "no answer"), len(resp.get("findings") or []),
+                                                     ", by " + author_text(rec["by"]) if rec.get("by") else "")]
+    for f in resp.get("findings") or []:
+        out.append(pad + "  %s @ %s: %s — “%s”" % (f.get("kind"), f.get("where", ""), f.get("why", ""), f.get("quote", "")))
+    if isinstance(rec.get("accepted"), dict):
+        out.append(pad + "  accepted at %s %s" % (when(rec["accepted"].get("at"), day), judged_by(run_d, rec["accepted"])))
+    for x in rec.get("failed") or []:
+        out.append(pad + "  did not finish: %s — %s" % ((x.get("response") or {}).get("status"), (x.get("response") or {}).get("summary", "")))
+    return out
+
+
+def run_tally(d, plan, state):
+    """One run's counts: tasks by status, self-performed/taken, attempts, verifier rejects, delegated judgments."""
+    t = {"tasks": 0, "done": 0, "dropped": 0, "open": 0, "skipped": 0, "self": 0, "taken": 0, "attempts": 0, "rejects": 0, "delegated": 0}
+    for task in all_tasks(plan, state):
+        ts = state["tasks"].get(task["id"], {})
+        t["tasks"] += 1
+        st = ts.get("status")
+        t[st if st in ("done", "dropped", "skipped") else "open"] += 1
+        t["self"] += 1 if ts.get("self-performed") else 0
+        t["taken"] += 1 if ts.get("taken") else 0
+        attempts = ts.get("attempts") or []
+        t["attempts"] += len(attempts) + (1 if ts.get("response") or ts.get("review") or ts.get("rejected") or st in ("done", "produced") else 0)
+        t["rejects"] += sum(1 for a in attempts + [ts] if (a.get("review") or {}).get("verdict") == "reject")
+        judgments = [ts.get("confirmed"), ts.get("accepted")] + [a.get("retried") for a in attempts]
+        judgments += [rec.get("accepted") for a in attempts + [ts] for rec in (a.get("stages") or {}).values()]
+        t["delegated"] += sum(1 for j in judgments if isinstance(j, dict) and "delegated" in j)
+    return t
+
+
+def tally_text(t):
+    return ("tasks %d: %d done, %d dropped, %d open%s · %d self-performed (%d taken) · %d attempt(s) · %d verifier reject(s) · %d delegated"
+            % (t["tasks"], t["done"], t["dropped"], t["open"], ", %d skipped" % t["skipped"] if t["skipped"] else "", t["self"], t["taken"], t["attempts"], t["rejects"], t["delegated"]))
+
+
+def cmd_show(args):
+    """What happened in a run, for a person or an agent reading it after: plain text, every reader's text whole. Read-only.
+    `--since REV`: one line per run since then, and their totals. `--path FILE`: the tasks that touched it, newest first."""
+    target = args.target
+    if args.since:
+        names = runs_since(target, args.since)
+        tot, seconds, rows = None, 0, []
+        for r in all_runs(target):
+            if os.path.basename(r) not in names:
+                continue
+            plan, state = load(os.path.join(r, "plan.json")), load_state(r)
+            t = run_tally(r, plan, state)
+            tot = {k: (tot or {}).get(k, 0) + v for k, v in t.items()}
+            created, _, ended, e_src = run_times(target, r, state)
+            took = span(created, ended) if ended else None
+            if took:
+                seconds += int((as_utc(ended) - as_utc(created)).total_seconds())
+            rows.append("%s  %s  %s%s  %s — %s" % (os.path.basename(r), state.get("status", "?"), took or "-", " (git)" if took and e_src != "record" else "",
+                                                 tally_text(t), plan.get("goal", "")))
+        if not rows:
+            print("no run since %s" % args.since)
+            return 0
+        print("\n".join(rows))
+        print("total: %d run(s) · %s · %s in runs" % (len(rows), tally_text(tot), seconds_text(seconds)))
+        return 0
+    if args.path:
+        want = args.path.replace("\\", "/").strip()
+        while want.startswith("./"):
+            want = want[2:]
+        want = want.rstrip("/")
+        found = 0
+        for r in reversed(all_runs(target)):
+            plan, state = load(os.path.join(r, "plan.json")), load_state(r)
+            hits = [(t, state["tasks"].get(t["id"], {})) for t in all_tasks(plan, state)]
+            hits = [(t, ts) for t, ts in hits if any(f == want or f.startswith(want + "/") for f in ts.get("touched") or [])]
+            if not hits:
+                continue
+            created = (state.get("created") or {}).get("at")
+            print("%s  %s  %s — %s" % (os.path.basename(r), when(created) if created else "?", state.get("status", "?"), plan.get("goal", "")))
+            for t, ts in reversed(hits):
+                found += 1
+                hands = "session (taken from %s)" % t.get("role") if ts.get("taken") else t.get("role", "?")
+                print("  %s  %s  %s%s — %s" % (t["id"], ts.get("status", "?"), "" if hands == "session" else hands + " → ", author_text(ts.get("performed_by")), t.get("brief") or "(no brief)"))
+                if want not in (ts.get("touched") or []):
+                    print("    touched there: %s" % ", ".join(f for f in ts["touched"] if f.startswith(want + "/")))
+        if not found:
+            print("no task in any run recorded touching %s (a task's `touched` never holds the record paths)" % want)
+        return 0
+    d = run_dir(target, args.run)
+    if not d:
+        print("no run")
+        return 0
+    plan, state = load(os.path.join(d, "plan.json")), load_state(d)
+    created, c_src, ended, e_src = run_times(target, d, state)
+    day = as_utc(created).strftime("%Y-%m-%d") if as_utc(created) else None
+    print("run %s — %s, %s" % (os.path.basename(d), plan.get("kind", "?"), state.get("status", "?")))
+    print("goal: %s" % plan.get("goal", ""))
+    based = (state.get("created") or {}).get("based_on")
+    line = "created %s%s%s" % (when(created), " (from git)" if c_src == "git" else "", " on %s" % based[:12] if based else "")
+    if (state.get("created") or {}).get("chongdae"):
+        line += " by %s" % state["created"]["chongdae"]
+    if ended:
+        line += " · ended %s%s" % (when(ended, day), " (from %s)" % e_src if e_src != "record" else "")
+        took = span(created, ended)
+        line += " · took %s" % took if took else ""
+    elif state.get("status") == "running":
+        line += " · still running"
+    print(line)
+    if isinstance(state.get("landed"), dict):
+        print("landed %s as %s" % (when(state["landed"].get("at"), day), str(state["landed"].get("commit"))[:12]))
+    if plan.get("from"):
+        print("contract: %s" % plan["from"])
+    print(tally_text(run_tally(d, plan, state)))
+    tasks = all_tasks(plan, state)
+    for task in tasks:
+        for l in task_story(d, task, state["tasks"].get(task["id"], {}), day, ended):
+            print(l)
+    # what is left
+    print("")
+    open_ = [(t["id"], state["tasks"].get(t["id"], {})) for t in tasks if state["tasks"].get(t["id"], {}).get("status") not in ("done", "skipped", "dropped")]
+    if open_:
+        print("left open: %s" % ", ".join("%s (%s%s)" % (tid, ts.get("status", "?"), ", rejected by %s: %s" % (ts["rejected"].get("by"), ts["rejected"].get("why"))
+                                                          if isinstance(ts.get("rejected"), dict) else "") for tid, ts in open_))
+    else:
+        print("left open: nothing")
+    for n in state.get("non-claims") or []:
+        print("run non-claim: %s" % n)
+    rv = state.get("reviewed")
+    if isinstance(rv, dict):
+        print("reviewer at %s (%s): %s%s%s" % (when(rv.get("at"), day), author_text(rv.get("by")), rv.get("said", ""),
+                                               " — wrote %s" % ", ".join(rv["wrote"]) if rv.get("wrote") else "", " — exited %s" % rv["exit"] if rv.get("exit") else ""))
+    elif state.get("status") == "complete":
+        print("reviewer: nothing on record")
+    return 0
+
+
 # ---------------------------------------------------------------- main
 
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="chongdae", description=__doc__)
     sub = ap.add_subparsers(dest="cmd", required=True)
-    for name in ("init", "status", "run", "confirm", "accept", "retry", "recheck", "add", "claim", "take", "drop", "unstage", "close", "report", "delegate"):
+    for name in ("init", "status", "run", "confirm", "accept", "retry", "recheck", "add", "claim", "take", "drop", "unstage", "close", "report", "delegate", "show"):
         p = sub.add_parser(name)
         p.add_argument("--target", default=".")
         if name == "init":
@@ -2335,6 +2735,11 @@ def main(argv=None):
             p.add_argument("--delegated", default=None)
         if name == "report":
             p.add_argument("--since", default=None, help="the revision the last review covered; changes since it are checked against the runs' `touched`")
+        if name == "show":
+            g = p.add_mutually_exclusive_group()
+            g.add_argument("--run", default=None, help="the run to tell (default: the one running, else the newest)")
+            g.add_argument("--since", default=None, help="one line per run whose record was not complete at REV, and their totals")
+            g.add_argument("--path", default=None, help="the runs and tasks whose `touched` holds this file (or a file under this directory), newest first")
         if name == "delegate":
             p.add_argument("--run", default=None, help="the run this delegation belongs to (default: the one running, else the newest)")
             p.add_argument("--scope", required=True, help="comma-separated judgment kinds it covers, e.g. confirm,accept,retry")
@@ -2372,7 +2777,7 @@ def main(argv=None):
             p.add_argument("--requires", nargs="*", default=None, choices=list(REQUIRES), help="what the work requires of the sandbox its hands run in (network, loopback): sent as the request's `needs`; a member that cannot give it refuses before starting")
     args = ap.parse_args(argv)
     return {"init": cmd_init, "status": cmd_status, "run": cmd_run, "confirm": cmd_confirm, "recheck": cmd_recheck, "accept": cmd_accept, "retry": cmd_retry,
-            "add": cmd_add, "claim": cmd_claim, "take": cmd_take, "drop": cmd_drop, "unstage": cmd_unstage, "close": cmd_close, "report": cmd_report, "delegate": cmd_delegate}[args.cmd](args)
+            "add": cmd_add, "claim": cmd_claim, "take": cmd_take, "drop": cmd_drop, "unstage": cmd_unstage, "close": cmd_close, "report": cmd_report, "delegate": cmd_delegate, "show": cmd_show}[args.cmd](args)
 
 
 if __name__ == "__main__":

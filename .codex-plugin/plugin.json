@@ -1,6 +1,6 @@
 {
   "name": "chongdae",
-  "version": "1.14.0",
+  "version": "1.15.0",
   "engines": {
     "python": ">=3.11"
   },
@@ -23,5 +23,25 @@
       "Write"
     ],
     "defaultPrompt": "Use chongdae on this project."
+  },
+  "reads": {
+    "file": [
+      "python3",
+      "{plugin:chongdae}/chongdae.py",
+      "show",
+      "--path",
+      "{path}",
+      "--target",
+      "{target}"
+    ],
+    "since": [
+      "python3",
+      "{plugin:chongdae}/chongdae.py",
+      "show",
+      "--since",
+      "{since}",
+      "--target",
+      "{target}"
+    ]
   }
 }
