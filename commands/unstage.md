@@ -1,5 +1,5 @@
 ---
-description: Take a role hired before or after a task off it, with the reason
+description: Take a role hired before or after a task off it, with the reason (no --by: signed by the session, not a person)
 argument-hint: <task> <role> --why ".." [--by NAME]
 ---
 !`python3 "${CLAUDE_PLUGIN_ROOT}/chongdae.py" unstage $ARGUMENTS`

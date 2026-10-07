@@ -56,6 +56,16 @@ else the shell's own. The hooks anchor the same way: their payload's `cwd` is th
 ancestor holding `.chongdae/`, else git's top level (guin-site, 2026-10-02: after `cd tests` the write hook found no run
 there and would refuse writes during a running run). A shell inside a run's worktree anchors to that worktree.
 
+**Who signs a judgment.** `--by NAME` writes a person's name. Left out, the session signs as itself — `{"agent":
+"claude-code claude-opus-5-5"}`, its host and model as chongdae knows them (the host's env and the session's transcript) —
+and `show` and `report` say `the session (claude-code claude-opus-5-5)` where a person's would say `NAME`. That holds for
+every judgment the session can make alone: `add --role session --why`, `take`, `drop`, `retry`, `claim`, `adopt`,
+`dispute`, `unstage`. Until 1.17.0 an omitted `--by` wrote git user.name, so on guin-site 73 of 80 self-performed records
+— and the drops, takes, claims and adopts the session decided — read as the owner's decision. Where a person's judgment
+is required, the gates (`confirm`, `accept`), `--by NAME` or `--delegated` is still required. `report` lists each
+judgment the session signed as an observation (`session-judged`), so a reviewer reading delegations does not take them
+for the owner's.
+
 ### `/chongdae:init`
 
 Start a run: `--session` (with `--from plan/PLAN.md` when a plan document exists: tasks `--closes Q-…` and the people
@@ -83,12 +93,29 @@ keys through to the lock unchanged. A check is one command: a shell line (`sh -c
 build; a task with a check is a build). `--role` names a declared role outright; `--role session` where the lock
 declares a provider needs `--why` (and `--by`) — recorded on the task as `self-performed`, reported as an observation,
 its reason counted like a delegation's (one reason stamped on task after task is one decision claiming to be many).
-`--before`/`--after` name the roles hired around it
+`--before`/`--after` name the roles hired around it.
+
+`--role subagent` hands the task to **the session's own sub-agent** (the host's Agent tool): declared hands, not
+self-performed — recorded as `performed_by: {provider: subagent, host, model}` (the session's host and model; chongdae sees
+the session and the tree, not the sub-agent, and says so in a non-claim), counted in `show` (`N by the session's
+sub-agents`) and `report` (`subagent`, an observation), never in `self-performed`. A lock role may name it as its
+provider (`"implementer": "subagent"`): a task with `--check` then goes to a sub-agent with no `--why`. Where the lock
+declares someone else for the task, `--role subagent` records whose place it took (`dispatched`). Like the session's own
+tasks, its start is taken at `add` and `run` decides it from the tree. guin-site run-20261004-144130-9035: the owner asked
+the session to dispatch its work; 11 sub-agents did 14 tasks, all recorded as the session's own with no checks.
+
+`--scope PATH...` names the files and directories the task's hands own. While scoped tasks are open, a changed file is
+the open task's whose scope holds it — the narrowest entry — instead of whichever task finishes first: a finishing task
+leaves a file another open task's scope holds more narrowly (not counted, not pinned away). A file two open tasks'
+scopes hold alike, or one in no scope while scoped tasks are open, stays with the finishing task by its window and is
+said in `run`'s output (`note: scope: …`) with the `adopt` that settles it; a file held alike stays in the other task's
+measure too until then. Unscoped tasks with no scoped task open keep the window rule. On guin-site, concurrent sub-agents
+needed `adopt` to split the files each had been told were its own
 
 ### `/chongdae:claim`
 
-Take a task (`--by`, default git user.name; empty string releases). `run` skips tasks claimed by someone else;
-chongdae never assigns
+Take a task for this machine (`--by NAME`; left out, the session claims it on this machine, signed as itself; an empty
+string releases). `run` skips tasks claimed by someone else; chongdae never assigns
 
 ### `/chongdae:take`
 
@@ -151,7 +178,9 @@ End the session run (open tasks recorded as open); the lock's `reviewer` is plac
 ### `/chongdae:report`
 
 What this record says a reviewer should see, typed `dwitbuk/findings@1`: outside-run, unattributed, delegated,
-self-performed, stage-finding, verifier-reject (every rejected attempt's findings), left-open, non-claims (the same
+self-performed (with who decided it: `NAME`, or `the session (<host> <model>)`), session-judged (a drop, take, claim,
+retry, adopt, reopen or dispatch the session signed as itself — an observation, carrying `by`), subagent (a task the
+session's sub-agent did — an observation), stage-finding, verifier-reject (every rejected attempt's findings), left-open, non-claims (the same
 sentence on several tasks of a run is said once, with the tasks), unreleased-writer (a committed record a working
 source wrote) — with `--since REV`, changes since that revision and the runs whose record was not complete there
 (earlier runs were the previous review's). Only those runs claim a change since REV: an earlier run's `touched` names
@@ -179,8 +208,9 @@ both tasks, and a file two open tasks measured is told as not settled.
 
 `--brief` is the reader's first look, one line per fact (jokbo's `note` and `map` reads; full outputs pasted into an
 agent's context were ignored): `show --path FILE --brief` prints at most two lines — `last changed in run-… (date), task ID:
-<brief>` and, if any, a task that changed it and is open or dropped now — and nothing at all when no task on record touched
-it; `show --brief` prints one line, `N runs (K this week), last closed: <goal> (date)` (this week: the last 7 days). The
+<brief>` and, if any, a task that changed it and is open or dropped now — said only while its run is open or it ended in
+the last 7 days, and only when no done task changed the file after it (guin-site, 2026-10-06: weeks-old drops were printed
+51 times in one session) — and nothing at all when no task on record touched it; `show --brief` prints one line, `N runs (K this week), last closed: <goal> (date)` (this week: the last 7 days). The
 running run and its open tasks are the SessionStart line's, and are not repeated. The manifests declare them in `reads`
 (kind -> argv, for a reader plugin): `file` (`show --path {path}`), `since` (`show --since {since}`), `note`
 (`show --path {path} --brief`) and `map` (`show --brief`), each with `--target {target}`
@@ -207,7 +237,8 @@ Accept decisions a provider made beyond the contract (after writing them into th
 
 ### `/chongdae:retry`
 
-Send a stopped or rejected task out again; the earlier attempt (and its review) stays in the record and travels with
+Send a stopped or rejected task out again (`--by NAME`, `--delegated WHY`, or left out: signed by the session — a retry
+is not a gate); the earlier attempt (and its review) stays in the record and travels with
 the next request. `--requires CAP...` says on the task what its sandbox must give, when a member's sandbox lacked it: the
 task's `requires` grows, the request names it, and the lock's `<role>@<cap>` alternate, when there is one, is hired. A
 member that stopped mid-task because its sandbox lacked a capability (status `blocked` or `failed`, `lacked: ["loopback"]`,
@@ -252,7 +283,8 @@ Committed: yes.
 
 one file per task (so two people's tasks in one run merge as distinct files): status, claim, touched, response,
 review, `stages` (the before/after roles' answers and who gave them), attempts, confirmation, non-claims,
-`self-performed` (the session took a task the lock had hired someone for, and why), `done` (when it became done),
+`self-performed` (the session took a task the lock had hired someone for, and why), `dispatched` (a sub-agent stood where
+the lock declared someone else), `def.scope` (the files its hands own), `done` (when it became done),
 `answered` and `verdict-given` (when an attempt's answer and its verdict came back; a retried attempt keeps both),
 `performed_by` and `verified_by` —
 each author line with its `trace` (the files that call changed, how many commands it ran and how many failed) — and
@@ -400,6 +432,11 @@ the session on the subagent's behalf; chongdae did not observe the subagent. Wha
 sandboxed Codex session cannot start one), the host's own concurrency and permissions. What you lose: chongdae's own
 record of the call (turns, cost, transcript) unless the subagent's answer carries a `worker` block — the relay is on
 the record so the loss is named, not hidden.
+
+A fourth: **`subagent`** — the session's own sub-agent works in the session's tree, as the session would: no request, no
+response file, the task decided by its checks (or its word) when `run` comes to it. `performed_by: {provider: subagent,
+host, model, …}`. Where `native:` relays a worker's prompt and its JSON answer, `subagent` is for work the session itself
+dispatches and reads back; it is always at hand (`--role subagent`), and a lock role may name it.
 
 A plan may declare a `verifier` role — a command, never the hands that built (dwitbuk's `eyes_worker.py` is one).
 After a task's checks pass and before its gate, the verifier gets the contract, what the task touched (and what

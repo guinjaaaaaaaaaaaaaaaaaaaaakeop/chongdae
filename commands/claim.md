@@ -1,5 +1,5 @@
 ---
-description: Take a task (default: git user.name); run skips tasks claimed by someone else
+description: Take a task for this machine (--by NAME; left out, the session claims it, signed as itself); run skips tasks claimed by someone else
 argument-hint: <id> [--by NAME]
 ---
 !`python3 "${CLAUDE_PLUGIN_ROOT}/chongdae.py" claim $ARGUMENTS`

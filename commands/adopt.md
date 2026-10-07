@@ -1,5 +1,5 @@
 ---
-description: A judgment that files are a task's work — moved out of another task's touched and out of the task's own start (two open tasks shared the tree; the work came before its task was added)
+description: A judgment that files are a task's work — moved out of another task's touched and out of the task's own start (two open tasks shared the tree; the work came before its task was added) (no --by: signed by the session, not a person)
 argument-hint: <task> FILE.. --why ".." [--by NAME | --delegated WHY]
 ---
 !`python3 "${CLAUDE_PLUGIN_ROOT}/chongdae.py" adopt $ARGUMENTS`

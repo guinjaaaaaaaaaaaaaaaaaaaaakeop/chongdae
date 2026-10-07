@@ -182,8 +182,7 @@ def test_command_provider_done_decisions_and_blocked():
         assert code == chongdae.DECISION and "provider stopped" in out and "what done means" in out, out
         # retry: the blocked attempt stays in the record; the next call's request carries it and the tree's current diff
         assert run("retry", "A", "--by", "kim", "--target", pj.dir)[0] != 0, "A is done, nothing to retry"
-        assert run("retry", "C", "--target", pj.dir)[0] != 0, "retry needs by/delegated"
-        assert run("retry", "C", "--by", "kim", "--target", pj.dir)[0] == 0
+        assert run("retry", "C", "--by", "kim", "--target", pj.dir)[0] == 0   # a retry left without --by is the session's: test_an_omitted_by_is_the_session
         st = pj.state()["tasks"]["C"]
         ret = dict(st["attempts"][0]["retried"]); ret.pop("at", None); ret.pop("chongdae", None)
         assert "response" not in st and st["attempts"][0]["status"] == "blocked" and ret == {"by": "kim"}
@@ -1790,7 +1789,7 @@ def test_the_session_disputes_its_own_builds_tests_and_the_fix_survives_the_next
             assert code == 0 and "tests reopened to amend test_a.py" in out and "the session amends them" in out, out
             st = pj.state()["tasks"]
             assert st["tests"]["status"] == "todo" and st["tests"]["amending"][0]["why"] == "test_x expects the wrong order", st["tests"]
-            assert st["tests"]["attempts"][0]["reopened"]["by"] == "kim" and st["tests"]["attempts"][0]["touched"] == ["test_a.py"], st["tests"]["attempts"]
+            assert chongdae.is_agent(st["tests"]["attempts"][0]["reopened"]["by"]) and st["tests"]["attempts"][0]["touched"] == ["test_a.py"], st["tests"]["attempts"]
             assert st["build"]["attempts"][0]["retried"]["disputed"].startswith("tests disputed") and st["build"]["attempts"][0]["rejected"]["by"] == "contract", st["build"]
             code, out = run("run", "--target", pj.dir)
             assert code == chongdae.DECISION and "amend test_a.py as the dispute says" in out and "test_x expects the wrong order" in out, out
@@ -1997,12 +1996,12 @@ def test_two_open_session_tasks_the_first_to_finish_does_not_silently_own_the_ot
             assert code == 0 and "adopted src/out.ts into escape-build (from escape-tests: src/out.ts)" in out and "`chongdae run` decides it" in out, out
             st = pj.state()["tasks"]
             assert "src/out.ts" not in st["escape-tests"]["touched"] and st["escape-tests"]["gave"][0]["to"] == "escape-build" and "shared" not in st["escape-tests"], st["escape-tests"]
-            assert st["escape-build"]["adopted"][0]["by"] == "kim" and st["escape-build"]["adopted"][0]["from"] == {"escape-tests": ["src/out.ts"]}, st["escape-build"]
+            assert chongdae.is_agent(st["escape-build"]["adopted"][0]["by"]) and st["escape-build"]["adopted"][0]["from"] == {"escape-tests": ["src/out.ts"]}, st["escape-build"]
             code, out = run("run", "--target", pj.dir)
             assert code == 0 and "done escape-build" in out, out
             assert pj.state()["tasks"]["escape-build"]["touched"] == ["src/out.ts"], pj.state()["tasks"]["escape-build"]
             code, out = run("show", "--target", pj.dir)
-            assert "adopted src/out.ts (from escape-tests: src/out.ts) — by kim at" in out and "gave src/out.ts to escape-build at" in out, out
+            assert "adopted src/out.ts (from escape-tests: src/out.ts) — by the session (" in out and "gave src/out.ts to escape-build at" in out, out
             # the brief reads (jokbo): a note on the file, the map
             code, out = run("show", "--path", "src/out.ts", "--brief", "--target", pj.dir)
             lines = out.strip().splitlines()
@@ -2052,6 +2051,167 @@ def test_a_file_both_open_tasks_measure_is_said_and_left_to_both_until_adopted()
             assert code == 0 and out.startswith("dropped: task c in run-") and "superseded" in out and len(out.strip().splitlines()) == 1, out
         finally:
             os.environ.pop("CHONGDAE_USER", None)
+
+
+@contextlib.contextmanager
+def a_session(model="claude-opus-5-5"):
+    """This process as a Claude Code session whose transcript names its model — the identity chongdae signs with."""
+    home = tempfile.mkdtemp(prefix="chongdae-host-")
+    sid = "s-test-1"
+    write(os.path.join(home, "projects", "p", sid + ".jsonl"), json.dumps({"type": "assistant", "message": {"model": model}}) + "\n")
+    keep = {k: os.environ.get(k) for k in ("CLAUDE_CONFIG_DIR", "CLAUDE_CODE_SESSION_ID", "AGENT_HOST", "CODEX_THREAD_ID", "CHONGDAE_USER")}
+    os.environ.update({"CLAUDE_CONFIG_DIR": home, "CLAUDE_CODE_SESSION_ID": sid, "AGENT_HOST": "claude-code", "CHONGDAE_USER": "kim"})
+    os.environ.pop("CODEX_THREAD_ID", None)
+    try:
+        yield {"agent": "claude-code " + model}
+    finally:
+        for k, v in keep.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        shutil.rmtree(home, ignore_errors=True)
+
+
+def test_an_omitted_by_is_the_session_and_readers_say_so():
+    """guin-site, 1.17.0: an omitted --by wrote git user.name, so 73 of 80 self-performed records — and every drop, take, retry,
+    claim and adopt the session decided alone — read as the owner's decision. Left out, the session signs as itself (host and
+    model); a person's name is written only by --by NAME; the gates still need a person (--by) or a delegation."""
+    with Project() as pj, a_session() as agent:
+        write(os.path.join(pj.dir, "hunsu.lock.json"), {"roles": {"implementer": pj.fake_provider(RESPONSE_BLOCKED)}})
+        assert chongdae.agent_signer(pj.dir) == agent == {"agent": "claude-code claude-opus-5-5"}
+        assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
+        assert run("add", "own", "--check", sys.executable + " -c pass", "--role", "session", "--why", "a one-line fix", "--target", pj.dir)[0] == 0
+        assert run("add", "own2", "--check", sys.executable + " -c pass", "--role", "session", "--why", "the owner said so", "--by", "kim", "--target", pj.dir)[0] == 0
+        assert run("add", "c", "--brief", "a note", "--target", pj.dir)[0] == 0
+        code, out = run("claim", "c", "--target", pj.dir)
+        assert code == 0 and "c claimed by the session (claude-code claude-opus-5-5)" in out, out
+        assert run("claim", "c", "--by", "bob", "--target", pj.dir)[0] != 0, "the session's claim on kim's machine is not bob's to take"
+        assert run("add", "d", "--brief", "superseded", "--target", pj.dir)[0] == 0
+        assert run("drop", "d", "--why", "superseded by c", "--target", pj.dir)[0] == 0
+        assert run("add", "g", "--brief", "gated", "--gate", "human", "--target", pj.dir)[0] == 0
+        assert run("add", "blk", "--check", sys.executable + " -c pass", "--target", pj.dir)[0] == 0
+        code, out = run("run", "--target", pj.dir)
+        assert code == chongdae.DECISION and "human: review" in out, out
+        assert run("confirm", "g", "--target", pj.dir)[0] != 0, "a gate still needs a person or a delegation"
+        assert run("confirm", "g", "--by", "kim", "--target", pj.dir)[0] == 0
+        code, out = run("run", "--target", pj.dir)
+        assert code == chongdae.DECISION and "provider stopped" in out, out
+        code, out = run("retry", "blk", "--target", pj.dir)
+        assert code == 0, out
+        st = pj.state()["tasks"]
+        assert st["own"]["self-performed"]["by"] == agent and st["own2"]["self-performed"]["by"] == "kim", (st["own"], st["own2"])
+        assert st["d"]["dropped"]["by"] == agent and st["c"]["claimed_by"] == {**agent, "machine": "kim"} and st["c"]["status"] == "done", st["c"]
+        assert st["blk"]["attempts"][0]["retried"]["by"] == agent and st["g"]["confirmed"]["by"] == "kim", st["blk"]
+        shown = run("show", "--target", pj.dir)[1]
+        for needle in ("self-performed: the session instead of the lock's implementer — by the session (claude-code claude-opus-5-5) at",
+                       "self-performed: the session instead of the lock's implementer — by kim at", "claimed by the session (claude-code claude-opus-5-5)",
+                       "dropped at", "by the session (claude-code claude-opus-5-5): superseded by c", "retried at", "confirmed at"):
+            assert needle in shown, (needle, shown)
+        assert "by the session (claude-code claude-opus-5-5)" in [l for l in shown.splitlines() if "retried at" in l][0], shown
+        doc = json.loads(run("report", "--target", pj.dir)[1])
+        own = sorted(f["text"] for f in doc["findings"] if f["kind"] == "self-performed")
+        assert own == ["the session did this itself instead of the lock's implementer (decided by kim): the owner said so",
+                       "the session did this itself instead of the lock's implementer (decided by the session (claude-code claude-opus-5-5)): a one-line fix"], own
+        judged = {f["text"].split(" decided by")[0] for f in doc["findings"] if f["kind"] == "session-judged"}
+        assert judged == {"drop", "claim", "retry after attempt 1"}, doc["findings"]
+        assert all(f["by"]["agent"] == agent["agent"] and f["layer"] == "observation" and "not a person" in f["text"] for f in doc["findings"] if f["kind"] == "session-judged")
+
+
+def test_the_sessions_sub_agents_are_declared_hands_and_scopes_split_one_tree():
+    """guin-site run-20261004-144130-9035: the owner asked the session to dispatch its work to sub-agents; 11 sub-agents did 14
+    tasks, all recorded as the session's own, and concurrent ones needed `adopt` to split the files each had been told were its
+    own. A sub-agent is a provider now (`--role subagent`, or a lock role whose provider is `subagent`), not self-performed;
+    `--scope` says which files each one's hands own, and a changed file is the open task's whose scope holds it most narrowly."""
+    with Project() as pj, a_session():
+        write(os.path.join(pj.dir, "README.md"), "# r\n")
+        subprocess.run(["git", "add", "-A"], cwd=pj.dir, check=True)
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "base"], cwd=pj.dir, check=True)
+        write(os.path.join(pj.dir, "hunsu.lock.json"), {"roles": {"implementer": "subagent"}})
+        assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
+        code, out = run("add", "build", "--check", sys.executable + " -c pass", "--brief", "the build", "--target", pj.dir)
+        assert code == 0 and "the session's sub-agent does it (the lock's implementer)" in out, out
+        code, out = run("add", "ui", "--role", "subagent", "--scope", "src/ui/", "--brief", "the pages", "--target", pj.dir)
+        assert code == 0 and "the session's sub-agent does it (as asked)" in out and "--scope: src/ui — while scoped tasks are open" in out, out
+        assert run("add", "api", "--role", "subagent", "--scope", "src/api", "./src/shared/api.ts", "--target", pj.dir)[0] == 0
+        assert run("add", "misc", "--role", "subagent", "--scope", "src", "--target", pj.dir)[0] == 0
+        assert run("add", "bad", "--role", "subagent", "--scope", "../elsewhere", "--target", pj.dir)[0] != 0, "a scope is project-relative"
+        st = pj.state()["tasks"]
+        assert st["api"]["def"]["scope"] == ["src/api", "src/shared/api.ts"] and all(isinstance(st[t].get("start"), dict) for t in ("build", "ui", "api", "misc")), st["api"]
+        # the sub-agents work concurrently in one tree
+        write(os.path.join(pj.dir, "src", "ui", "a.css"), "a {}\n")
+        write(os.path.join(pj.dir, "src", "api", "x.ts"), "x\n")
+        write(os.path.join(pj.dir, "src", "shared", "api.ts"), "y\n")
+        write(os.path.join(pj.dir, "src", "other.ts"), "z\n")
+        write(os.path.join(pj.dir, "README.md"), "# r2\n")
+        code, out = run("run", "--target", pj.dir)
+        assert code == 0 and all("done %s" % t in out for t in ("build", "ui", "api", "misc")), out
+        assert "note: scope: README.md is in no open task's scope (scoped and open: api, misc, ui) — build counts it by its window; `chongdae adopt TASK README.md --why WHY`" in out, out
+        st = pj.state()["tasks"]
+        touched = {t: st[t]["touched"] for t in ("build", "ui", "api", "misc")}
+        assert touched == {"build": ["README.md"], "ui": ["src/ui/a.css"], "api": ["src/api/x.ts", "src/shared/api.ts"], "misc": ["src/other.ts"]}, touched
+        for t in ("build", "ui", "api", "misc"):
+            pb = st[t]["performed_by"]
+            assert pb["provider"] == "subagent" and pb["host"] == "claude-code" and pb["model"] == "claude-opus-5-5" and "self-performed" not in st[t], st[t]
+        t = chongdae.run_tally(chongdae.run_dir(pj.dir), {}, pj.state())
+        assert t["subagent"] == 4 and t["self"] == 0, t
+        shown = run("show", "--target", pj.dir)[1]
+        assert "who: implementer → the session's sub-agent (claude-code, claude-opus-5-5" in shown and "who: the session's sub-agent (claude-code, claude-opus-5-5" in shown, shown
+        assert "scope src/shared/api.ts" not in shown and "scope src/api, src/shared/api.ts" in shown and "4 by the session's sub-agents" in shown, shown
+        doc = json.loads(run("report", "--target", pj.dir)[1])
+        kinds = [f["kind"] for f in doc["findings"]]
+        assert kinds.count("subagent") == 4 and "self-performed" not in kinds, doc["findings"]
+        # two open tasks whose scopes hold a file alike: the first to finish counts it and says so; the other keeps measuring it
+        assert run("add", "p", "--role", "subagent", "--scope", "docs", "--target", pj.dir)[0] == 0
+        code, out = run("add", "q", "--role", "subagent", "--scope", "docs", "--target", pj.dir)
+        assert "note: p has the same scope entry" in out, out
+        write(os.path.join(pj.dir, "docs", "x.md"), "x\n")
+        code, out = run("run", "--target", pj.dir)
+        assert code == 0 and "note: scope: docs/x.md is in p's scope and q's alike — p counts it by its window; `chongdae adopt q docs/x.md --why WHY`" in out, out
+        st = pj.state()["tasks"]
+        assert st["p"]["touched"] == ["docs/x.md"] and st["p"]["shared"] == {"docs/x.md": ["q"]} and st["q"]["touched"] == ["docs/x.md"], (st["p"], st["q"])
+        # an unscoped task keeps the window rule when no scoped task is open
+        assert run("add", "w", "--role", "subagent", "--target", pj.dir)[0] == 0
+        write(os.path.join(pj.dir, "src", "ui", "a.css"), "a { b }\n")
+        code, out = run("run", "--target", pj.dir)
+        assert code == 0 and "scope:" not in out and pj.state()["tasks"]["w"]["touched"] == ["src/ui/a.css"], out
+
+
+def test_a_brief_note_says_a_drop_only_while_it_is_news():
+    """guin-site, 2026-10-06: `show --path FILE --brief` printed weeks-old drops ("dropped: task tests-support (09-24)…") 51 times
+    in one session. A dropped or open task is said only while its run is open or it ended in the last 7 days, and only when no
+    done task changed the file after it; otherwise the note is the last-changed line alone."""
+    import datetime
+    with Project() as pj, a_session():
+        write(os.path.join(pj.dir, "README.md"), "# r\n")
+        subprocess.run(["git", "add", "-A"], cwd=pj.dir, check=True)
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "base"], cwd=pj.dir, check=True)
+        assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
+        assert run("add", "c", "--brief", "try README", "--target", pj.dir)[0] == 0
+        write(os.path.join(pj.dir, "README.md"), "# r2\n")
+        assert run("drop", "c", "--why", "superseded", "--target", pj.dir)[0] == 0
+        assert run("close", "--target", pj.dir)[0] == 0
+        d = chongdae.run_dir(pj.dir)
+
+        def dropped_ago(days):
+            state = chongdae.load_state(d)
+            state["tasks"]["c"]["dropped"]["at"] = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%S+00:00")
+            chongdae.save_state(d, state)
+
+        def note():
+            return run("show", "--path", "README.md", "--brief", "--target", pj.dir)[1]
+
+        dropped_ago(2)
+        assert note().startswith("dropped: task c in run-") and "superseded" in note(), note()   # closed, but ended this week
+        dropped_ago(30)
+        assert note() == "", note()   # weeks old: nothing else on record, so nothing at all
+        dropped_ago(1)
+        assert run("init", "--session", "--goal", "g2", "--target", pj.dir)[0] == 0
+        assert run("add", "e", "--brief", "write README", "--target", pj.dir)[0] == 0
+        write(os.path.join(pj.dir, "README.md"), "# r3\n")
+        assert run("run", "--target", pj.dir)[0] == 0
+        out = note()
+        assert out.startswith("last changed in run-") and "task e: write README" in out and "dropped" not in out and len(out.strip().splitlines()) == 1, out
 
 if __name__ == "__main__":
     if hasattr(sys.stdout, "reconfigure"):
