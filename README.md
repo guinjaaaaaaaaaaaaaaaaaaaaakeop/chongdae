@@ -127,6 +127,15 @@ read the tree the session was also writing). `--why` is required: the task becom
 answer names it beside `retry`. chongdae takes a task itself the same way when a member's sandbox lacked a capability and
 the lock has no alternate that can (`taken.by: chongdae`, `taken.for-lack`)
 
+`--checked "COMMAND"` (repeatable, also on `retry`): chongdae runs the command itself in the project, now, and records
+its exit code and output's end in the task (`checked`) — evidence chongdae saw, where a worker's `verified` is its word. A
+failing one refuses the take (or retry) and records nothing; so does a timeout (`CHONGDAE_CHECK_TIMEOUT`, 1800 s) or a
+command that is not there. One command, run without a shell: `&&`, `|`, `;`, a redirect or a leading `VAR=` is refused —
+give each its own `--checked`. The verifier gets them with the files changed since; they belong to the attempt they were
+run for, and a retry moves them there. On
+guin-site the session took a build, ran the full test run itself, and had nowhere to put it: the verifier rejected the
+builder's old claim three more times
+
 ### `/chongdae:dispute`
 
 `dispute BUILD --tests FILE... --why WHY [--by NAME | --delegated WHY]`: some of an open build's protected tests
@@ -395,7 +404,13 @@ and `{response}` — that gets a `chongdae/request@1` file (task, brief, the pla
 must leave a response with `status`, `summary`, `verified`, `decisions`, `non-claims`. A non-empty `decisions` stops
 the run until a human `accept`s — or rejects the work: reset the tree and `retry` (the attempt, decisions included, stays
 in the record). A provider's `non-claims` belong to its attempt: a retry moves them there, and the task keeps only what is
-still true. What a role hired `after` a task found is printed by `run` as well as filed. A role with no provider is
+still true; a writer reopened to amend keeps its earlier list, less what its new answer restates (the contract sentence
+an old line leads with, quoted again — one new line replaces at most one old). The verifier gets the builder's
+non-claims (`built`) and the tests writer's (`tests_non_claims`); when it accepts (a verdict chongdae observed, not one
+the session wrote for a native subagent), both tasks' are marked `seen-non-claims` for that attempt (a retry moves the
+mark with it), and `report` says them in one `seen-non-claims` observation with a
+count per task — read by the eyes placed for it, not charges a person disposes again (175 of 281 review charges in one
+guin-site cycle were these). What a role hired `after` a task found is printed by `run` as well as filed. A role with no provider is
 skipped and recorded as a non-claim; nothing stands in. `tests` holds one path per entry — a shell-joined list is refused
 — and a build whose protected tests are not in the tree when it starts stops there: the guard would watch nothing.
 

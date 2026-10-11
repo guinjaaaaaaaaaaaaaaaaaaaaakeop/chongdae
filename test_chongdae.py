@@ -3,6 +3,7 @@
   python test_chongdae.py
 """
 import contextlib
+import glob
 import io
 import json
 import os
@@ -898,6 +899,221 @@ def test_a_disputed_contract_test_goes_back_to_its_writer_and_the_build_goes_out
         assert st["build"]["status"] == "done" and st["build"]["rebaselined"][0]["tests"] == ["test_a.py"], st["build"]
         assert str(st["build"]["attempts"][0]["retried"]["auto"]).startswith("tests disputed"), st["build"]["attempts"]
         assert open(os.path.join(pj.dir, "test_a.py")).read() == "# amended\n"
+
+
+def test_a_dispute_in_a_report_the_validator_refused_still_goes_to_the_tests_writer():
+    """guin-site write-bsky-build, 2026-10-10: three answers each disputed the same three tests, and each named its check
+    as `cd <project> && …`; the validator refused the report (`failed`, checks-ran), chongdae resent the build for its
+    evidence, and the dispute was dropped every time. The dispute is about the tests, not the evidence: it is routed."""
+    with Project() as pj:
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "base"], cwd=pj.dir)
+        writer = os.path.join(pj.dir, "writer.py")
+        write(writer, "import json, os, sys\nreq = json.load(open(sys.argv[1]))\n"
+                      "open(os.path.join(req['target'], 'test_a.py'), 'w').write('# amended\\n' if req.get('amending') else '# wrong fixture\\n')\n"
+                      "json.dump({'status': 'done', 'summary': 'w', 'non-claims': [], 'tests': ['test_a.py']}, open(sys.argv[2], 'w'))\n")
+        builder = os.path.join(pj.dir, "builder.py")
+        write(builder, "import json, os, sys\nreq = json.load(open(sys.argv[1]))\n"
+                       "wrong = open(os.path.join(req['target'], 'test_a.py')).read().startswith('# wrong')\n"
+                       "json.dump({'status': 'failed' if wrong else 'done', 'summary': 'disputed' if wrong else 'built', 'verified': [], 'decisions': [],\n"
+                       "           'non-claims': ['checks-ran: `cd /p && python3 -m unittest` was not run by the session'] if wrong else [], 'validation': {'failed': ['checks-ran']} if wrong else {},\n"
+                       "           'disputed-tests': [{'test': 'test_a.py::test_x', 'contract_quote': 'Q', 'why': 'fixture breaks Q'}] if wrong else []}, open(sys.argv[2], 'w'))\n")
+        write(os.path.join(pj.dir, "hunsu.lock.json"), {"roles": {"nitpick": [sys.executable, writer, "{request}", "{response}"],
+                                                                  "implementer": [sys.executable, builder, "{request}", "{response}"]}})
+        assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
+        assert run("add", "tests", "--role", "nitpick", "--tests", "test_a.py", "--target", pj.dir)[0] == 0
+        assert run("add", "build", "--role", "implementer", "--tests", "test_a.py", "--check", sys.executable + " -c 'raise SystemExit(1)'", "--target", pj.dir)[0] == 0
+        code, out = run("run", "--target", pj.dir)
+        st = pj.state()["tasks"]
+        assert "reopened with the dispute" in out and st["tests"]["attempts"][0]["disputed-tests"][0]["why"] == "fixture breaks Q", out
+        assert str(st["build"]["attempts"][0]["retried"]["auto"]).startswith("tests disputed"), st["build"]["attempts"]
+        assert not any("did not run" in str((a.get("retried") or {}).get("auto")) for a in st["build"]["attempts"]), "not resent for its evidence instead"
+        assert open(os.path.join(pj.dir, "test_a.py")).read() == "# amended\n"
+
+
+def test_an_amendment_rebaselines_every_test_file_the_writer_changed_not_only_the_disputed_ones():
+    """guin-site run e77d, 2026-10-10: the dispute named two test files; the tests writer fixed the cause in a shared fixture
+    (`write_support.py`, also among the build's tests). Only the named files were re-baselined, so the build's next judgment
+    restored the fixture as "changed protected tests" and charged the build. The amendment is what the writer changed."""
+    with Project() as pj:
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "base"], cwd=pj.dir)
+        writer = os.path.join(pj.dir, "writer.py")
+        write(writer, "import json, os, sys\nreq = json.load(open(sys.argv[1]))\nt = req['target']\n"
+                      "open(os.path.join(t, 'test_a.py'), 'w').write('# uses support\\n')\n"
+                      "open(os.path.join(t, 'support.py'), 'w').write('# fixed fixture\\n' if req.get('amending') else '# wrong fixture\\n')\n"
+                      "json.dump({'status': 'done', 'summary': 'w', 'non-claims': [], 'tests': ['test_a.py', 'support.py']}, open(sys.argv[2], 'w'))\n")
+        builder = os.path.join(pj.dir, "builder.py")
+        write(builder, "import json, os, sys\nreq = json.load(open(sys.argv[1]))\n"
+                       "wrong = open(os.path.join(req['target'], 'support.py')).read().startswith('# wrong')\n"
+                       "json.dump({'status': 'blocked' if wrong else 'done', 'summary': 'disputed' if wrong else 'built', 'verified': [], 'decisions': [], 'non-claims': [],\n"
+                       "           'disputed-tests': [{'test': 'test_a.py::test_x', 'contract_quote': 'Q', 'why': 'its fixture breaks Q'}] if wrong else []}, open(sys.argv[2], 'w'))\n")
+        write(os.path.join(pj.dir, "hunsu.lock.json"), {"roles": {"nitpick": [sys.executable, writer, "{request}", "{response}"],
+                                                                  "implementer": [sys.executable, builder, "{request}", "{response}"]}})
+        assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
+        assert run("add", "tests", "--role", "nitpick", "--tests", "test_a.py", "support.py", "--target", pj.dir)[0] == 0
+        assert run("add", "build", "--role", "implementer", "--tests", "test_a.py", "support.py", "--check", sys.executable + " -c 'raise SystemExit(0)'", "--target", pj.dir)[0] == 0
+        code, out = run("run", "--target", pj.dir)
+        assert code == 0 and "changed protected tests" not in out, out
+        st = pj.state()["tasks"]
+        assert st["build"]["status"] == "done" and st["build"]["rebaselined"][0]["tests"] == ["support.py", "test_a.py"], st["build"]
+        assert open(os.path.join(pj.dir, "support.py")).read() == "# fixed fixture\n", "the fix stands"
+
+
+def test_a_retry_that_requires_a_capability_hands_a_taken_task_to_the_alternate():
+    """guin-site write-bsky-build, 2026-10-10: the session had taken the build; `retry --requires loopback` printed "the lock's
+    implementer@loopback does it", and the next `run` kept it with the session (the take stood). Asking for the capability is
+    asking for that hand: the take is lifted, in the record. A plain retry of a taken task says the session does it again."""
+    blocked = {"status": "blocked", "summary": "the contract is silent on the port", "verified": [], "decisions": [], "non-claims": []}
+    with Project() as pj:
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "base"], cwd=pj.dir)
+        write(os.path.join(pj.dir, "test_a.py"), "# the contract\n")
+        write(os.path.join(pj.dir, "hunsu.lock.json"), {"roles": {"implementer": pj.fake_provider(blocked, "plain"),
+                                                                  "implementer@loopback": pj.fake_provider(RESPONSE_DONE, "loop")}})
+        assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
+        assert run("add", "w", "--role", "implementer", "--tests", "test_a.py", "--check", sys.executable + " -c 'raise SystemExit(0)'", "--target", pj.dir)[0] == 0
+        assert run("run", "--target", pj.dir)[0] == chongdae.DECISION
+        assert run("take", "w", "--why", "the session finishes it", "--by", "kim", "--checked", sys.executable + " -c 'pass'", "--target", pj.dir)[0] == 0
+        write(os.path.join(pj.dir, "test_a.py"), "# bent by the session\n")   # the session's attempt is rejected by the contract
+        code, out = run("run", "--target", pj.dir)
+        assert "changed the contract's tests" in out, out
+        code, out = run("retry", "w", "--by", "kim", "--target", pj.dir)
+        assert code == 0 and "the session took it (`take`), so the session does it again" in out, out
+        ts = pj.state()["tasks"]["w"]
+        assert "checked" not in ts and ts["attempts"][-1]["checked"]["ran"][0]["exit"] == 0, "what was run for an attempt goes with it"
+        write(os.path.join(pj.dir, "test_a.py"), "# bent again\n")
+        run("run", "--target", pj.dir)
+        code, out = run("retry", "w", "--requires", "loopback", "--by", "kim", "--target", pj.dir)
+        assert code == 0 and "the lock's implementer@loopback does it" in out, out
+        ts = pj.state()["tasks"]["w"]
+        assert "taken" not in ts and ts["attempts"][-1]["retried"]["untaken"]["why"] == "the session finishes it", ts
+        assert not [n for n in ts.get("non-claims", []) if "taken over by the session" in n], ts["non-claims"]
+        assert run("run", "--target", pj.dir)[0] == 0
+        assert pj.state()["tasks"]["w"]["performed_by"]["as"] == "implementer@loopback"
+
+
+def test_what_the_verifier_read_and_accepted_is_said_once_not_charged_and_a_restatement_replaces_its_original():
+    """guin-site, 10-07 -> 10-10: 175 of 281 review charges were providers' own non-claims, disposed in bulk in 68 seconds; a
+    reopened tests writer restated its earlier list in other words and both reached the reviewer. The build's verifier now
+    gets the tests writer's non-claims beside the builder's; an accept marks both tasks' as seen — `report` says them in one
+    observation, not as charges. A provider non-claim quoting the contract sentence a later answer quotes gives way to it."""
+    old = ['(provider) "the list is sorted" — checked on three items', '(provider) nothing deployed']
+    assert chongdae.merge_provider_non_claims(old, ['(provider) No test sorts a long list ("the list is sorted")']) == \
+        ['(provider) nothing deployed', '(provider) No test sorts a long list ("the list is sorted")']
+    assert chongdae.merge_provider_non_claims(['no check decides this task', '(provider) x'], ['(provider) x']) == ['no check decides this task', '(provider) x']
+    # a quoted file name is not a contract sentence, and one new line replaces at most one old one
+    old = ['(provider) "tests/run.py" does not cover the network path']
+    assert chongdae.merge_provider_non_claims(old, ['(provider) "tests/run.py" was run without --all']) == old + ['(provider) "tests/run.py" was run without --all']
+    old = ['(provider) "the list is sorted" — no test writes a long list', '(provider) "the list is sorted" — the fixture has no ties']
+    assert chongdae.merge_provider_non_claims(old, ['(provider) "the list is sorted" — checked on three items']) == \
+        [old[1], '(provider) "the list is sorted" — checked on three items']
+    with Project() as pj:
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "base"], cwd=pj.dir)
+        writer = os.path.join(pj.dir, "writer.py")
+        write(writer, "import json, os, sys\nreq = json.load(open(sys.argv[1]))\nopen(os.path.join(req['target'], 'test_a.py'), 'w').write('# t\\n')\n"
+                      "json.dump({'status': 'done', 'summary': 'w', 'non-claims': ['\"the list is sorted\" — checked on three items only']}, open(sys.argv[2], 'w'))\n")
+        eyes = os.path.join(pj.dir, "eyes.py")
+        write(eyes, "import json, shutil, sys\nshutil.copy(sys.argv[1], sys.argv[1] + '.seen')\n"
+                    "json.dump({'artifact-type': 'dwitbuk/review@1', 'verdict': 'accept', 'findings': []}, open(sys.argv[2], 'w'))\n")
+        built = dict(RESPONSE_DONE, **{"non-claims": ["nothing deployed"]})
+        write(os.path.join(pj.dir, "hunsu.lock.json"), {"roles": {"nitpick": [sys.executable, writer, "{request}", "{response}"],
+                                                                  "implementer": pj.fake_provider(built), "verifier": [sys.executable, eyes, "{request}", "{response}"]}})
+        assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
+        assert run("add", "tests", "--role", "nitpick", "--tests", "test_a.py", "--target", pj.dir)[0] == 0
+        assert run("add", "build", "--role", "implementer", "--tests", "test_a.py", "--check", sys.executable + " -c 'raise SystemExit(0)'", "--target", pj.dir)[0] == 0
+        code, out = run("run", "--target", pj.dir)
+        assert code == 0, out
+        req = json.load(open(glob.glob(os.path.join(chongdae.run_dir(pj.dir), "local", "build.verify*request*.seen"))[0]))
+        assert req["tests_non_claims"] == {"tests": ['"the list is sorted" — checked on three items only']} and req["built"]["non-claims"] == ["nothing deployed"], req
+        st = pj.state()["tasks"]
+        assert st["build"]["seen-non-claims"]["texts"] == ["(provider) nothing deployed"] and st["tests"]["seen-non-claims"]["by"] == "verifier of build"
+        code, out = run("report", "--target", pj.dir)
+        f = json.loads(out)["findings"]
+        assert not [x for x in f if x["kind"] == "non-claim" and "(provider)" in x["text"]], f
+        seen = [x for x in f if x["kind"] == "seen-non-claims"]
+        assert len(seen) == 1 and seen[0]["layer"] == "observation" and seen[0]["text"].startswith("2 provider non-claim(s)") and "/build (1)" in seen[0]["where"], seen
+
+
+def test_checked_is_one_command_bounded_and_a_retry_that_refuses_records_nothing():
+    """`--checked "echo ok && false"` ran `echo` with three words and recorded a pass. One command, no shell: shell syntax is
+    refused; a missing command, a timeout and a prompt for input are failures, not tracebacks or hangs. A retry whose check
+    fails writes nothing — not even the `--requires` it was given."""
+    with Project() as pj:
+        for line in ("echo ok && false", "A=1 " + sys.executable + " -c pass", "pytest | tee out", "pytest>out"):
+            try:
+                chongdae.run_checked(pj.dir, [line])
+                assert False, line
+            except SystemExit as e:
+                assert "not a shell line" in str(e), (line, e)
+        for line, code in (("no-such-command-xyz", "exit 127"), (sys.executable + " -c 'input()'", "exit 1")):
+            try:
+                chongdae.run_checked(pj.dir, [line])
+                assert False, line
+            except SystemExit as e:
+                assert code in str(e), (line, e)
+        os.environ["CHONGDAE_CHECK_TIMEOUT"] = "1"
+        try:
+            chongdae.run_checked(pj.dir, [sys.executable + " -c 'import time; time.sleep(5)'"])
+            assert False
+        except SystemExit as e:
+            assert "exit 124" in str(e) and "timed out" in str(e), e
+        finally:
+            os.environ.pop("CHONGDAE_CHECK_TIMEOUT")
+    blocked = {"status": "blocked", "summary": "no port here", "verified": [], "decisions": [], "non-claims": []}
+    with Project() as pj:
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "base"], cwd=pj.dir)
+        write(os.path.join(pj.dir, "hunsu.lock.json"), {"roles": {"implementer": pj.fake_provider(blocked)}})
+        assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
+        assert run("add", "w", "--role", "implementer", "--check", sys.executable + " -c 'raise SystemExit(0)'", "--target", pj.dir)[0] == 0
+        assert run("run", "--target", pj.dir)[0] == chongdae.DECISION
+        assert run("retry", "w", "--requires", "loopback", "--checked", sys.executable + " -c 'raise SystemExit(1)'", "--target", pj.dir)[0] != 0
+        plan = json.load(open(os.path.join(chongdae.run_dir(pj.dir), "plan.json")))
+        assert not [t for t in plan["tasks"] if t.get("requires")], plan
+        # what a verifier read of an attempt, and what chongdae ran for it, go with that attempt on a retry
+        d = chongdae.run_dir(pj.dir)
+        state = chongdae.load_state(d)
+        state["tasks"]["w"]["seen-non-claims"] = {"by": "verifier of w", "texts": ["(provider) x"]}
+        state["tasks"]["w"]["checked"] = {"ran": [{"command": "c", "exit": 0, "tail": []}], "checked-tree": {}}
+        chongdae.save_state(d, state)
+        assert run("retry", "w", "--target", pj.dir)[0] == 0
+        ts = pj.state()["tasks"]["w"]
+        assert "seen-non-claims" not in ts and "checked" not in ts and ts["attempts"][-1]["seen-non-claims"]["texts"] == ["(provider) x"], ts
+
+
+def test_take_and_retry_checked_run_the_command_record_it_and_hand_it_to_the_verifier():
+    """guin-site write-bsky-build, 2026-10-10: the session took the build, ran the full test run itself (exit 0) and had nowhere
+    to put it; the verifier rejected the builder's old claim three more times. `--checked` is a command chongdae runs itself:
+    exit 0 is recorded and goes to the verifier with what changed after; a failure refuses, recording nothing."""
+    blocked = {"status": "blocked", "summary": "no port here", "verified": [], "decisions": [], "non-claims": []}
+    with Project() as pj:
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "base"], cwd=pj.dir)
+        eyes = os.path.join(pj.dir, "eyes.py")
+        write(eyes, "import json, shutil, sys\nshutil.copy(sys.argv[1], sys.argv[1] + '.seen')\n"
+                    "json.dump({'artifact-type': 'dwitbuk/review@1', 'verdict': 'accept', 'findings': []}, open(sys.argv[2], 'w'))\n")
+        write(os.path.join(pj.dir, "hunsu.lock.json"), {"roles": {"implementer": pj.fake_provider(blocked), "verifier": [sys.executable, eyes, "{request}", "{response}"]}})
+        assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
+        assert run("add", "w", "--role", "implementer", "--check", sys.executable + " -c 'raise SystemExit(0)'", "--target", pj.dir)[0] == 0
+        assert run("run", "--target", pj.dir)[0] == chongdae.DECISION
+        write(os.path.join(pj.dir, "w.py"), "x = 1\n")
+        code, out = run("take", "w", "--why", "the sandbox had no port", "--checked", sys.executable + " -c 'raise SystemExit(3)'", "--target", pj.dir)
+        assert code != 0 and "exit 3" in out and "taken" not in pj.state()["tasks"]["w"], out
+        code, out = run("take", "w", "--why", "the sandbox had no port", "--checked", sys.executable + " -c 'print(\"all 135 OK\")'", "--target", pj.dir)
+        assert code == 0 and "checked by chongdae" in out, out
+        ck = pj.state()["tasks"]["w"]["checked"]["ran"][0]
+        assert ck["exit"] == 0 and ck["tail"] == ["all 135 OK"], ck
+        write(os.path.join(pj.dir, "w.py"), "x = 2\n")   # changed after the check: the verifier is told
+        code, out = run("run", "--target", pj.dir)
+        assert code == 0, out
+        req = json.load(open(glob.glob(os.path.join(chongdae.run_dir(pj.dir), "local", "w.verify*request*.seen"))[0]))
+        assert req["checked"][0]["tail"] == ["all 135 OK"] and req["checked"][0]["changed_since"] == ["w.py"], req.get("checked")
+    with Project() as pj:   # retry --checked: the same evidence, and a failing one refuses the retry
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "base"], cwd=pj.dir)
+        write(os.path.join(pj.dir, "hunsu.lock.json"), {"roles": {"implementer": pj.fake_provider(blocked)}})
+        assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
+        assert run("add", "w", "--role", "implementer", "--check", sys.executable + " -c 'raise SystemExit(0)'", "--target", pj.dir)[0] == 0
+        assert run("run", "--target", pj.dir)[0] == chongdae.DECISION
+        assert run("retry", "w", "--checked", sys.executable + " -c 'raise SystemExit(1)'", "--target", pj.dir)[0] != 0
+        assert not pj.state()["tasks"]["w"].get("attempts"), "refused before anything was recorded"
+        code, out = run("retry", "w", "--checked", sys.executable + " -c 'pass'", "--target", pj.dir)
+        assert code == 0 and pj.state()["tasks"]["w"]["attempts"][-1]["retried"]["checked"] == [sys.executable + " -c 'pass'"], out
 
 
 def test_a_session_tasks_done_carries_what_the_session_did_in_its_window():

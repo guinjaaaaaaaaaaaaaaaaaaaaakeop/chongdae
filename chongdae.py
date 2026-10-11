@@ -158,7 +158,8 @@ LOCAL = "local"
 
 PRIVATE_KEYS = ("session", "transcript", "kept-locally", "start", "start-head",   # the host session behind an author line; the snapshot a task measures from, and the commit it stood on
                 "commands", "read",                                 # a worker's command lines and what it read: the record keeps the summary (`trace`)
-                "reported", "rebaseline")                           # flags the engine keeps between two `run` calls
+                "reported", "rebaseline",                           # flags the engine keeps between two `run` calls
+                "checked-tree")                                     # the tree a `--checked` command ran on: what changed after is measured from it
 
 def split_private(o):
     """(public, private): the record without PRIVATE_KEYS at any depth, and a mirror holding only them."""
@@ -237,14 +238,18 @@ def all_tasks(plan, state):
     return plan.get("tasks", []) + [ts["def"] for ts in added]
 
 
-def non_claims(state):
+def non_claims(state, unseen=False):
     """Every non-claim in the run, prefixed with its task — the reader's view over the per-task files (and older runs' shared
     list). The same sentence on several tasks is said once, with the tasks: a run of four no-check session tasks said
-    "no check decides this task" four times, and a review of a day's runs read it thirty-five times."""
+    "no check decides this task" four times, and a review of a day's runs read it thirty-five times. `unseen`: without the
+    providers' non-claims a verifier read and accepted (`seen-non-claims`)."""
     out = list(state.get("non-claims", []))
     by_text = {}
     for tid, ts in sorted(state.get("tasks", {}).items(), key=lambda kv: (kv[1].get("seq", 0), kv[0])):   # task files read in name order; a name is not a time
+        seen = set((ts.get("seen-non-claims") or {}).get("texts") or []) if unseen else set()
         for n in ts.get("non-claims", []):
+            if n in seen:
+                continue
             by_text.setdefault(n, []).append(tid)
     for text, tids in by_text.items():
         out.append("%s: %s" % (tids[0], text) if len(tids) == 1 else "%s — %d task(s): %s" % (text, len(tids), ", ".join(tids)))
@@ -1628,7 +1633,7 @@ def cmd_run(args):
                 ctx["waited"] = True
                 print("  %s waits for %s to amend %s" % (task["id"], ", ".join(amenders), ", ".join(ts["rebaseline"])))
                 continue
-            rebaseline(target, d, task, ts)
+            rebaseline(target, d, task, ts, plan, state)
             save_state(d, state)
         # a task the session took over (`take`) is the session's from then on, whoever the lock hired for its role
         who = "session" if ts.get("taken") else hire(ctx["providers"], task)[1]
@@ -1718,7 +1723,11 @@ def run_hands(ctx, task, ts, who):
         # it is not a decision the contract lacks: the lock's alternate that can, or (decided at setup) the session
         return hiring_stop(ctx, task, ts, response, lacked if lacked is not None else list(task.get("requires") or []),
                            unattempted + [n for n in response.get("non-claims", []) if str(n).startswith("sandbox lacked:")])
-    if response.get("status") == "blocked" and response.get("disputed-tests"):
+    if response.get("status") in ("blocked", "failed") and response.get("disputed-tests"):
+        # `failed` too: a validator that refuses the rest of the report (a check spelled otherwise than it ran) turns a
+        # blocked build into a failed one, and the dispute is still the builder's word about the tests — resending the build
+        # for its evidence dropped it (guin-site write-bsky-build, three answers each disputing the same three tests). The
+        # build goes out again after the amendment anyway; its evidence is judged then.
         setattr(args, "continuing", True)
         if route_dispute(target, d, state, plan, task, response["disputed-tests"]):
             return cmd_run(args)
@@ -1743,8 +1752,10 @@ def run_hands(ctx, task, ts, who):
         elif (setattr(args, "continuing", True) or True) and auto_resend(target, d, state, task["id"], "the report named a check the session did not run: " + refused[0][:160]):
             return cmd_run(args)
     if response.get("status") != "done" and not ts.get("checks-ran-overruled"):
-        return stop("%s: provider %r did not finish (%s) — see %s; fix what stopped it (or nothing, if it ran out of budget), %s"
-                    % (task["id"], who, response.get("status"), work_path(d, task["id"] + ".response.json"), again))
+        return stop("%s: provider %r did not finish (%s) — see %s; fix what stopped it (or nothing, if it ran out of budget), %s%s"
+                    % (task["id"], who, response.get("status"), work_path(d, task["id"] + ".response.json"), again,
+                       "; it disputes the contract's tests: `chongdae dispute %s --tests FILE... --why WHY` routes them to the task that wrote them" % task["id"]
+                       if response.get("disputed-tests") else ""))
     if response.get("decisions") and not ts.get("accepted"):
         # The provider settled something the contract did not. That is a plan change: a human writes it into the plan and accepts, or rejects the work.
         return stop("%s: the provider made %d decision(s) the contract did not — write each into the plan, then `chongdae accept %s --by NAME | "
@@ -1752,10 +1763,86 @@ def run_hands(ctx, task, ts, who):
                     % (task["id"], len(response["decisions"]), task["id"], task["id"]),
                     *("%s: chose %r (alternatives: %s)" % (x["what"], x["chosen"], ", ".join(x["alternatives"]) or "-") for x in response["decisions"]))
     if not ts.get("reported"):
-        ts["non-claims"] = ts.get("non-claims", []) + ["(provider) %s" % n for n in response.get("non-claims", [])]
+        ts["non-claims"] = merge_provider_non_claims(ts.get("non-claims", []), ["(provider) %s" % n for n in response.get("non-claims", [])])
         ts["reported"] = True
         save_state(d, state)
     return None
+
+
+QUOTED = re.compile(r'"([^"]{6,})"|“([^”]{6,})”')
+
+
+def leading_quote(n):
+    """The contract sentence a provider's non-claim leads with (`(provider) "확인하지 않는 것: …" — no test writes …`), or None.
+    Only the lead, and only a sentence: a file name or flag quoted (`"tests/run.py" was run without --all`) is not what
+    two lines are about."""
+    m = QUOTED.match(re.sub(r"^\(provider\) ", "", str(n)).lstrip())
+    q = "".join(m.groups(default="")).strip() if m else ""
+    return q if re.search(r"\s", q) else None
+
+
+def restates(a, b):
+    """b says again what a said: the same text, or the contract sentence a leads with, quoted again in b (a provider's
+    non-claim leads with the sentence it could not decide — `"확인하지 않는 것: 실제 guin-pds에 쓰기" — no test writes …`)."""
+    qa = leading_quote(a)
+    return str(a) == str(b) or (qa is not None and qa in {"".join(m).strip() for m in QUOTED.findall(str(b))})
+
+
+def merge_provider_non_claims(old, new):
+    """The task's non-claims after a provider answered again without a resend — a writer reopened to amend its tests keeps
+    its earlier attempt's list (still about the tests it wrote), and its new answer restated half of it in other words: the
+    reviewer read both, and guin-site's review held six such pairs. A provider non-claim the new answer restates gives way —
+    one for one: a new line replaces at most one old line, so a list of distinct reasons is not wiped by one restatement."""
+    gone, used = set(), set()
+    for i, n in enumerate(old):
+        if not str(n).startswith("(provider) "):
+            continue
+        j = next((j for j, m in enumerate(new) if j not in used and restates(n, m)), None)
+        if j is not None:
+            gone.add(i)
+            used.add(j)
+    kept = [n for i, n in enumerate(old) if i not in gone]
+    return kept + [m for m in new if m not in kept]
+
+
+def run_checked(target, commands):
+    """`--checked`: commands chongdae runs itself, in the project, now — evidence it observed, where a worker's `verified` is the
+    worker's word. guin-site write-bsky-build (2026-10-10): the session took the task, ran `tests/run.py --all` itself (exit 0),
+    and had nowhere to put it; the verifier rejected the builder's old claim three times over. Returns the records; the
+    tree they ran on is kept so the verifier is told what changed after."""
+    import subprocess
+    for c in commands:
+        # one command, run without a shell: `echo ok && false` would run `echo` with three words and pass
+        lex = shlex.shlex(c, posix=True, punctuation_chars=True)
+        lex.whitespace_split = True
+        try:
+            toks = list(lex)
+        except ValueError as e:
+            raise SystemExit("--checked: `%s` does not parse (%s)" % (c, e))
+        shell = [t for t in toks if t and set(t) <= set("();<>|&")] + (toks[:1] if toks and re.match(r"^\w+=", toks[0]) else [])
+        if shell:
+            raise SystemExit("--checked runs one command, not a shell line: `%s` has %s — give each command its own --checked; "
+                             "a check that needs a shell is a script in the project" % (c, ", ".join("`%s`" % t for t in shell)))
+    timeout = float(os.environ.get("CHONGDAE_CHECK_TIMEOUT") or 1800)
+    out = []
+    for c in commands:
+        argv = resolve_argv(target, shlex.split(c))
+        if argv and argv[0] in ("python", "python3") and not shutil.which(argv[0]):
+            argv = [next((x for x in ("python3", "python") if shutil.which(x)), None) or sys.executable] + argv[1:]
+        try:
+            done = subprocess.run(argv, cwd=target, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                                  stdin=subprocess.DEVNULL, timeout=timeout)
+            code, said = done.returncode, (done.stdout + done.stderr)
+        except subprocess.TimeoutExpired:
+            code, said = 124, "timed out after %ds (CHONGDAE_CHECK_TIMEOUT)" % timeout
+        except OSError as e:
+            code, said = 127, str(e)
+        out.append({"command": c, "exit": code, "tail": said.strip().split("\n")[-6:], **stamp()})
+    failed = [r for r in out if r["exit"]]
+    if failed:
+        raise SystemExit("--checked: %s — nothing recorded; a check that fails is not evidence"
+                         % "; ".join("`%s` -> exit %d (%s)" % (r["command"], r["exit"], " / ".join(r["tail"][-2:])) for r in failed))
+    return {"ran": out, "checked-tree": dirty(target) or {}}
 
 
 def sandbox_lacked(response):
@@ -1972,6 +2059,12 @@ def place_eyes(ctx, task, ts, who, touched):
             extra["attribution"] = attribution
         if by_provider is not None:
             extra["touched_since"] = sorted(set(touched) - set(by_provider))   # changed after the builder answered: a person's plan edits, say — not the builder's
+        writers = test_writers(plan, state, task)
+        said = {w: [n[len("(provider) "):] for n in state["tasks"][w].get("non-claims", []) if str(n).startswith("(provider) ")] for w in writers}
+        if any(said.values()):
+            extra["tests_non_claims"] = {w: ns for w, ns in said.items() if ns}   # what the tests' writer says its tests do not decide: the verifier reads the code there
+        if ts.get("checked"):
+            extra["checked"] = [{**r, "changed_since": touched_files(target, ts["checked"].get("checked-tree") or {}) or []} for r in ts["checked"]["ran"]]
         last = next((a for a in reversed(ts.get("attempts", [])) if (a.get("review") or {}).get("verdict") == "reject" and isinstance(a.get("reviewed_tree"), dict)), None)
         if last:
             # a re-verification: what the last reject found, and what changed since that verdict. Re-reading the whole slice
@@ -1986,6 +2079,16 @@ def place_eyes(ctx, task, ts, who, touched):
         ts["verdict-given"] = stamp()   # when the eyes answered: the verification's end, for `show`
         ts["reviewed_tree"] = dirty(target)   # the tree this verdict was about: the next round is measured from here
         ts["verified_by"] = against_run(with_trace(performer(prov["verifier"], argv=prov["verifier"] if isinstance(prov["verifier"], list) else [prov["verifier"]], response=review, target=target), review, d, target), state)
+        if review.get("verdict") == "accept" and not native_argv(target, prov["verifier"]):
+            # (not when the session wrote the verdict for a native subagent: chongdae did not observe what was read)
+            # the providers' own non-claims went to the verifier with the work (`built`, `tests_non_claims`) and it accepted:
+            # read by the eyes placed for exactly that, they are information now, not charges a person disposes again
+            # (guin-site, 10-07 → 10-10: 175 of 281 review charges were these, disposed in bulk in 68 seconds)
+            for tid in [task["id"]] + test_writers(plan, state, task):
+                other = state["tasks"][tid]
+                seen = [n for n in other.get("non-claims", []) if str(n).startswith("(provider) ")]
+                if seen:
+                    other["seen-non-claims"] = {"by": "verifier of %s" % task["id"], "texts": seen, **stamp()}
         if native_argv(target, prov["verifier"]):
             ts.setdefault("non-claims", []).append("%s: the verdict was written by the session on a native subagent's behalf; chongdae did not observe the subagent" % task["id"])
         save_state(d, state)
@@ -2120,7 +2223,7 @@ def place_reviewer(target, d, state, plan):
 
 AUTO_RESENDS = 2   # per task: a verifier's reject or a refused report goes back to the hands this many times before a person is asked
 
-def resend(target, d, state, task_id, retried, message=None):
+def resend(target, d, state, task_id, retried, message=None, checked=None):
     """Send a stopped task out again, keeping the stopped attempt (its response, review, stages) in the record under its
     number — the next call receives it. `retried` says who sent it: a person (`by`), a delegation, or chongdae itself."""
     ts = state["tasks"][task_id]
@@ -2128,7 +2231,10 @@ def resend(target, d, state, task_id, retried, message=None):
     attempt = {**(response or {"status": "session"}), "retried": {**retried, **stamp()}}
     if response:
         with_trace(attempt, response, d, target)   # what this attempt's worker did stays with the attempt
-    for key in ("review", "rejected", "reviewed_tree", "answered", "verdict-given"):   # the attempt keeps its verdict and its times
+    # the attempt keeps its verdict and its times — and what a verifier read of it (`seen-non-claims`) and what chongdae ran
+    # on it (`checked`): a later attempt's report hid a non-claim no verifier accepted for that attempt, and its verifier got
+    # old evidence
+    for key in ("review", "rejected", "reviewed_tree", "answered", "verdict-given", "seen-non-claims", "checked"):
         if key in ts:
             attempt[key] = ts.pop(key)
     if "stages" in ts:
@@ -2148,6 +2254,8 @@ def resend(target, d, state, task_id, retried, message=None):
         else:
             ts.pop("stages")
     ts.setdefault("attempts", []).append(attempt)
+    if checked:
+        ts["checked"] = checked   # run for the next attempt
     ts.pop("reported", None)
     # what the provider said it did not claim was about the work this attempt did; the attempt keeps it (its response), the
     # task's own list keeps only what is still true — every attempt's copies piled up as near-duplicate findings
@@ -2184,18 +2292,36 @@ def tests_writer(plan, state, task, files):
     return found[-1] if found else None
 
 
+def test_writers(plan, state, task):
+    """The done tasks that wrote this build's protected tests, in plan order."""
+    found = []
+    for f in task.get("tests") or [] if not writes_tests(task) else []:
+        w = tests_writer(plan, state, task, [f])
+        if w and w["id"] not in found:
+            found.append(w["id"])
+    return found
+
+
 def amending_tasks(plan, state, task, files):
     """The open tasks amending these tests for a dispute: the build that disputed them waits for them."""
     return [t["id"] for t in all_tasks(plan, state) if t.get("id") != task["id"] and state["tasks"].get(t["id"], {}).get("amending")
             and state["tasks"][t["id"]]["status"] not in ("done", "skipped", "dropped") and set(t.get("tests") or []) & set(files)]
 
 
-def rebaseline(target, d, task, ts):
+def rebaseline(target, d, task, ts, plan, state):
     """The tests this build disputed were amended by the task that owns them; they are the contract again — in the build's
     start (so the amendment is not read as the build changing them) and in its kept copies (so a judgment that restores
-    the contract's tests restores the amended ones, not what the dispute was about)."""
+    the contract's tests restores the amended ones, not what the dispute was about). The amendment is every file of the
+    build's tests the writer changed since it was reopened, not only the ones the dispute named: a fix lands where the
+    cause is (guin-site write-post-tests fixed a shared `write_support.py` for a dispute naming two test files, and the
+    build's next judgment restored it as "changed protected tests")."""
     now = dirty(target) or {}
     files = ts.pop("rebaseline")
+    writer = tests_writer(plan, state, task, files)
+    wts = state["tasks"].get(writer["id"], {}) if writer else {}
+    if wts.get("amending") is not None and wts.get("start") is not None:
+        amended = touched_files(target, wts["start"], wts.get("start-head")) or []
+        files = sorted(set(files) | (set(amended) & set(task.get("tests") or [])))
     for f in files:
         ts.setdefault("start", {})[f] = now.get(f) or file_hash(target, f)
     keep_contract_tests(target, d, {"id": task["id"], "tests": files})
@@ -2227,7 +2353,7 @@ def route_dispute(target, d, state, plan, task, disputed, judgment=None):
     wts = state["tasks"][writer["id"]]
     if not made:
         attempt = {**(wts.pop("response", None) or {"status": "session"}), "reopened": {**reopened, **stamp()}, "disputed-tests": disputed,
-                   **{k: wts.pop(k) for k in ("answered", "done", "touched") if k in wts}}
+                   **{k: wts.pop(k) for k in ("answered", "done", "touched", "seen-non-claims", "checked") if k in wts}}
         wts.setdefault("attempts", []).append(attempt)
         n = len(wts["attempts"])
         for kind in ("response", "request", "pending", "response.transcript"):
@@ -2510,12 +2636,15 @@ def cmd_take(args):
     if ts.get("taken") or hands == "session" or task["role"] == "session":
         raise SystemExit("%s is already the session's" % args.task)
     who = signer(args)
-    msg = take_over(args.target, d, state, task, ts, args.why, who)
+    checked = run_checked(args.target, args.checked) if args.checked else None   # before anything is recorded: a failing one refuses the take
+    msg = take_over(args.target, d, state, task, ts, args.why, who, checked=checked)
     print(msg)
+    if checked:
+        print("  checked by chongdae: %s — the verifier gets them as evidence chongdae saw, with what changed after" % ", ".join("`%s` exit 0" % r["command"] for r in checked["ran"]))
     return 0
 
 
-def take_over(target, d, state, task, ts, why, who, extra=None):
+def take_over(target, d, state, task, ts, why, who, extra=None, checked=None):
     """The task becomes the session's: self-performed instead of its role, with the reason; a stopped attempt (and who made
     it) stays in `attempts`. `take` is a person's or the session's word; chongdae takes a task itself when a member's
     sandbox lacked a capability and the lock has no alternate that can (`extra`: how it was decided)."""
@@ -2528,11 +2657,14 @@ def take_over(target, d, state, task, ts, why, who, extra=None):
     was = ts.pop("performed_by", None)   # who made the stopped attempt goes with that attempt; the task's hands are the session's now
     ts.setdefault("non-claims", []).append("%s: taken over by the session from %s: %s" % (tid, task["role"], why))
     if ts.get("response") or ts.get("rejected"):
-        n = resend(target, d, state, tid, {"by": who, "taken": why}, message="take %s: %s" % (tid, why))
+        n = resend(target, d, state, tid, {"by": who, "taken": why}, message="take %s: %s" % (tid, why), checked=checked)
         if was:
             ts["attempts"][-1]["performed_by"] = was
             save_state(d, state)
         return "took %s from %s — its attempt %d stays in the record; the session finishes it, then `chongdae run` decides it" % (tid, task["role"], n)
+    if checked:
+        ts.pop("checked", None)
+        ts["checked"] = checked
     save_state(d, state)
     commit_record(target, os.path.basename(d), "take %s: %s" % (tid, why))
     return "took %s from %s — the session does it; then `chongdae run` decides it" % (tid, task["role"])
@@ -2704,6 +2836,7 @@ def cmd_retry(args):
     # not a gate: a retry the session decides alone is signed by the session (`--by NAME` when a person decided it)
     judgment = delegation_record(d, args.delegated, "retry") if args.delegated else {"by": signer(args)}
     plan, to = load(os.path.join(d, "plan.json")), ""
+    checked = run_checked(args.target, args.checked) if args.checked else None   # before anything is recorded: a failing one refuses the retry
     if args.requires:
         # what the work requires of its sandbox, said on the task now that a member's sandbox lacked it: the request names it
         # (`needs`), and the lock's `<role>@<cap>` alternate, when it has one, is hired instead of the plain role
@@ -2714,9 +2847,21 @@ def cmd_retry(args):
         judgment["requires"] = task["requires"]
         if "def" not in ts:
             save(os.path.join(d, "plan.json"), plan)
-        key = hire(providers(args.target, plan), task)[0]
-        to = " — it requires %s now; %s" % (", ".join(task["requires"]), "the lock's %s does it" % key if key != task["role"]
+        key, who = hire(providers(args.target, plan), task)
+        if ts.get("taken") and key != task["role"] and who not in SESSION_HANDS:
+            # asking for a capability the lock's alternate has is asking for that hand: a take stood in its way, and `run`
+            # kept the task with the session while this line said the alternate does it (guin-site write-bsky-build,
+            # 2026-10-10: two "evidence only" retries the session then did itself). The take stays in the record, lifted.
+            judgment["untaken"] = ts.pop("taken")
+            ts.pop("self-performed", None)
+            # what the take said and ran was the session's: the alternate's verifier gets neither
+            ts["non-claims"] = [n for n in ts.get("non-claims", []) if not str(n).startswith("%s: taken over by the session from " % args.task)]
+            ts.pop("checked", None)
+        to = " — it requires %s now; %s" % (", ".join(task["requires"]), "the session took it (`take`), so the session does it again" if ts.get("taken")
+                                             else "the lock's %s does it" % key if key != task["role"]
                                              else "the lock has no %s@%s, so the plain %s does it again" % (task["role"], "+".join(task["requires"]), task["role"]))
+    elif ts.get("taken"):
+        to = " — the session took it (`take`), so the session does it again"
     # a session task is measured again here, and what the measure leaves out is said: a retry that resends the same empty
     # diff gets the same reject (guin-site's escape-build, rejected on every retry for a `touched: []` beside the work)
     tdef = ts["def"] if "def" in ts else next((t for t in plan.get("tasks", []) if t.get("id") == args.task), {})
@@ -2732,8 +2877,12 @@ def cmd_retry(args):
                          % (f, "pinned into its start when %s finished (counted as %s's)" % (by, by) if by else "already changed when %s was added (its start holds it)" % args.task,
                             args.task, "tests" if f in (tdef.get("tests") or []) else "brief", args.task, f))
         lines += contested_lines(args.task, contested(args.target, plan, state, args.task, m or []), plan, state)
-    n = resend(args.target, d, state, args.task, judgment)
+    if checked:
+        judgment["checked"] = [r["command"] for r in checked["ran"]]
+    n = resend(args.target, d, state, args.task, judgment, checked=checked)
     print("retry %s: attempt %d kept in the record%s; `chongdae run` sends the task out again with it attached" % (args.task, n, to))
+    if args.checked:
+        print("  checked by chongdae: %s — the verifier gets them as evidence chongdae saw" % ", ".join("`%s` exit 0" % c for c in judgment["checked"]))
     for line in lines:
         print("  " + line)
     return 0
@@ -2970,6 +3119,7 @@ def cmd_report(args):
         findings.append({"kind": "unattributed", "where": ", ".join(unattributed),
                          "text": "these runs completed without recording touched files; changes they made cannot be told from work outside runs"})
     # what no human decided, and what nobody claims
+    seen_where, seen_count = [], 0
     for r in all_runs(target):
         name, plan, state = os.path.basename(r), load(os.path.join(r, "plan.json")), load_state(r)
         if since_runs is not None and name not in since_runs:
@@ -3083,8 +3233,13 @@ def cmd_report(args):
                 findings.append({"kind": "delegation-stamp", "where": ", ".join(wheres),
                                  "text": "the same delegated reason %r stamped on %d judgments — a repeated stamp is one judgment claiming to be many; "
                                          "declare it once (`chongdae delegate`) and reference it (--delegated D-xxxx), or write per-judgment reasons" % (reason, len(wheres))})
-        for n in non_claims(state):
+        for n in non_claims(state, unseen=True):
             findings.append({"kind": "non-claim", "where": name, "text": n})
+        for tid, ts in sorted(state.get("tasks", {}).items()):
+            n = len((ts.get("seen-non-claims") or {}).get("texts") or [])
+            if n:
+                seen_where.append("%s/%s (%d)" % (name, tid, n))
+                seen_count += n
         # a task left open when its run closed, or rejected and never retried: the cheap way past a rejection is to abandon the
         # task and open a new run — the record keeps it visible; this line makes someone look
         if state.get("status") == "complete":
@@ -3094,6 +3249,10 @@ def cmd_report(args):
                     findings.append({"kind": "left-open", "where": "%s/%s" % (name, tid),
                                      "text": ("rejected by %s (%s) and never retried" % (rej["by"], rej["why"]) if rej else "left open when the run closed")
                                              + " — `chongdae drop %s --why` if it will not be done, or a run that does it" % tid})
+    if seen_count:
+        findings.append({"kind": "seen-non-claims", "layer": "observation", "where": ", ".join(seen_where),
+                         "text": "%d provider non-claim(s) went to the verifier with the work and it accepted — read there, said here, not charged; "
+                                 "each stays in its task's `non-claims`" % seen_count})
     # a record written by a build that is not a release: it names a build nobody can install
     for r in all_runs(target):
         name = os.path.basename(r)
@@ -3661,6 +3820,8 @@ def main(argv=None):
             p.add_argument("--delegated", default=None, help="instead of --by: why the human handed this off (or D-xxxx)")
         if name == "retry":
             p.add_argument("--requires", nargs="+", default=None, choices=list(REQUIRES), help="say on the task what its sandbox must give (a member's sandbox lacked it): added to its `requires`; the lock's `<role>@<cap>` alternate, when it has one, is hired")
+        if name in ("retry", "take"):
+            p.add_argument("--checked", action="append", default=None, metavar="COMMAND", help="a command (quoted) chongdae runs itself in the project now; exit 0 is recorded as evidence chongdae saw and goes to the verifier (with what changed after), a failure refuses. Repeatable — e.g. the full test run a worker's report could not show")
         if name == "dispute":
             p.add_argument("task", help="the open build whose protected tests are wrong")
             p.add_argument("--tests", nargs="+", required=True, help="the protected test files that contradict the contract (FILE or FILE::test)")
