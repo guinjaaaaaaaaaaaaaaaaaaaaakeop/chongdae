@@ -50,7 +50,7 @@ def main():
     engine = os.path.join(os.path.dirname(HERE), "chongdae.py").replace(os.sep, "/")
     if state.get("status") == "running":
         plan = chongdae.load(os.path.join(d, "plan.json"))
-        open_ = [tid for tid, ts in state["tasks"].items() if ts.get("status") not in ("done", "skipped")]
+        open_ = chongdae.open_tasks(plan, state)   # the rule `run` and `status` use: a dropped task is not open (guin-site, 2026-10-12)
         msg = ("chongdae: run %s in progress (%s: %r) — %d task(s) open: %s. Writes go through this run; `%s \"%s\" run` advances it."
                % (os.path.basename(d), plan.get("kind", "?"), plan.get("goal", ""), len(open_), ", ".join(open_) or "-", PY, engine))
     else:

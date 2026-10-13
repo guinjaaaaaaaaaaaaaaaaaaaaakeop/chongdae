@@ -12,13 +12,38 @@
                                         self-performed. --scope: the files/dirs its hands own — while scoped tasks are open, a changed file is the
                                         open task's whose scope holds it most narrowly, not the first to finish's; a file in two scopes or in none is
                                         said with the `adopt` that settles it. --tests: what a nitpick task writes, what a task with --check may not
-                                        change — `add` says which
-  claim <id> [--by NAME]                take a task for this machine; `run` skips tasks claimed by someone else
+                                        change — `add` says which. A protected test the tests writer deleted (in its `touched`, gone from the tree)
+                                        is deleted by the contract: said once, sent as `deleted-tests`, never restored or demanded; a build that
+                                        recreates one is refused. --closes in a run started without `--from`: said at `add`, and `run` sends no
+                                        quibbler or verifier a request whose contract is missing the sections
+  init  ... --parent RUN/TASK           a child run: it does TASK of run RUN (typically a worktree run on its own branch). Recorded as
+                                        `parent`; the parent's `show` lists its children and their states, read from the children's records
+  claim <id> [--by NAME]                take a task for this machine; `run` skips tasks claimed by someone else. With hunsu.json
+                                        `settings.chongdae.lease` ("local" | "git" | an argv) a claim is a hold in a lease store, not a line
+                                        in the record: one per session (`lease-max`), renewed by `run`'s progress, lapsing after `lease-ttl`
+                                        (default 30 min) without it, given back at done/drop/close (`--release` by hand) as a released
+                                        marker that keeps the generation (`--list --prune` removes old ones); every take raises
+                                        the task's generation, and only the current generation's result is accepted. Under a lease `run`
+                                        advances only what this session holds, taking a ready unheld task when it holds none. A `--scope`
+                                        path is a key too: overlapping scopes are not held at once
+  claim --list                          every hold: machine/session, generation, age, last progress; lapsed and long-held (past
+                                        `lease-ceiling`, default 4 h) marked
+  claim --break <id> --why WHY [--by NAME]   take over a live hold: a judgment, recorded on the task and committed; the old holder is
+                                        told at its next renewal and its result is refused
+  (hunsu.json `settings.chongdae.remote`: absent — nothing is pushed; "sync" — each judgment's record commit is pushed, a failed
+   push is said and retried at the next one; "shared" — fetched before a claim or a step, pushed after each judgment, and a push
+   still refused after fetch-and-reconcile stops the command. Declaring it is the project's consent to chongdae pushing)
   (every judgment below: `--by NAME` writes a person's name; left out, the session signs as itself — {"agent": "<host> <model>"} —
    and `show`/`report` say "the session (<host> <model>)". The gates, confirm and accept, still need --by or --delegated)
   drop  <id> --why WHY [--by NAME]      a session task that will not be done: leaves the open set, stays in the record with the reason
-  take  <id> --why WHY [--by NAME]      the session finishes a task its hired hands could not (the work is in the tree): self-performed,
-                                        decided like any session task
+  take  <id> --why WHY [--by NAME] [--checked CMD].. [--checked-red CMD]..   the session finishes a task its hired hands could not (the
+                                        work is in the tree): self-performed, decided like any session task. --checked: a command chongdae runs now,
+                                        its pass recorded as evidence it saw; --checked-red: a tests task's expected red run (non-zero recorded as
+                                        red as expected, zero as passed before the build). `retry` takes both too
+  did   <id> [--why WHY] [--approved-in source:ID] [--by NAME] -- COMMAND...   an operation outside the repository (deploy, secret
+                                        deletion, remote database change): one command, run without a shell; recorded on the task as `did`
+                                        {command, exit, tail, at, why, approved-in, signer} whatever the exit, printed, committed. `show` prints
+                                        it; `report` lists it (an observation; an objection when it exited non-zero)
   dispute <build> --tests F... --why WHY [--by NAME | --delegated WHY]   a build's protected tests contradict the contract: the task
                                         that wrote them is reopened to amend them (or a tests task is made); the build then takes the
                                         amended files as its contract. A provider's build disputes in its answer (`disputed-tests`)
@@ -39,7 +64,9 @@
                                         --brief` at most two lines (the last task that changed it; one open or dropped — said only while
                                         its run is open or it ended in the last 7 days, and no done task changed the file after it), nothing
                                         when nothing is on record; `--brief` alone the map — runs, this week's, the last closed
-  run   [--target DIR]                  advance one step. Exit 2 = stopped for the session agent or a human; the last line says what to do
+  run   [--target DIR]                  advance one step. Exit 2 = stopped for the session agent or a human; the last line says what to do.
+                                        It waits for providers at most CHONGDAE_WAIT seconds (default 240) and then says "still working — `run`
+                                        again" (exit 2): well under a host's 10-minute tool limit
   confirm <task> [--by NAME | --delegated "why"] [--target DIR]   record the human's confirmation of a produced artifact
   delegate --scope confirm,accept,... --why "..." --by NAME [--run ID]   declare a batch pre-approval once, as its own judgment; later
                                         judgments reference it: `--delegated D-xxxx` (recorded as {ref}, not the words repeated)
@@ -88,7 +115,7 @@ DISPATCH = 3   # spawn: a native provider — the session must run the subagent 
 
 WAITING = 4    # spawn: the provider is still working past the wait budget — `run` again keeps waiting (the pending record finds it)
 
-WAIT_BUDGET = int(os.environ.get("CHONGDAE_WAIT", 480))   # seconds one `run` waits for providers before returning: a host's tool call has its own timeout (Claude Code: 10 min), and a run that outlives it gets backgrounded and orphaned
+WAIT_BUDGET = int(os.environ.get("CHONGDAE_WAIT", 240))   # seconds one `run` waits for providers before returning: a host's tool call has its own timeout (Claude Code: 10 min), and a run that outlives it gets backgrounded and orphaned. Four minutes, not eight: guin-site's session saw `run` block ~8 minutes against the 10-minute limit and wrapped it in polling loops of its own
 
 _CALL_DEADLINE = None   # set once per `run` call: the budget is the call's, not each spawn's — a call that finishes one provider and starts the next does not wait twice
 
@@ -159,7 +186,8 @@ LOCAL = "local"
 PRIVATE_KEYS = ("session", "transcript", "kept-locally", "start", "start-head",   # the host session behind an author line; the snapshot a task measures from, and the commit it stood on
                 "commands", "read",                                 # a worker's command lines and what it read: the record keeps the summary (`trace`)
                 "reported", "rebaseline",                           # flags the engine keeps between two `run` calls
-                "checked-tree")                                     # the tree a `--checked` command ran on: what changed after is measured from it
+                "checked-tree",                                     # the tree a `--checked` command ran on: what changed after is measured from it
+                "lease-held", "lease-work")                         # what this session holds under a lease, and the progress mark it last renewed at
 
 def split_private(o):
     """(public, private): the record without PRIVATE_KEYS at any depth, and a mirror holding only them."""
@@ -238,6 +266,15 @@ def all_tasks(plan, state):
     return plan.get("tasks", []) + [ts["def"] for ts in added]
 
 
+CLOSED = ("done", "skipped", "dropped")   # a task in one of these is out of the open set: `run`, `status`, `close` and the SessionStart line count alike
+
+
+def open_tasks(plan, state):
+    """The ids of the tasks still open, in order. One rule for every reader: the SessionStart hook counted a dropped task as
+    open ("2 task(s) open: cleanup-build, cleanup-ops" while `run` said one) because it kept its own copy of the rule."""
+    return [t["id"] for t in all_tasks(plan, state) if state.get("tasks", {}).get(t["id"], {}).get("status") not in CLOSED]
+
+
 def non_claims(state, unseen=False):
     """Every non-claim in the run, prefixed with its task — the reader's view over the per-task files (and older runs' shared
     list). The same sentence on several tasks is said once, with the tasks: a run of four no-check session tasks said
@@ -270,7 +307,9 @@ def run_dir(target, run_id=None):
             raise SystemExit("no run %s" % run_id)
         return match[0]
     running = [r for r in runs if load_state(r).get("status") == "running"]
-    return (running or runs or [None])[-1]
+    names = {os.path.basename(r) for r in running}
+    children = [r for r in running if (load_state(r).get("parent") or {}).get("run") in names]   # a child started beside its running parent is the one being worked
+    return (children or running or runs or [None])[-1]
 
 
 def record_root(start):
@@ -514,6 +553,7 @@ def commit_record(target, run_name, message, also=()):
         except OSError:
             pass
     git("reset", "-q", "--", rel, RUNS + "/.gitignore", *also)   # the person's index now agrees with HEAD for the record, and only there
+    push_record(target)   # `remote: sync | shared` only — absent, nothing is pushed
     return head_sha(target)
 
 
@@ -1431,13 +1471,61 @@ def contract_fingerprint(target, d, tid):
     plan = load(os.path.join(d, "plan.json")); state = load_state(d)
     task = next((t for t in all_tasks(plan, state) if t["id"] == tid), {})
     text = json.dumps({"brief": task.get("brief"), "checks": task.get("checks"), "tests": task.get("tests")}, sort_keys=True)
-    doc = os.path.join(target, plan.get("from", ""))
-    if plan.get("from") and os.path.exists(doc):
-        body = io.open(doc, encoding="utf-8").read()
+    if plan.get("from") and os.path.exists(os.path.join(target, plan["from"])):
+        sections = contract_sections(target, plan, task)[0]
         for qid in task.get("closes", []):
-            m = re.search(r"^## +%s\b.*?(?=^## |\Z)" % re.escape(qid), body, re.M | re.S)
-            text += "\n" + (m.group(0).strip() if m else "")
+            text += "\n" + sections.get(qid, "")
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
+
+
+def contract_sections(target, plan, task):
+    """({Q-id: the `## Q-id` section's text}, [the closed ids with no section]) — what a request carries as the contract:
+    the sections of the run's plan document (`init --from`, or a plan run's `from`) that the task closes."""
+    sections = {}
+    doc = os.path.join(target, plan.get("from") or "")
+    body = io.open(doc, encoding="utf-8").read() if plan.get("from") and os.path.isfile(doc) else None
+    for qid in task.get("closes") or []:
+        m = re.search(r"^## +%s\b.*?(?=^## |\Z)" % re.escape(qid), body, re.M | re.S) if body is not None else None
+        if m:
+            sections[qid] = m.group(0).strip()
+    return sections, [q for q in task.get("closes") or [] if q not in sections]
+
+
+CONTRACT_READERS = ("quibble", "verifier")   # the roles whose whole job is reading the contract: sent nothing, they answer about nothing
+
+
+def contract_gap(target, plan, task):
+    """Why the contract a task closes cannot be sent — the run has no plan document, it is gone, or it has no section for a
+    closed id — or None when every section is there (or the task closes nothing)."""
+    missing = contract_sections(target, plan, task)[1]
+    if not missing:
+        return None
+    if not plan.get("from"):
+        return "this run has no contract document (it was started without `--from`), so %s reach%s no one" % (", ".join(missing), "es" if len(missing) == 1 else "")
+    if not os.path.isfile(os.path.join(target, plan["from"])):
+        return "its contract document %s does not exist" % plan["from"]
+    return "%s has no `## %s` section" % (plan["from"], "`, `## ".join(missing))
+
+
+def empty_contract_stop(target, plan, task, reader):
+    """A quibbler or verifier is not sent a request whose contract is missing what the task closes. guin-site, 2026-10-12: a
+    session run started without `--from`; `add --closes Q-cleanup` was accepted, and the quibble got `contract: {}` and
+    answered "the contract and checks are empty" — a round paid for nothing, and the run started over. Returns the stop's
+    exit code, or None when the contract is whole."""
+    gap = contract_gap(target, plan, task)
+    if gap is None:
+        return None
+    if plan.get("from") and os.path.isfile(os.path.join(target, plan["from"])):
+        fix = "add the section to %s, then `chongdae run`" % plan["from"]
+    elif plan.get("kind") == "session":
+        fix = ("close this run and start the next with `chongdae init --session --from PLAN` (the plan document holding the sections), "
+               "then add the task there — or put the section's text in the brief and add the task again without --closes "
+               "(`chongdae drop %s --why WHY`, then `chongdae add`)" % task["id"])
+    else:
+        fix = "the plan's `from` names the document holding the sections: give it (a new run with the plan fixed), or take --closes off the task"
+    fix = fix[0].upper() + fix[1:]
+    return stop("session agent: %s closes %s, but %s — %s would be sent an empty contract and answer about nothing; not sent. %s."
+                % (task["id"], ", ".join(task.get("closes") or []), gap, reader, fix))
 
 
 def gate_of(task):
@@ -1496,14 +1584,7 @@ def spawn(target, run, task, provider, plan, attempts=(), stage="build", extra=N
     if native and os.path.exists(res_path):   # the session wrote the subagent's answer: consume it like any provider's
         pending = pending or {"start": dirty(target)}
     elif not (pending and (os.path.exists(res_path) or pid_alive(pending.get("pid")))):
-        sections = {}
-        plan_doc = os.path.join(target, plan.get("from", ""))
-        if plan.get("from") and os.path.exists(plan_doc):
-            text = io.open(plan_doc, encoding="utf-8").read()
-            for qid in task.get("closes", []):
-                m = re.search(r"^## +%s\b.*?(?=^## |\Z)" % re.escape(qid), text, re.M | re.S)
-                if m:
-                    sections[qid] = m.group(0).strip()
+        sections = contract_sections(target, plan, task)[0]
         req = {"artifact-type": "chongdae/request@1", "stage": stage, "run": os.path.basename(run), "task": task["id"],
                "role": task["role"] if stage == "build" else ("verifier" if stage == "verify" else stage),
                "target": os.path.abspath(target).replace(os.sep, "/"), "goal": plan["goal"], "brief": task.get("brief", ""),
@@ -1520,6 +1601,11 @@ def spawn(target, run, task, provider, plan, attempts=(), stage="build", extra=N
             req["attempts"] = [{k: a.get(k) for k in ("status", "summary", "verified", "decisions", "non-claims", "retried", "review", "disputed-tests", "reopened") } for a in attempts]
             req["touched"] = touched_files(target)
         req.update(extra or {})
+        gone = deleted_by_contract(target, plan, load_state(run), task)
+        if gone:
+            # the contract deleted these: not tests to keep, nor to be red before the build (hacheong keeps them absent)
+            req["tests"] = [t for t in req.get("tests") or [] if t not in gone]
+            req["deleted-tests"] = sorted(gone)
         save(req_path, req)
         # the request as sent names this machine's paths and stays local; what the provider was asked, portably, is
         # the record's — without it nobody else can put the same question to a worker again. The contract's sections are
@@ -1590,6 +1676,816 @@ def dispatch_text(what, d):
             % (what, " ".join('"%s"' % a if " " in a else a for a in d.get("prompt_argv") or []), d.get("response"), d.get("request")))
 
 
+# ---------------------------------------------------------------- leases: who holds which key now — coordination, not the record
+
+# `settings.chongdae.lease` (hunsu.json, hunsu.local.json on top): absent — `claim` as before, written in the record; "local"
+# — a file per key, created only if absent, under this machine's git common dir (several sessions on one machine); "git" —
+# a ref per key on the remote (`refs/chongdae/claims/<run>/<task>`, a parentless commit whose message is the lease), taken
+# with `git push --force-with-lease=<ref>:` and swapped against the value read; an argv — a service's command (README: the
+# backend contract). A lease is who holds a key for a while; it enters no branch. The task's result carries the generation
+# it was made under, and only the current generation's result is accepted.
+
+LEASE_TTL = 30 * 60        # a hold lapses this long after its last progress (settings.chongdae.lease-ttl, seconds)
+LEASE_CEILING = 4 * 3600   # a hold older than this is shown as long-held (settings.chongdae.lease-ceiling, seconds)
+
+_LEASE_CALL = None   # one `run` call's leases: the backend, this session as a holder, what it holds
+
+
+class LeaseError(Exception):
+    """The lease store cannot be reached or answered nonsense. A machine that cannot reach it cannot take: chongdae says so
+    and starts nothing untaken."""
+
+
+def clock():
+    """Now, in seconds. A lease's end is the machines' clocks (the git backend has no server clock); tests move it."""
+    import time
+    return time.time()
+
+
+def iso(t):
+    import datetime
+    return datetime.datetime.fromtimestamp(t, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00")
+
+
+def epoch(at):
+    t = as_utc(at)
+    return t.timestamp() if t else 0.0
+
+
+def ref_part(s):
+    """One ref-name component (and file name) for a run, a task or a path: `/` and what git refuses in a ref, percent-encoded."""
+    from urllib.parse import quote
+    s = quote(str(s), safe="").replace("~", "%7E").replace("..", "%2E%2E")
+    if s.startswith("."):
+        s = "%2E" + s[1:]
+    if s.endswith(".lock"):
+        s = s[:-5] + "%2Elock"
+    if s.endswith("."):
+        s = s[:-1] + "%2E"
+    return s or "%2E"
+
+
+def task_key(run_name, tid):
+    return "%s/%s" % (ref_part(run_name), ref_part(tid))
+
+
+def scope_key(path):
+    return "scope/" + ref_part(path or ".")
+
+
+def scopes_overlap(a, b):
+    """Two scope entries overlap when one holds the other (the project root holds everything)."""
+    a, b = (a or "").strip("/"), (b or "").strip("/")
+    return a == b or not a or not b or a.startswith(b + "/") or b.startswith(a + "/")
+
+
+def lease_holder(target, by=None):
+    """This session as a holder: the machine (CHONGDAE_MACHINE, else the host name), the host's session id (CHONGDAE_SESSION,
+    else the host's own), and the agent signing. Two holders are the same when machine and session are."""
+    import socket
+    h = {"machine": os.environ.get("CHONGDAE_MACHINE") or socket.gethostname() or "unknown",
+         "session": os.environ.get("CHONGDAE_SESSION") or os.environ.get("CLAUDE_CODE_SESSION_ID") or os.environ.get("CODEX_THREAD_ID") or "-",
+         "agent": agent_signer(target)["agent"]}
+    if by:
+        h["by"] = by
+    return h
+
+
+def same_holder(a, b):
+    return isinstance(a, dict) and isinstance(b, dict) and a.get("machine") == b.get("machine") and a.get("session") == b.get("session")
+
+
+def holder_text(h):
+    if not isinstance(h, dict):
+        return "?"
+    s = h.get("session") or "-"
+    return "%s/%s%s" % (h.get("machine") or "?", s if len(s) <= 13 else s[:8] + "…", " (by %s)" % h["by"] if h.get("by") else "")
+
+
+def lapsed(lease, now=None):
+    """No progress for its ttl: the hold is over, and another session may take the key (recorded as taken over from a lapsed hold)."""
+    return epoch(lease.get("last-progress") or lease.get("taken")) + float(lease.get("ttl") or LEASE_TTL) < (clock() if now is None else now)
+
+
+def long_held(lease, ceiling, now=None):
+    return (clock() if now is None else now) - epoch(lease.get("taken")) > ceiling
+
+
+def lease_age(lease, now=None):
+    now = clock() if now is None else now
+    return "held %s, last progress %s ago" % (seconds_text(int(max(0, now - epoch(lease.get("taken"))))),
+                                              seconds_text(int(max(0, now - epoch(lease.get("last-progress") or lease.get("taken"))))))
+
+
+def lease_from_text(frm):
+    if not isinstance(frm, dict):
+        return ""
+    if frm.get("broken") is not None:
+        return "broken from %s (gen %s): %s" % (holder_text(frm.get("holder")), frm.get("gen"), frm.get("broken"))
+    return "taken over from a lapsed hold of %s (gen %s, last progress %s)" % (holder_text(frm.get("holder")), frm.get("gen"), when(frm.get("last-progress")))
+
+
+class CasLeases:
+    """take / renew / release / list over a store that offers create-if-absent and compare-and-swap per key (a local file, a
+    ref on a remote). The judging is here; the store judges nothing."""
+
+    def __init__(self, store, ttl):
+        self.store, self.ttl = store, ttl
+
+    def take(self, key, holder, gen_floor=0, over=None, why=None, extra=None):
+        cur, ver = self.store.read(key)
+        now = clock()
+        if cur is not None and cur.get("released"):
+            # a released key keeps its generation: the next take counts on from it, whoever's record it has not reached
+            if over is not None:
+                return {"ok": False, "lease": None}
+            new = {"key": key, "holder": holder, "gen": max(int(gen_floor or 0), int(cur.get("gen") or 0)) + 1,
+                   "taken": iso(now), "renewed": iso(now), "last-progress": iso(now), "ttl": self.ttl, **(extra or {})}
+            if not self.store.swap(key, new, ver):
+                return {"ok": False, "lease": self.current(key)}
+            return {"ok": True, "lease": new}
+        new = {"key": key, "holder": holder, "gen": max(int(gen_floor or 0), int((cur or {}).get("gen") or 0)) + 1,
+               "taken": iso(now), "renewed": iso(now), "last-progress": iso(now), "ttl": self.ttl, **(extra or {})}
+        if cur is None:
+            if over is not None:
+                return {"ok": False, "lease": None}
+            ok = self.store.create(key, new)
+        elif over is not None:
+            if int(cur.get("gen") or 0) != int(over):
+                return {"ok": False, "lease": cur}
+            new["from"] = {"holder": cur.get("holder"), "gen": cur.get("gen"), "broken": why or "", "last-progress": cur.get("last-progress"), "lapsed": lapsed(cur, now)}
+            ok = self.store.swap(key, new, ver)
+        elif same_holder(cur.get("holder"), holder):
+            return {"ok": True, "lease": cur, "had": True}
+        elif lapsed(cur, now):
+            new["from"] = {"holder": cur.get("holder"), "gen": cur.get("gen"), "lapsed": True, "last-progress": cur.get("last-progress")}
+            ok = self.store.swap(key, new, ver)
+        else:
+            return {"ok": False, "lease": cur}
+        if not ok:
+            return {"ok": False, "lease": self.current(key)}
+        return {"ok": True, "lease": new}
+
+    def renew(self, key, holder, gen):
+        cur, ver = self.store.read(key)
+        if not cur or cur.get("released") or int(cur.get("gen") or 0) != int(gen) or not same_holder(cur.get("holder"), holder):
+            return {"ok": False, "lease": None if (cur or {}).get("released") else cur}
+        new = dict(cur, renewed=iso(clock()))
+        new["last-progress"] = new["renewed"]
+        if not self.store.swap(key, new, ver):
+            return {"ok": False, "lease": self.current(key)}
+        return {"ok": True, "lease": new}
+
+    def release(self, key, gen, by=None):
+        """Not a delete: the key becomes a released marker that keeps its generation (`{key, released, gen, by}`), so the next
+        take counts on from it even on a machine whose record never saw this one. `claim --list --prune` removes old markers."""
+        cur, ver = self.store.read(key)
+        if not cur or cur.get("released") or int(cur.get("gen") or 0) != int(gen):
+            return {"ok": False, "lease": None if (cur or {}).get("released") else cur}
+        marker = {"key": key, "released": iso(clock()), "gen": int(gen), "by": by or holder_text(cur.get("holder"))}
+        return {"ok": bool(self.store.swap(key, marker, ver)), "lease": None}
+
+    def list(self, prefix=""):
+        return [l for l, _ in self.store.all() if str(l.get("key", "")).startswith(prefix) and not l.get("released")]
+
+    def current(self, key):
+        cur = self.store.read(key)[0]
+        return None if cur is None or cur.get("released") else cur
+
+    def prune(self, age, prefix=""):
+        """Delete released markers older than `age` seconds; a take after that counts from the record's generation."""
+        now, out = clock(), []
+        for l, ver in self.store.all():
+            if l.get("released") and str(l.get("key", "")).startswith(prefix) and now - epoch(l["released"]) > age and self.store.delete(l["key"], ver):
+                out.append(l["key"])
+        return out
+
+
+class LocalStore:
+    """One file per key under this machine's git common dir (`chongdae-claims/`; shared by its worktrees), else under
+    `.chongdae/local/claims/`. Created with O_CREAT|O_EXCL; swapped (renewed, broken, released to a marker that keeps the
+    generation) and pruned under a per-key lock file. Atomic on one machine."""
+
+    def __init__(self, target):
+        import subprocess
+        common = subprocess.run(["git", "rev-parse", "--git-common-dir"], cwd=target, capture_output=True, text=True)
+        out = common.stdout.strip()
+        self.dir = os.path.join(target, out, "chongdae-claims") if common.returncode == 0 and out else os.path.join(target, RUNS, LOCAL, "claims")
+        os.makedirs(self.dir, exist_ok=True)
+
+    def path(self, key):
+        return os.path.join(self.dir, ref_part(key) + ".json")
+
+    def _read_path(self, path):
+        import hashlib
+        try:
+            with open(path, "rb") as fh:
+                raw = fh.read()
+        except FileNotFoundError:
+            return None, None
+        try:
+            return json.loads(raw.decode("utf-8")), hashlib.sha1(raw).hexdigest()
+        except ValueError:
+            return None, hashlib.sha1(raw).hexdigest()   # a torn write: nobody's lease; a swap may replace it
+
+    def read(self, key):
+        return self._read_path(self.path(key))
+
+    def _lock(self, key):
+        import time
+        lock = self.path(key) + ".lock"
+        for _ in range(500):
+            try:
+                os.close(os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+                return lock
+            except FileExistsError:
+                try:
+                    if time.time() - os.path.getmtime(lock) > 10:
+                        os.remove(lock)   # a holder of the lock died between two lines
+                        continue
+                except OSError:
+                    pass
+                time.sleep(0.01)
+        raise LeaseError("the lock on %s stayed taken" % key)
+
+    def create(self, key, lease):
+        try:
+            fd = os.open(self.path(key), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            return False
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(lease, fh, ensure_ascii=False)
+        return True
+
+    def swap(self, key, lease, version):
+        lock = self._lock(key)
+        try:
+            if self.read(key)[1] != version:
+                return False
+            tmp = self.path(key) + ".tmp"
+            with io.open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(lease, fh, ensure_ascii=False)
+            os.replace(tmp, self.path(key))
+            return True
+        finally:
+            os.remove(lock)
+
+    def delete(self, key, version):
+        lock = self._lock(key)
+        try:
+            if self.read(key)[1] != version:
+                return False
+            os.remove(self.path(key))
+            return True
+        finally:
+            os.remove(lock)
+
+    def all(self):
+        out = []
+        for name in sorted(os.listdir(self.dir)):
+            if name.endswith(".json"):
+                lease, ver = self._read_path(os.path.join(self.dir, name))
+                if lease:
+                    out.append((lease, ver))
+        return out
+
+
+class GitStore:
+    """One ref per key on the remote: `refs/chongdae/claims/<key>` -> a parentless commit with the empty tree whose message is
+    the lease. Created with `--force-with-lease=<ref>:` (only if absent), swapped with `--force-with-lease=<ref>:<sha read>` —
+    a release too: the ref then points at a released marker that keeps the generation; only `claim --list --prune` deletes a
+    ref. Read by fetching the claims into `refs/chongdae/seen/` (pruned). Nothing enters a branch."""
+
+    NS = "refs/chongdae/claims/"
+    SEEN = "refs/chongdae/seen/"
+    ID = {"GIT_AUTHOR_NAME": "chongdae", "GIT_AUTHOR_EMAIL": "chongdae@lease", "GIT_COMMITTER_NAME": "chongdae", "GIT_COMMITTER_EMAIL": "chongdae@lease"}
+
+    def __init__(self, target, remote):
+        self.target, self.remote = target, remote
+        self._fresh = False
+
+    def git(self, *a, stdin=None, env=None):
+        import subprocess
+        return subprocess.run(["git", *a], cwd=self.target, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                              input=stdin, env=dict(os.environ, **(env or {})))
+
+    def refresh(self):
+        done = self.git("fetch", "-q", "--prune", "--no-tags", self.remote, "+%s*:%s*" % (self.NS, self.SEEN))
+        if done.returncode:
+            raise LeaseError("cannot reach the lease remote %r: %s" % (self.remote, (done.stderr or done.stdout).strip().split("\n")[-1][:200]))
+
+    def _lease_of(self, sha):
+        body = self.git("cat-file", "commit", sha).stdout
+        msg = body.split("\n\n", 1)[1] if "\n\n" in body else ""
+        try:
+            return json.loads(msg)
+        except ValueError:
+            return None
+
+    def read(self, key):
+        self.refresh()
+        sha = self.git("rev-parse", "-q", "--verify", self.SEEN + key).stdout.strip()
+        return (self._lease_of(sha), sha) if sha else (None, None)
+
+    def _commit(self, lease):
+        tree = self.git("mktree", stdin="").stdout.strip()
+        made = self.git("commit-tree", tree, "-m", json.dumps(lease, ensure_ascii=False, sort_keys=True), env=self.ID)
+        if made.returncode or not made.stdout.strip():
+            raise LeaseError("cannot write a lease object: %s" % made.stderr.strip()[-200:])
+        return made.stdout.strip()
+
+    def _push(self, ref, expect, src):
+        done = self.git("push", "-q", "--no-verify", "--force-with-lease=%s:%s" % (ref, expect or ""), self.remote, "%s:%s" % (src, ref))
+        if done.returncode == 0:
+            return True
+        said = (done.stderr or done.stdout)
+        if "stale info" in said or "rejected" in said or "already exists" in said or "fetch first" in said:
+            return False
+        raise LeaseError("the lease remote %r refused the push: %s" % (self.remote, said.strip().split("\n")[-1][:200]))
+
+    def create(self, key, lease):
+        return self._push(self.NS + key, "", self._commit(lease))
+
+    def swap(self, key, lease, version):
+        return self._push(self.NS + key, version, self._commit(lease))
+
+    def delete(self, key, version):
+        return self._push(self.NS + key, version, "")
+
+    def all(self):
+        self.refresh()
+        out = []
+        for line in self.git("for-each-ref", "--format=%(objectname)", self.SEEN).stdout.split("\n"):
+            if line.strip():
+                lease = self._lease_of(line.strip())
+                if lease:
+                    out.append((lease, line.strip()))
+        return out
+
+
+class ArgvLeases:
+    """A service backend: `<argv> take|renew|release|list|prune KEY [--holder H] [--ttl S] [--gen N] [--task T] [--scope P]
+    [--over G] [--why W] [--by B] [--age S]`, one JSON object on stdout (README: the contract). A non-zero exit or no JSON:
+    the store could not be reached."""
+
+    def __init__(self, target, argv, ttl):
+        self.target, self.argv, self.ttl = target, [str(a) for a in argv], ttl
+
+    def call(self, *a):
+        import subprocess
+        try:
+            done = subprocess.run(self.argv + [str(x) for x in a], cwd=self.target, capture_output=True, text=True, encoding="utf-8",
+                                  errors="replace", stdin=subprocess.DEVNULL, timeout=60)
+        except (OSError, subprocess.TimeoutExpired) as err:
+            raise LeaseError("the lease command %s did not answer: %s" % (self.argv[0], err))
+        if done.returncode:
+            raise LeaseError("the lease command exited %d: %s" % (done.returncode, (done.stderr or done.stdout).strip()[-200:]))
+        try:
+            return json.loads(done.stdout.strip().split("\n")[-1])
+        except (ValueError, IndexError):
+            raise LeaseError("the lease command answered no JSON: %r" % done.stdout[-200:])
+
+    def take(self, key, holder, gen_floor=0, over=None, why=None, extra=None):
+        a = ["take", key, "--holder", json.dumps(holder, ensure_ascii=False), "--ttl", self.ttl, "--gen", int(gen_floor or 0) + 1]
+        for k in ("task", "scope"):
+            if (extra or {}).get(k) is not None:
+                a += ["--" + k, extra[k]]
+        if over is not None:
+            a += ["--over", over, "--why", why or ""]
+        r = self.call(*a)
+        return {"ok": bool(r.get("ok")), "lease": r.get("lease")}
+
+    def renew(self, key, holder, gen):
+        r = self.call("renew", key, "--holder", json.dumps(holder, ensure_ascii=False), "--gen", gen)
+        return {"ok": bool(r.get("ok")), "lease": r.get("lease")}
+
+    def release(self, key, gen, by=None):
+        r = self.call("release", key, "--gen", gen, *(["--by", by] if by else []))
+        return {"ok": bool(r.get("ok")), "lease": r.get("lease")}
+
+    def list(self, prefix=""):
+        return [l for l in (self.call("list", prefix).get("leases") or []) if isinstance(l, dict) and not l.get("released")]
+
+    def prune(self, age, prefix=""):
+        return list(self.call("prune", prefix, "--age", int(age)).get("pruned") or [])
+
+    def current(self, key):
+        return next((l for l in self.list(key) if l.get("key") == key), None)
+
+
+def lease_backend(target):
+    """The project's lease backend, or None (no `lease` setting: `claim` is written in the record, as before)."""
+    s = settings(target)
+    kind = s.get("lease")
+    if not kind:
+        return None
+    ttl = int(s.get("lease-ttl") or LEASE_TTL)
+    if kind == "local":
+        backend = CasLeases(LocalStore(target), ttl)
+    elif kind == "git":
+        backend = CasLeases(GitStore(target, s.get("lease-remote") or "origin"), ttl)
+    elif isinstance(kind, list) and kind and all(isinstance(a, str) for a in kind):
+        backend = ArgvLeases(target, kind, ttl)
+    else:
+        raise SystemExit("settings.chongdae.lease %r: leave it out, or \"local\", \"git\", or a command as an argv list" % (kind,))
+    backend.ceiling = int(s.get("lease-ceiling") or LEASE_CEILING)
+    backend.max = int(s.get("lease-max") or 1)
+    backend.kind = kind if isinstance(kind, str) else "command"
+    return backend
+
+
+def live_holds(leases, holder):
+    """The task keys this session holds now (scope keys ride with their task)."""
+    return [l for l in leases.list() if not str(l.get("key", "")).startswith("scope/") and same_holder(l.get("holder"), holder) and not lapsed(l)]
+
+
+def take_task(leases, run_name, task, ts, holder, over=None, why=None):
+    """Take a task's key, then one key per scope path; a scope that overlaps one another session holds live gives every key
+    back. {"ok", "lease", "conflict"?}. On success the machine-local overlay keeps what this session holds (`lease-held`)."""
+    key = task_key(run_name, task["id"])
+    floor = max(int(ts.get("gen") or 0), int((ts.get("lease") or {}).get("gen") or 0), int((ts.get("lease-held") or {}).get("gen") or 0))
+    r = leases.take(key, holder, floor, over=over, why=why, extra={"task": "%s/%s" % (run_name, task["id"])})
+    if not r["ok"]:
+        return r
+    lease, got, conflict = r["lease"], [], None
+    scopes = task.get("scope") or []
+    for p in scopes:
+        sk = scope_key(p)
+        s = leases.take(sk, holder, 0, extra={"task": "%s/%s" % (run_name, task["id"]), "scope": p})
+        if not s["ok"] and s.get("lease") and (s["lease"].get("task") == "%s/%s" % (run_name, task["id"])) and over is not None:
+            s = leases.take(sk, holder, 0, over=s["lease"].get("gen"), why=why, extra={"task": "%s/%s" % (run_name, task["id"]), "scope": p})   # the broken hold's scopes go with it
+        if not s["ok"]:
+            conflict = s.get("lease") or {"key": sk}
+            break
+        got.append(s["lease"])
+    if conflict is None and scopes:
+        conflict = next((l for l in leases.list("scope/") if not same_holder(l.get("holder"), holder) and not lapsed(l)
+                         and any(scopes_overlap(l.get("scope"), p) for p in scopes)), None)
+    if conflict is not None:
+        for s in got:
+            leases.release(s["key"], s["gen"])
+        if not r.get("had"):
+            leases.release(key, lease["gen"])
+        return {"ok": False, "lease": conflict, "conflict": "scope"}
+    ts["lease-held"] = {"gen": lease["gen"], "holder": holder, "scopes": [[s["key"], s["gen"]] for s in got]}
+    return {"ok": True, "lease": lease, "had": r.get("had")}
+
+
+def release_task(leases, run_name, tid, ts):
+    """Give back a task's key and its scope keys (done, dropped, closed). What this session held leaves the overlay."""
+    held = ts.pop("lease-held", None)
+    if not held or leases is None:
+        return
+    try:
+        by = holder_text(held.get("holder"))
+        for k, g in held.get("scopes") or []:
+            leases.release(k, g, by)
+        leases.release(task_key(run_name, tid), held["gen"], by)
+    except LeaseError as err:
+        print("  (%s: its hold could not be given back — %s; it lapses on its own)" % (tid, err))
+
+
+def lease_into_record(ts, lease):
+    """The result carries the generation it was made under, and how the hold began (taken over from a lapsed or broken one)."""
+    if not lease:
+        return
+    ts["gen"] = lease["gen"]
+    ts["lease"] = {"gen": lease["gen"], "holder": lease.get("holder"), "taken": lease.get("taken"), **({"from": lease["from"]} if lease.get("from") else {})}
+
+
+def lost_text(tid, held, cur):
+    """This session's hold on a task is gone: who has it now, and why."""
+    if not cur:
+        return "%s: this session's hold (gen %s) is gone from the lease store" % (tid, held.get("gen"))
+    frm = cur.get("from") or {}
+    how = ("broke it: %s" % frm.get("broken")) if frm.get("broken") is not None else "took it after it lapsed (no progress for %s)" % seconds_text(int(cur.get("ttl") or LEASE_TTL))
+    return "%s: this session's hold (gen %s) was taken — %s holds it now (gen %s) and %s" % (tid, held.get("gen"), holder_text(cur.get("holder")), cur.get("gen"), how)
+
+
+def lease_step(ctx, task, ts):
+    """Under a lease, `run` advances only the tasks this session holds, and takes a ready unheld one when it holds fewer than
+    `lease-max`. None: go on with the task; "skip": not this session's; an int: the stop's exit code."""
+    call, d = _LEASE_CALL, ctx["d"]
+    leases, holder, run_name, tid = call["leases"], call["holder"], os.path.basename(d), task["id"]
+    key = task_key(run_name, tid)
+    try:
+        cur = leases.current(key)
+        held = ts.get("lease-held")
+        if held and same_holder(held.get("holder"), holder) and (cur is None or int(cur.get("gen") or 0) != int(held["gen"])) \
+                and not (cur and same_holder(cur.get("holder"), holder)):
+            if cur is not None:
+                ts.pop("lease-held", None)
+                save_state(d, ctx["state"])
+                return stop("%s — this session stops on it; its work stays in this tree (or its branch) for the holder to use, and a result made "
+                            "under gen %s will not be accepted" % (lost_text(tid, held, cur), held["gen"]))
+            ts.pop("lease-held", None)   # released or pruned while nobody took it: take it again below, as a new generation
+        if cur and same_holder(cur.get("holder"), holder):
+            if not ts.get("lease-held") or int(ts["lease-held"].get("gen") or 0) != int(cur["gen"]):
+                r = take_task(leases, run_name, task, ts, holder)   # held here, unknown to this tree's overlay (another worktree): adopt it, scopes too
+                if not r["ok"]:
+                    print("  %s: its scope is held elsewhere (%s) — not this session's to advance yet" % (tid, holder_text((r.get("lease") or {}).get("holder"))))
+                    return "skip"
+                save_state(d, ctx["state"])
+            call["held"][tid] = cur
+            return None
+        if cur and not lapsed(cur):
+            print("  %s is held by %s (gen %s, %s) — not this session's to advance" % (tid, holder_text(cur.get("holder")), cur.get("gen"), lease_age(cur)))
+            return "skip"
+        mine = live_holds(leases, holder)
+        if len(mine) >= leases.max:
+            print("  %s is ready, but this session holds %s already (settings.chongdae.lease-max: %d)" % (tid, ", ".join(l.get("task") or l["key"] for l in mine), leases.max))
+            return "skip"
+        r = take_task(leases, run_name, task, ts, holder)
+    except LeaseError as err:
+        return stop("%s: the lease store cannot be reached (%s) — this machine cannot take or renew a hold, and starts nothing untaken; "
+                    "reach it and `chongdae run` again" % (tid, err))
+    if not r["ok"]:
+        who = (r.get("lease") or {})
+        print("  %s: %s — trying the next ready task" % (tid, "its scope %s overlaps one %s holds for %s" % (", ".join(task.get("scope") or []), holder_text(who.get("holder")), who.get("task"))
+                                                        if r.get("conflict") == "scope" else "%s took it first (gen %s)" % (holder_text(who.get("holder")), who.get("gen"))))
+        return "skip"
+    save_state(d, ctx["state"])
+    lease = r["lease"]
+    call["held"][tid] = lease
+    print("  claimed %s (gen %s)%s" % (tid, lease["gen"], " — " + lease_from_text(lease.get("from")) if lease.get("from") else ""))
+    return None
+
+
+def work_mark(target, ts):
+    """What progress is measured by: the task's record and the tree's changes. A `run` that sees either move renews the hold;
+    a run that sees nothing new does not (a hold is never renewed by time alone)."""
+    import hashlib
+    pub = split_private(ts)[0]
+    return hashlib.sha1(json.dumps([pub, dirty(target)], sort_keys=True, default=str).encode("utf-8")).hexdigest()[:16]
+
+
+def lease_progress(target, call):
+    """After a `run` pass: renew what this session holds where the task or the tree moved; a refused renewal is said."""
+    d = run_dir(target)
+    if not d:
+        return None
+    state = load_state(d)
+    leases, holder, run_name, code = call["leases"], call["holder"], os.path.basename(d), None
+    for tid in call["held"]:
+        ts = state["tasks"].get(tid)
+        if not ts or ts.get("status") in CLOSED or not ts.get("lease-held"):
+            continue
+        mark = work_mark(target, ts)
+        if mark == ts.get("lease-work"):
+            continue
+        held = ts["lease-held"]
+        try:
+            r = leases.renew(task_key(run_name, tid), holder, held["gen"])
+            for k, g in held.get("scopes") or []:
+                leases.renew(k, holder, g)
+        except LeaseError as err:
+            print("  (%s: its hold could not be renewed — %s)" % (tid, err))
+            continue
+        if not r["ok"]:
+            print("decision: %s — this session stops on it" % lost_text(tid, held, r.get("lease")))
+            ts.pop("lease-held", None)
+            code = DECISION
+        else:
+            if ts.get("status") == "produced" and ts.get("gen") != held["gen"]:
+                lease_into_record(ts, r["lease"])   # the result waiting at its gate carries the generation it was made under
+            ts["lease-work"] = work_mark(target, ts)
+    save_state(d, state)
+    return code
+
+
+def parent_progress(target, call):
+    """A child run holds its parent's task: a `run` that saw the child's record or the tree move renews that hold. Refused —
+    someone took the parent's task after it lapsed, or broke it — the child stops (its branch stays for the new holder)."""
+    import hashlib
+    d = run_dir(target)
+    state = load_state(d) if d else {}
+    link = state.get("parent") or {}
+    if not link.get("gen"):
+        return None
+    note = load(work_path(d, "parent-lease.json"))
+    mark = hashlib.sha1(json.dumps([{t: split_private(ts)[0] for t, ts in state["tasks"].items()}, dirty(target)], sort_keys=True, default=str).encode("utf-8")).hexdigest()[:16]
+    if mark == note.get("mark"):
+        return None
+    try:
+        r = call["leases"].renew(task_key(link["run"], link["task"]), call["holder"], link["gen"])
+        for k, g in note.get("scopes") or []:
+            call["leases"].renew(k, call["holder"], g)
+    except LeaseError as err:
+        print("  (the hold on %s/%s could not be renewed — %s)" % (link["run"], link["task"], err))
+        return None
+    if not r["ok"]:
+        print("decision: %s — this child run stops; its branch stays for the new holder" % lost_text("%s/%s" % (link["run"], link["task"]), link, r.get("lease")))
+        return DECISION
+    save(work_path(d, "parent-lease.json"), dict(note, mark=mark))
+    return None
+
+
+def parent_refusal(target, state):
+    """A child run lands only while its parent's task is still held at the generation it started under (C8)."""
+    link = state.get("parent") or {}
+    if not link.get("gen"):
+        return None
+    try:
+        leases = lease_backend(target)
+        cur = leases.current(task_key(link["run"], link["task"])) if leases else None
+    except LeaseError as err:
+        return "the lease store cannot be reached (%s): whether %s/%s is still this run's cannot be told" % (err, link["run"], link["task"])
+    if cur and int(cur.get("gen") or 0) != int(link["gen"]):
+        return "%s/%s is held by %s at gen %s; this run started under gen %s — its result is not the current holder's, and it does not land (its branch stays for the holder to use)" % (
+            link["run"], link["task"], holder_text(cur.get("holder")), cur.get("gen"), link["gen"])
+    return None
+
+
+def result_gen_refusal(target, d, tid, ts):
+    """C8: a result made under a generation that is no longer the task's is not accepted. None, or why not."""
+    leases = lease_backend(target)
+    if not leases or not ts.get("gen"):
+        return None
+    try:
+        cur = leases.current(task_key(os.path.basename(d), tid))
+    except LeaseError as err:
+        return "the lease store cannot be reached (%s): whether this result is the current holder's cannot be told" % err
+    if cur and int(cur.get("gen") or 0) != int(ts["gen"]):
+        return "this result was made under gen %s; %s holds the task at gen %s — only the current holder's result is accepted" % (ts["gen"], holder_text(cur.get("holder")), cur.get("gen"))
+    return None
+
+
+def release_result(target, d, tid, ts, only_mine=False):
+    """A task left the open set (done, dropped, its run closed): its key goes back. The holder's machine gives back its scope
+    keys too; a person's confirm elsewhere gives back the task's key by the result's generation (its scope keys lapse)."""
+    try:
+        leases = lease_backend(target)
+    except SystemExit:
+        return
+    if not leases:
+        return
+    held = ts.get("lease-held")
+    if held and only_mine and not same_holder(held.get("holder"), lease_holder(target)):
+        return   # another session on this machine holds it: its hold is not this run's close to give back
+    if held and ts.get("status") in CLOSED:
+        if not ts.get("gen") and ts.get("status") != "dropped":
+            ts["gen"] = held["gen"]
+        if ts.get("status") == "dropped" and not ts.get("lease"):
+            lease_into_record(ts, {"gen": held["gen"], "holder": held.get("holder")})
+    if held:
+        release_task(leases, os.path.basename(d), tid, ts)
+    elif ts.get("gen"):
+        try:
+            leases.release(task_key(os.path.basename(d), tid), ts["gen"])
+        except LeaseError as err:
+            print("  (%s: its hold could not be given back — %s; it lapses on its own)" % (tid, err))
+
+
+# ---------------------------------------------------------------- the remote: absent, "sync", "shared"
+
+class RemoteStop(Exception):
+    """Under `remote: "shared"` the remote is the one truth: a push that still fails after fetch-and-reconcile stops the command."""
+
+
+def remote_mode(target):
+    m = settings(target).get("remote")
+    if m not in (None, "", "sync", "shared"):
+        raise SystemExit("settings.chongdae.remote %r: leave it out, or \"sync\" or \"shared\"" % (m,))
+    return m or None
+
+
+def record_remote(target):
+    """(remote, branch) the record travels to: the branch's own remote (else `lease-remote`, else origin), the current branch."""
+    import subprocess
+    git = lambda *a: subprocess.run(["git", *a], cwd=target, capture_output=True, text=True, encoding="utf-8", errors="replace").stdout.strip()
+    branch = git("symbolic-ref", "-q", "--short", "HEAD")
+    remote = (git("config", "branch.%s.remote" % branch) if branch else "") or settings(target).get("lease-remote") or "origin"
+    return remote, branch
+
+
+def reconcile(target, remote, branch):
+    """Fetch the branch and take what the remote has: a fast-forward, or a merge (each machine writes its own task files, so the
+    record merges). (ok, what went wrong)."""
+    import subprocess
+    git = lambda *a: subprocess.run(["git", *a], cwd=target, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    f = git("fetch", "-q", remote, branch)
+    if f.returncode:
+        if "couldn't find remote ref" in (f.stderr or ""):
+            return True, ""   # the remote has no such branch yet: nothing to take
+        return False, "fetch from %s failed: %s" % (remote, (f.stderr or f.stdout).strip().split("\n")[-1][:200])
+    theirs = git("rev-parse", "FETCH_HEAD").stdout.strip()
+    if not theirs or git("merge-base", "--is-ancestor", theirs, "HEAD").returncode == 0:
+        return True, ""
+    m = git("merge", "-q", "--no-edit", theirs)
+    if m.returncode:
+        git("merge", "--abort")
+        return False, "merging %s/%s does not go cleanly: %s" % (remote, branch, (m.stderr or m.stdout).strip().split("\n")[-1][:200])
+    return True, ""
+
+
+def remote_before(target, what):
+    """`shared`: fetch before a claim or a step, and take what the remote has. A stop (exit 2) when that fails."""
+    if remote_mode(target) != "shared":
+        return None
+    remote, branch = record_remote(target)
+    if not branch:
+        return stop("settings.chongdae.remote is shared, but HEAD is on no branch — check one out before %s" % what)
+    ok, why = reconcile(target, remote, branch)
+    if not ok:
+        return stop("settings.chongdae.remote is shared and the remote is the one truth: %s — reconcile it by hand (`git pull %s %s`), then %s again" % (why, remote, branch, what))
+    return None
+
+
+def push_record(target):
+    """After a judgment's record commit: `sync` pushes and goes on when it cannot (saying what is behind; the next judgment
+    pushes again); `shared` pushes, and on a refusal fetches, reconciles and pushes again — and stops when that fails too.
+    Declaring either in hunsu.json is the project's consent to chongdae pushing its records; absent, nothing is pushed."""
+    import subprocess
+    mode = remote_mode(target)
+    if not mode:
+        return
+    git = lambda *a: subprocess.run(["git", *a], cwd=target, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    remote, branch = record_remote(target)
+    if not branch:
+        print("  (record not pushed: HEAD is on no branch)")
+        return
+    push = lambda: git("push", "-q", remote, "HEAD:refs/heads/" + branch)
+    done = push()
+    if done.returncode == 0:
+        return
+    why = (done.stderr or done.stdout).strip().split("\n")[-1][:200]
+    if mode == "sync":
+        ahead = git("rev-list", "--count", "%s/%s..HEAD" % (remote, branch))
+        n = ahead.stdout.strip() if ahead.returncode == 0 else "?"
+        print("  (record not pushed to %s/%s: %s — %s commit(s) of this branch are not there; the next judgment pushes again)" % (remote, branch, why, n))
+        return
+    ok, rwhy = reconcile(target, remote, branch)
+    if ok and push().returncode == 0:
+        print("  (the remote had moved: fetched, reconciled and pushed the record to %s/%s)" % (remote, branch))
+        return
+    raise RemoteStop("the record is committed here, but %s/%s did not take it (%s%s) — under settings.chongdae.remote \"shared\" the remote is the one truth: "
+                     "fetch, reconcile (`git pull %s %s`) and push (`git push %s HEAD:%s`), then go on" % (remote, branch, why, "; " + rwhy if rwhy else "", remote, branch, remote, branch))
+
+
+# ---------------------------------------------------------------- parents and children: a child run says which task of which run it does
+
+def child_runs(target, run_name):
+    """The runs whose `parent` names this run — computed from the children's own records, never kept in the parent's state:
+    runs in this tree, in its worktrees, and on its branches and remote-tracking branches (a child on another machine pushed
+    its branch). [(run id, parent link, status, {task status: n}, where)]."""
+    import subprocess
+    found = {}
+
+    def tally(statuses):
+        out = {}
+        for s in statuses:
+            out[s] = out.get(s, 0) + 1
+        return out
+
+    places = [(target, "here")] + [(w, "worktree %s" % os.path.basename(w)) for w in sorted(glob.glob(os.path.join(target, RUNS, "wt", "*")))]
+    for root, where in places:
+        for r in all_runs(root):
+            st = load_state(r)
+            link = st.get("parent") or {}
+            if link.get("run") == run_name and os.path.basename(r) not in found:
+                found[os.path.basename(r)] = (link, st.get("status", "?"), tally(ts.get("status", "?") for ts in st["tasks"].values()), where)
+    git = lambda *a, **k: subprocess.run(["git", *a], cwd=target, capture_output=True, text=True, encoding="utf-8", errors="replace", **k)
+    refs = [x for x in git("for-each-ref", "--format=%(refname)", "refs/heads", "refs/remotes").stdout.split("\n") if x.strip() and not x.endswith("/HEAD")]
+    for ref in refs:
+        names = [p for p in git("ls-tree", "-r", "--name-only", ref, "--", RUNS + "/").stdout.split("\n")
+                 if re.fullmatch(re.escape(RUNS) + r"/run-[^/]+/(state\.json|tasks/[^/]+\.json)", p)]
+        runs = sorted({p.split("/")[1] for p in names if p.endswith("/state.json")} - set(found))
+        if not runs:
+            continue
+        batch = git("cat-file", "--batch", input="".join("%s:%s/%s/state.json\n" % (ref, RUNS, r) for r in runs)).stdout
+        states = parse_batch(batch)
+        for r, st in zip(runs, states):
+            link = (st or {}).get("parent") or {}
+            if link.get("run") != run_name:
+                continue
+            tasks = [p for p in names if p.startswith("%s/%s/tasks/" % (RUNS, r))]
+            got = parse_batch(git("cat-file", "--batch", input="".join("%s:%s\n" % (ref, p) for p in tasks)).stdout) if tasks else []
+            statuses = [t.get("status", "?") for t in got if t] + [ts.get("status", "?") for ts in ((st or {}).get("tasks") or {}).values()]
+            found[r] = (link, st.get("status", "?"), tally(statuses), ref.replace("refs/heads/", "branch ").replace("refs/remotes/", "remote branch "))
+    return [(r,) + v for r, v in sorted(found.items())]
+
+
+def parse_batch(out):
+    """`git cat-file --batch` output -> [parsed JSON or None], in order."""
+    res, i = [], 0
+    raw = out.encode("utf-8")
+    while i < len(raw):
+        nl = raw.index(b"\n", i)
+        head = raw[i:nl].decode("utf-8").split()
+        i = nl + 1
+        if len(head) < 3 or head[1] == "missing":
+            res.append(None)
+            continue
+        size = int(head[2])
+        body = raw[i:i + size]
+        i += size + 1
+        try:
+            res.append(json.loads(body.decode("utf-8")))
+        except ValueError:
+            res.append(None)
+    return res
+
+
 # ---------------------------------------------------------------- the run
 
 def stop(msg, *lines):
@@ -1602,7 +2498,30 @@ def stop(msg, *lines):
 def cmd_run(args):
     """Advance the run one step: every task whose needs are met, in order — hire its hands, decide it by its checks, place
     the eyes, run the people hired after it, stop at its gate — until the loop stops for someone (exit 2) or the run
-    completes. The phases are functions below; each returns None to go on, or the exit code of the stop it printed."""
+    completes. The phases are functions below; each returns None to go on, or the exit code of the stop it printed.
+    Under `remote: "shared"` the remote is fetched and taken first; under a `lease`, the pass advances only what this
+    session holds (taking a ready unheld task when it holds fewer than `lease-max`), and renews a hold where it saw progress."""
+    global _LEASE_CALL
+    if getattr(args, "continuing", False):
+        return run_pass(args)
+    code = remote_before(args.target, "`chongdae run`")
+    if code is not None:
+        return code
+    leases = lease_backend(args.target)
+    _LEASE_CALL = {"leases": leases, "holder": lease_holder(args.target), "held": {}} if leases else None
+    try:
+        code = run_pass(args)
+    finally:
+        call, _LEASE_CALL = _LEASE_CALL, None
+    if call:
+        lost = lease_progress(args.target, call) if call["held"] else None
+        lost = parent_progress(args.target, call) or lost
+        if lost is not None and not code:
+            code = lost
+    return code
+
+
+def run_pass(args):
     global _CALL_DEADLINE
     if not getattr(args, "continuing", False):
         _CALL_DEADLINE = None   # a fresh budget for this call — an automatic resend continues the same call, and its budget
@@ -1625,6 +2544,12 @@ def cmd_run(args):
         if ts.get("claimed_by") and claim_owner(ts["claimed_by"]) != ctx["me"]:
             print("  %s is claimed by %s — not this machine's to advance" % (task["id"], signer_text(ts["claimed_by"])))
             continue
+        if _LEASE_CALL and not state.get("parent"):   # a child run's tasks are this session's by the hold on its parent's task
+            code = lease_step(ctx, task, ts)
+            if code == "skip":
+                continue
+            if code is not None:
+                return code
         if ts.get("rebaseline"):
             # this build's tests were disputed: it waits for the task amending them, then takes the amended files as its
             # contract — the next judgment keeps the fix instead of restoring what the dispute was about
@@ -1650,7 +2575,12 @@ def cmd_run(args):
         # task paths are project-relative: artifacts belong to the project, .chongdae holds only how the run went
         path = os.path.join(target, task["path"]) if task.get("path") else None
         if "start" not in ts:
-            absent = [t for t in task.get("tests") or [] if not os.path.isfile(os.path.join(target, t))]
+            gone = deleted_by_contract(target, plan, state, task)
+            absent = [t for t in task.get("tests") or [] if not os.path.isfile(os.path.join(target, t)) and t not in gone]
+            new = {t: w for t, w in gone.items() if t not in (ts.get("deleted-tests") or {})}
+            if new:
+                ts["deleted-tests"] = gone   # said once: `add` said it already when the deletion was in the tree then
+                print("  %s: %s" % (task["id"], deleted_note(new)))
             if absent and task.get("checks"):
                 return stop("%s: its protected tests do not exist (%s) — the guard would watch nothing; the task that writes them runs first, "
                             "or fix the paths (`chongdae drop` and `add` again)" % (task["id"], ", ".join(absent)))
@@ -1676,8 +2606,15 @@ def cmd_run(args):
         if ts["status"] == "produced" and gate_of(task).get("human"):
             return stop("human: review %s (%s) — then `chongdae confirm %s --by <name>` or `--delegated \"<why the human handed this off>\"`"
                         % (task.get("produces", "task %s (checks passed: %s)" % (task["id"], "; ".join(" ".join(c) for c in task.get("checks", [])))), path or task.get("closes", ""), task["id"]))
+        if _LEASE_CALL and ts.get("lease-held") and not state.get("parent"):
+            refused = result_gen_refusal(target, d, task["id"], ts) if ts.get("gen") and ts["gen"] != ts["lease-held"]["gen"] else None
+            if refused:
+                return stop("%s: %s" % (task["id"], refused))
+            lease_into_record(ts, _LEASE_CALL["held"].get(task["id"]) or {"gen": ts["lease-held"]["gen"], "holder": ts["lease-held"].get("holder")})
         ts["status"] = "done"
         ts["done"] = stamp()   # when it became done: `show` tells a run's durations from it
+        if _LEASE_CALL:
+            release_task(_LEASE_CALL["leases"], os.path.basename(d), task["id"], ts)   # done: the key goes back, and the next ready task can be taken
         save_state(d, state)
         print("  done %s" % task["id"])
     if ctx["waited"] and not any(state["tasks"][t["id"]].get("rebaseline") and state["tasks"][t["id"]]["status"] == "todo"
@@ -1695,6 +2632,10 @@ def run_hands(ctx, task, ts, who):
     decisions beyond the contract to a person's `accept`."""
     args, target, d, state, plan = ctx["args"], ctx["target"], ctx["d"], ctx["state"], ctx["plan"]
     if not ts.get("response"):
+        if task.get("role") in CONTRACT_READERS:
+            code = empty_contract_stop(target, plan, task, task["role"])
+            if code is not None:
+                return code
         code, response, before = spawn(target, d, task, who, plan, ts.get("attempts", []),
                                        extra={"amending": ts["amending"]} if ts.get("amending") else None)
         if code == DISPATCH:
@@ -1805,44 +2746,72 @@ def merge_provider_non_claims(old, new):
     return kept + [m for m in new if m not in kept]
 
 
-def run_checked(target, commands):
+def one_command(c, flag):
+    """A command line given as one string, as argv — refused when it is a shell line: run without a shell, `echo ok && false`
+    would run `echo` with three words and pass."""
+    lex = shlex.shlex(c, posix=True, punctuation_chars=True)
+    lex.whitespace_split = True
+    try:
+        toks = list(lex)
+    except ValueError as e:
+        raise SystemExit("%s: `%s` does not parse (%s)" % (flag, c, e))
+    shell_words(toks, flag, c)
+    return shlex.split(c)
+
+
+def shell_words(toks, flag, c):
+    shell = [t for t in toks if t and set(t) <= set("();<>|&")] + (toks[:1] if toks and re.match(r"^\w+=", toks[0]) else [])
+    if shell:
+        raise SystemExit("%s runs one command, not a shell line: `%s` has %s — give each command its own %s; "
+                         "a command that needs a shell is a script in the project" % (flag, c, ", ".join("`%s`" % t for t in shell), flag))
+
+
+def run_argv(target, argv):
+    """One command, run in the project without a shell and with no input: (exit, output, ran). A missing command is exit 127 and
+    a timeout (CHONGDAE_CHECK_TIMEOUT, default 30 min) exit 124 — `ran` False for both: nothing was observed to answer."""
+    import subprocess
+    timeout = float(os.environ.get("CHONGDAE_CHECK_TIMEOUT") or 1800)
+    argv = resolve_argv(target, list(argv))
+    if argv and argv[0] in ("python", "python3") and not shutil.which(argv[0]):
+        argv = [next((x for x in ("python3", "python") if shutil.which(x)), None) or sys.executable] + argv[1:]
+    try:
+        done = subprocess.run(argv, cwd=target, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                              stdin=subprocess.DEVNULL, timeout=timeout)
+        return done.returncode, (done.stdout + done.stderr), True
+    except subprocess.TimeoutExpired:
+        return 124, "timed out after %ds (CHONGDAE_CHECK_TIMEOUT)" % timeout, False
+    except OSError as e:
+        return 127, str(e), False
+
+
+def run_checked(target, commands, red=()):
     """`--checked`: commands chongdae runs itself, in the project, now — evidence it observed, where a worker's `verified` is the
     worker's word. guin-site write-bsky-build (2026-10-10): the session took the task, ran `tests/run.py --all` itself (exit 0),
-    and had nowhere to put it; the verifier rejected the builder's old claim three times over. Returns the records; the
-    tree they ran on is kept so the verifier is told what changed after."""
-    import subprocess
-    for c in commands:
-        # one command, run without a shell: `echo ok && false` would run `echo` with three words and pass
-        lex = shlex.shlex(c, posix=True, punctuation_chars=True)
-        lex.whitespace_split = True
-        try:
-            toks = list(lex)
-        except ValueError as e:
-            raise SystemExit("--checked: `%s` does not parse (%s)" % (c, e))
-        shell = [t for t in toks if t and set(t) <= set("();<>|&")] + (toks[:1] if toks and re.match(r"^\w+=", toks[0]) else [])
-        if shell:
-            raise SystemExit("--checked runs one command, not a shell line: `%s` has %s — give each command its own --checked; "
-                             "a check that needs a shell is a script in the project" % (c, ", ".join("`%s`" % t for t in shell)))
-    timeout = float(os.environ.get("CHONGDAE_CHECK_TIMEOUT") or 1800)
-    out = []
-    for c in commands:
-        argv = resolve_argv(target, shlex.split(c))
-        if argv and argv[0] in ("python", "python3") and not shutil.which(argv[0]):
-            argv = [next((x for x in ("python3", "python") if shutil.which(x)), None) or sys.executable] + argv[1:]
-        try:
-            done = subprocess.run(argv, cwd=target, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                                  stdin=subprocess.DEVNULL, timeout=timeout)
-            code, said = done.returncode, (done.stdout + done.stderr)
-        except subprocess.TimeoutExpired:
-            code, said = 124, "timed out after %ds (CHONGDAE_CHECK_TIMEOUT)" % timeout
-        except OSError as e:
-            code, said = 127, str(e)
-        out.append({"command": c, "exit": code, "tail": said.strip().split("\n")[-6:], **stamp()})
-    failed = [r for r in out if r["exit"]]
-    if failed:
-        raise SystemExit("--checked: %s — nothing recorded; a check that fails is not evidence"
-                         % "; ".join("`%s` -> exit %d (%s)" % (r["command"], r["exit"], " / ".join(r["tail"][-2:])) for r in failed))
+    and had nowhere to put it; the verifier rejected the builder's old claim three times over. `--checked-red`: a tests task's
+    expected red run — a non-zero exit is recorded as red as expected, a zero exit as passed before the build (both recorded;
+    `--checked` recorded only a pass, so the red run a tests task exists for had nowhere to go). Returns the records; the tree
+    they ran on is kept so the verifier is told what changed after."""
+    runs = [(c, one_command(c, "--checked"), None) for c in commands or []] + [(c, one_command(c, "--checked-red"), "fail") for c in red or []]
+    out, refused = [], []
+    for c, argv, expect in runs:
+        code, said, ran = run_argv(target, argv)
+        rec = {"command": c, "exit": code, "tail": said.strip().split("\n")[-6:], **stamp()}
+        if expect:
+            rec["expect"] = expect
+            rec["outcome"] = "red as expected" if code else "passed before the build"
+        out.append(rec)
+        if (code and not expect) or not ran:
+            refused.append(rec)
+    if refused:
+        raise SystemExit("--checked: %s — nothing recorded; %s"
+                         % ("; ".join("`%s` -> exit %d (%s)" % (r["command"], r["exit"], " / ".join(r["tail"][-2:])) for r in refused),
+                            "a check that fails is not evidence, and a command that did not run is not a red run"))
     return {"ran": out, "checked-tree": dirty(target) or {}}
+
+
+def checked_text(checked):
+    """What `--checked`/`--checked-red` recorded, for the line `take`/`retry` print."""
+    return ", ".join("`%s` %s" % (r["command"], "exit 0" if not r.get("expect") else "exit %d — %s" % (r["exit"], r["outcome"])) for r in checked["ran"])
 
 
 def sandbox_lacked(response):
@@ -1941,19 +2910,38 @@ def decide_task(ctx, task, ts, who, path):
         if failed:
             return stop("session agent: %s — make these checks pass, then `chongdae run`" % task["id"], task.get("brief", ""), *failed)
         touched = own_measure() or []
-        broken = [t for t in task.get("tests", []) if t in touched]
-        if broken:
+        gone = ts.get("deleted-tests") or {}
+        recreated = [t for t in task.get("tests", []) if t in gone and os.path.lexists(os.path.join(target, t))]
+        broken = [t for t in task.get("tests", []) if t in touched and t not in gone]
+        if broken or recreated:
             # The contract owns its checks. A build that edits them decided its own verdict — that is a reject, whoever built.
-            ts["rejected"] = {"by": "contract", "why": "changed protected tests: %s" % ", ".join(broken)}
+            # A test the contract deleted is the contract's too: brought back, it is a test the build wrote for itself
+            ts["rejected"] = {"by": "contract", "why": "; ".join(x for x in ("changed protected tests: %s" % ", ".join(broken) if broken else "",
+                                                                             "recreated tests the contract deleted: %s" % ", ".join(recreated) if recreated else "") if x)}
             back = restore_contract_tests(target, d, task, broken)
             if back:
                 ts["rejected"]["restored"] = back
+            removed = []
+            for t in recreated:
+                try:
+                    os.remove(os.path.join(target, t))
+                    removed.append(t)
+                except OSError:
+                    pass
+            if removed:
+                ts["rejected"]["removed"] = removed
             save_state(d, state)
-            left = [t for t in broken if t not in back]
-            return stop("%s: the build changed the contract's tests (%s) — %s (the contract decides, not the builder), "
+            left = [t for t in broken if t not in back] + [t for t in recreated if t not in removed]
+            said = []
+            if broken:
+                said.append("the build changed the contract's tests (%s)" % ", ".join(broken))
+            if recreated:
+                said.append("the build recreated tests the contract deleted (%s — %s deleted them)" % (", ".join(recreated), ", ".join(sorted({gone[t] for t in recreated}))))
+            return stop("%s: %s — %s (the contract decides, not the builder), "
                         "then `chongdae retry %s --by NAME | --delegated WHY`" % (
-                            task["id"], ", ".join(broken),
-                            "restored as they were when the task started" if not left else "restore %s" % ", ".join(left), task["id"]))
+                            task["id"], "; ".join(said),
+                            ("restored as they were when the task started" + (", the recreated ones removed again" if removed else "")) if not left
+                            else "put back %s as the contract has them" % ", ".join(left), task["id"]))
         # Independent eyes before the gate: not the hands, and their verdict goes here, not back to the builder.
         code = place_eyes(ctx, task, ts, who, touched)
         if code is not None:
@@ -2070,6 +3058,9 @@ def place_eyes(ctx, task, ts, who, touched):
             # a re-verification: what the last reject found, and what changed since that verdict. Re-reading the whole slice
             # each round cost the verifier its full time again and found a new edge each time — the rounds did not converge
             extra["recheck"] = {"findings": last["review"].get("findings", []), "changed_since": touched_files(target, last["reviewed_tree"]) or []}
+        code = empty_contract_stop(target, plan, task, "the verifier")
+        if code is not None:
+            return code
         code, review, _ = spawn(target, d, task, prov["verifier"], plan, ts.get("attempts", []), stage="verify", extra=extra)
         if code == DISPATCH:
             return stop(dispatch_text(task["id"] + " (verify)", review))
@@ -2117,7 +3108,7 @@ def end_of_pass(ctx):
     record committed."""
     args, target, d, state, plan = ctx["args"], ctx["target"], ctx["d"], ctx["state"], ctx["plan"]
     if plan.get("kind") == "session":
-        open_ = [t["id"] for t in all_tasks(plan, state) if state["tasks"][t["id"]]["status"] not in ("done", "skipped", "dropped")]
+        open_ = open_tasks(plan, state)
         print("session run %s: %d task(s), %d open (%s) — `chongdae add` for the next piece, `chongdae close` at the end" % (os.path.basename(d), len(state["tasks"]), len(open_), ", ".join(open_) or "-"))
         return 0
     if any(state["tasks"][t["id"]]["status"] not in ("done", "skipped", "dropped") for t in all_tasks(plan, state)):
@@ -2152,6 +3143,10 @@ def run_stage(target, d, task, ts, state, plan, prov, when, extra):
             ts.setdefault("stages", {})[role] = {"skipped": "no provider"}
             save_state(d, state)
             continue
+        if when == "before" or role in CONTRACT_READERS:   # a role hired before the work reads the contract, nothing else
+            code = empty_contract_stop(target, plan, task, role)
+            if code is not None:
+                return code
         code, response, _ = spawn(target, d, task, provider, plan, ts.get("attempts", []), stage=role, extra=extra)
         if code == DISPATCH:
             return stop(dispatch_text("%s (%s)" % (task["id"], role), response))
@@ -2290,6 +3285,39 @@ def tests_writer(plan, state, task, files):
     found = [t for t in all_tasks(plan, state) if t.get("id") != task["id"] and writes_tests(t) and set(t.get("tests") or []) & set(files)
              and state["tasks"].get(t["id"], {}).get("status") == "done"]
     return found[-1] if found else None
+
+
+def deleted_by_contract(target, plan, state, task):
+    """{test path: the task that deleted it} — the task's tests the contract deleted: absent from the tree, and in the
+    `touched` of the task that wrote this build's tests (a done or produced task that writes tests sharing any with it), or,
+    for a tests task itself, in what its own earlier attempt changed. Kept on the task (`deleted-tests`) once said, so a
+    build that recreates one is still told from one that never saw it. guin-site, 2026-10-12: the tests writer deleted four
+    retired test files that were also in the build's --tests; the build was refused because its protected tests did not
+    exist, and the session dropped it and added it again without them."""
+    ts = state.get("tasks", {}).get(task.get("id"), {})
+    out = dict(ts.get("deleted-tests") or {})
+    tests = task.get("tests") or []
+    for t in tests:
+        if t in out or os.path.lexists(os.path.join(target, t)):
+            continue
+        if writes_tests(task):
+            if t in set(ts.get("touched_by_provider") or []) | set(ts.get("touched") or []):
+                out[t] = task["id"]
+            continue
+        for w in reversed(all_tasks(plan, state)):
+            wts = state.get("tasks", {}).get(w.get("id"), {})
+            if (w.get("id") != task.get("id") and writes_tests(w) and wts.get("status") in ("done", "produced")
+                    and set(w.get("tests") or []) & set(tests) and t in (wts.get("touched") or [])):
+                out[t] = w["id"]
+                break
+    return out
+
+
+def deleted_note(gone):
+    """The one line that says which of a task's tests the contract deleted, and what follows from it."""
+    return ("note: %s deleted by the contract (%s) — left out of the tests its hands are sent and sent as `deleted-tests`; "
+            "nothing restores or demands them, and a build that recreates one is refused"
+            % (", ".join(sorted(gone)), "; ".join("%s by %s" % (w, ", ".join(sorted(t for t, x in gone.items() if x == w))) for w in sorted(set(gone.values())))))
 
 
 def test_writers(plan, state, task):
@@ -2436,8 +3464,10 @@ def delegation_record(run_d, reason, kind):
 
 def cmd_init(args):
     target = args.target
-    if run_dir(target) and load_state(run_dir(target)).get("status") == "running":
+    if run_dir(target) and load_state(run_dir(target)).get("status") == "running" and not (
+            getattr(args, "parent", None) and os.path.basename(run_dir(target)) == str(args.parent).partition("/")[0]):
         raise SystemExit("a run is already in progress: %s — finish it or remove it" % run_dir(target))
+    parent = parent_link(args) if getattr(args, "parent", None) else None   # a child of the running run may start beside it
     # Run ids are unique across machines (date + random), so runs made on different branches merge as distinct directories.
     # UTC, so the id's lexical order approximates creation order regardless of timezone — an approximation for humans only;
     # real order is `based_on`/`landed` ancestry in git, never a clock (id order can still invert under clock skew) — recorded
@@ -2487,14 +3517,52 @@ def cmd_init(args):
         state["environment"] = {"locked": locked}   # the lock every call in this run ran under, once; a task says `locked` only when it differs
     if getattr(args, "worktree", False):
         state["worktree"] = {"main": os.path.abspath(args.target).replace(os.sep, "/"), "branch": "run/" + run_name}
+    if parent:
+        scopes = parent.pop("_scopes", None)
+        state["parent"] = parent   # the parent's `show` finds its children by this link; nothing is written into the parent
+        if scopes:
+            save(work_path(d, "parent-lease.json"), {"scopes": scopes})
     save_state(d, state)
     commit_record(target, run_name, "init (%s) — %s" % (plan.get("kind", "?"), plan.get("goal", "")))
     print("run %s: goal %r — %s plan (%s). Now %s."
           % (os.path.basename(d), plan["goal"], plan.get("kind", "?"), " -> ".join(t["id"] for t in plan["tasks"]) or "no tasks yet",
              "`chongdae add <id> ...` for each piece of work, `chongdae run` to record it, `chongdae close` at the end" if args.session else "`chongdae run`"))
+    if parent:
+        print("child of %s / task %s%s" % (parent["run"], parent["task"], " (held at gen %s)" % parent["gen"] if parent.get("gen") else ""))
     if getattr(args, "worktree", False):
         print("this run lives in its worktree — every command from here on: --target %s" % target.replace(os.sep, "/"))
     return 0
+
+
+def parent_link(args):
+    """`init --parent RUN/TASK`: the run this one does a task of. The parent must be in this tree's record; under a lease the
+    task is taken for this session now (held by someone else: refused), and the link carries the generation, so the child's
+    merge back is refused if the hold has moved on (C8)."""
+    run, _, tid = str(args.parent).partition("/")
+    if not run or not tid or "/" in tid:
+        raise SystemExit("--parent RUN/TASK: the parent run's id and the task of it this run does (run-20261012-101500-ab12/T1)")
+    pd = os.path.join(args.target, RUNS, run)
+    if not os.path.isdir(pd):
+        raise SystemExit("--parent %s: no run %s in this tree's record (pull it first)" % (args.parent, run))
+    plan, state = load(os.path.join(pd, "plan.json")), load_state(pd)
+    task = next((t for t in all_tasks(plan, state) if t.get("id") == tid), None)
+    if not task:
+        raise SystemExit("--parent %s: %s has no task %s" % (args.parent, run, tid))
+    link = {"run": run, "task": tid}
+    leases = lease_backend(args.target)
+    if leases:
+        holder = lease_holder(args.target)
+        ts = state["tasks"].setdefault(tid, {"status": "todo"})
+        try:
+            r = take_task(leases, run, task, ts, holder)
+        except LeaseError as err:
+            raise SystemExit("--parent %s: the lease store cannot be reached (%s) — a child run starts on a held task, and this one cannot be taken" % (args.parent, err))
+        if not r["ok"]:
+            raise SystemExit("--parent %s: %s is held by %s (gen %s) — `chongdae claim --list`, and take a ready one" % (args.parent, tid, holder_text((r.get("lease") or {}).get("holder")), (r.get("lease") or {}).get("gen")))
+        save_state(pd, state)
+        link["gen"] = r["lease"]["gen"]
+        link["_scopes"] = ts["lease-held"].get("scopes") or []
+    return link
 
 
 def cmd_add(args):
@@ -2507,6 +3575,12 @@ def cmd_add(args):
         raise SystemExit("no run in progress — `chongdae init --session`")
     if plan.get("kind") != "session":
         raise SystemExit("tasks are added to session runs only; a plan run's tasks are the plan's")
+    if remote_mode(args.target) == "shared":
+        # the remote is the one truth: a task another machine added there is seen before this one is named
+        r = remote_before(args.target, "`add`")
+        if r is not None:
+            return r
+        plan, state = load(os.path.join(d, "plan.json")), load_state(d)
     if args.id in state["tasks"] or any(t.get("id") == args.id for t in plan.get("tasks", [])):
         raise SystemExit("task %s exists" % args.id)
     checks = [portable_argv(shlex.split(c)) for c in args.check or []]
@@ -2547,10 +3621,11 @@ def cmd_add(args):
     problems = [x for x in plan_problems({"artifact-type": "chongdae/plan@1", "goal": "x", "tasks": [task]}) if "needs `path`" not in x]
     # a session build takes its start snapshot now: protected tests it names must exist already, or writing them would read
     # as the build changing its own contract (a provider's build takes its snapshot when spawned, after the tests' task ran)
+    gone = deleted_by_contract(args.target, plan, state, task) if task["tests"] else {}
     if hands in SESSION_HANDS and task["checks"]:
         problems += ["--tests %s: does not exist yet — a session build's start is taken at `add`, so writing its tests after "
                      "would read as the build changing them; write the tests in their own task first (`add`, work, `run`), "
-                     "then add this one" % f for f in task["tests"] if not os.path.exists(os.path.join(args.target, f))]
+                     "then add this one" % f for f in task["tests"] if not os.path.exists(os.path.join(args.target, f)) and f not in gone]
     # `--tests` is two things by role: the tests a task writes (nitpick's, or a task no check decides), or the files a build
     # may not change — its judgment restores them. A task that changes tests cannot also protect them: guin-site's
     # `tests-fix` named the files it corrected with --tests, and its own judgment restored its fix (2026-10-02)
@@ -2570,6 +3645,8 @@ def cmd_add(args):
     ts = {"status": "todo", "def": task, "seq": 1 + max([t.get("seq", 0) for t in state["tasks"].values()] or [0]), "added": now_utc()}
     if own:
         ts["self-performed"] = own
+    if gone:
+        ts["deleted-tests"] = gone   # said here, once: `run` says only a deletion made after this
     if task["role"] == "subagent" and due and hire(declared, {"role": due, "requires": args.requires})[1] != "subagent":
         # the session's sub-agent stands where the lock declared someone else: declared hands, not the session's own — but
         # the record says whose place it took, and who said so
@@ -2594,6 +3671,13 @@ def cmd_add(args):
         key = hire(declared, task)[0]
         print("added %s to %s — %s does it (%s). `chongdae run` sends it out." % (args.id, os.path.basename(d), key,
               ("the lock's alternate for %s" % ", ".join(task["requires"])) if key != task["role"] else "the lock's provider" if args.role is None else "as asked"))
+    gap = contract_gap(args.target, plan, task) if task["closes"] else None
+    if gap:
+        # said now, not found by the quibbler: guin-site's run without `--from` sent Q-cleanup's quibble `contract: {}`
+        print("  note: --closes %s: %s — its hands get the brief alone, and `run` sends no quibbler or verifier this task's request "
+              "until the section can be read (%s)" % (", ".join(task["closes"]), gap,
+              "add it to %s" % plan["from"] if plan.get("from") and os.path.isfile(os.path.join(args.target, plan["from"]))
+              else "a run started with `chongdae init --session --from PLAN` sends the sections"))
     if task.get("scope") and hands not in SESSION_HANDS:
         print("  --scope: %s — its hands are a worker measured by its own call; the scope is kept on the task and holds files against the session's open tasks" % ", ".join(c or "." for c in task["scope"]))
     elif task.get("scope"):
@@ -2614,6 +3698,12 @@ def cmd_add(args):
         else:
             print("  --tests: the tests %s writes (%s) — a build that names them protects them; this task may change them."
                   % (args.id, "the lock gives it to nitpick" if task["role"] == "nitpick" else "no check decides it"))
+        if gone:
+            print("  " + deleted_note(gone))
+    if remote_mode(args.target):
+        # under `sync` or `shared` a task travels when it is named: another machine cannot take a task its record has not got
+        # (two clones on GitHub, 2026-10-13: `add` left tasks/ uncommitted and the other machine answered "no task T1")
+        commit_record(args.target, os.path.basename(d), "add %s — %s" % (args.id, (task.get("brief") or "")[:120]))
     return 0
 
 
@@ -2636,12 +3726,55 @@ def cmd_take(args):
     if ts.get("taken") or hands == "session" or task["role"] == "session":
         raise SystemExit("%s is already the session's" % args.task)
     who = signer(args)
-    checked = run_checked(args.target, args.checked) if args.checked else None   # before anything is recorded: a failing one refuses the take
+    checked = run_checked(args.target, args.checked, args.checked_red) if (args.checked or args.checked_red) else None   # before anything is recorded: a failing one refuses the take
     msg = take_over(args.target, d, state, task, ts, args.why, who, checked=checked)
     print(msg)
     if checked:
-        print("  checked by chongdae: %s — the verifier gets them as evidence chongdae saw, with what changed after" % ", ".join("`%s` exit 0" % r["command"] for r in checked["ran"]))
+        print("  checked by chongdae: %s — the verifier gets them as evidence chongdae saw, with what changed after" % checked_text(checked))
+    else:
+        # the session that takes a task usually ran something itself; guin-site's cleanup-tests take said so in prose
+        print("  evidence chongdae saw: `take %s --why WHY --checked \"COMMAND\"` runs a command now and records its pass; "
+              "`--checked-red \"COMMAND\"` records a tests task's expected red run (a pass is recorded as passed before the build)" % args.task)
     return 0
+
+
+def cmd_did(args):
+    """An operation outside the repository — a deploy, a secret deleted, a remote database changed — run through chongdae on a
+    task: one command (argv, no shell line), recorded on the task as `did` whatever its exit, printed, and committed like any
+    judgment. guin-site, 2026-10-12: the cleanup's eight operations (an archive, a deploy, secrets, Access, R2 and D1 deleted)
+    ran as plain Bash in a todo task and survive only as prose in a plan file; nothing in the record says what ran, what it
+    answered, or where the person agreed to the ones that cannot be undone."""
+    d = run_dir(args.target)
+    plan, state = (load(os.path.join(d, "plan.json")), load_state(d)) if d else ({}, {})
+    if state.get("status") != "running":
+        raise SystemExit("no run in progress — `did` records an operation on a task of the running run (`chongdae init --session`, then `add`)")
+    ts = state["tasks"].get(args.task)
+    if not ts:
+        raise SystemExit("no task %s — `chongdae add %s --brief ...` first: an operation is some task's work" % (args.task, args.task))
+    if ts.get("status") in ("dropped", "skipped"):
+        raise SystemExit("%s is %s — an operation is recorded on a task that is being done or was done" % (args.task, ts["status"]))
+    argv = list(args.command or [])
+    if not argv:
+        raise SystemExit("did: no command — `chongdae did %s [--why WHY] [--approved-in source:ID] -- COMMAND ARG...`" % args.task)
+    shell_words(argv, "did", shlex.join(argv))
+    if args.approved_in is not None and not re.match(r"^[\w.-]+:\S+$", args.approved_in):
+        raise SystemExit("--approved-in %r: where the person agreed, as source:ID (a mangsang source, `source:at-63`) or KIND:REF" % args.approved_in)
+    code, said, ran = run_argv(args.target, argv)
+    rec = {"command": shlex.join(argv), "exit": code, "tail": said.strip().split("\n")[-6:], **stamp(),
+           **({"why": args.why} if args.why else {}), **({"approved-in": args.approved_in} if args.approved_in else {}), "signer": signer(args)}
+    if not ran:
+        rec["ran"] = False   # a missing command or a timeout: nothing answered
+    ts.setdefault("did", []).append(rec)
+    save_state(d, state)
+    commit_record(args.target, os.path.basename(d), "did %s: %s -> exit %d" % (args.task, rec["command"][:120], code))
+    print("did %s: `%s` -> exit %d%s — recorded on %s, signed %s%s" % (
+        args.task, rec["command"], code, "" if ran else " (it did not run)", args.task, signer_text(rec["signer"]),
+        "; approved in %s" % args.approved_in if args.approved_in else ""))
+    for line in rec["tail"]:
+        print("  | " + line)
+    if code:
+        print("  a non-zero exit stays in the record: `report` lists it as an objection until a reviewer disposes of it")
+    return 0 if code == 0 else 1
 
 
 def take_over(target, d, state, task, ts, why, who, extra=None, checked=None):
@@ -2689,6 +3822,7 @@ def cmd_drop(args):
     ts["dropped"] = {"why": args.why, "by": signer(args), **stamp()}
     ts["touched"] = scoped_measure(args.target, plan, state, args.task, ts, providers(args.target, plan))[0]   # what changed in its window stays attributed to it, dropped or not (open tasks' scopes say whose)
     ts.setdefault("non-claims", []).append("dropped, not done: %s" % args.why)
+    release_result(args.target, d, args.task, ts)
     save_state(d, state)
     commit_record(args.target, os.path.basename(d), "drop %s: %s" % (args.task, args.why))
     print("dropped %s: %s" % (args.task, args.why))
@@ -2723,11 +3857,32 @@ def cmd_unstage(args):
 
 
 def cmd_claim(args):
-    """A person takes a task. chongdae does not assign; `run` on other machines skips what is claimed here."""
+    """A person takes a task. chongdae does not assign; `run` on other machines skips what is claimed here. Under a `lease`
+    setting the claim is a hold in the lease store, not a line in the record (claim_lease)."""
+    leases = lease_backend(args.target)
+    if leases:
+        return claim_lease(args, leases)
+    if args.brk or args.release or args.prune:
+        raise SystemExit("--%s needs a lease: settings.chongdae.lease (\"local\", \"git\" or a command) — without one a claim is a line in the record; "
+                         "`claim TASK --by \"\"` releases it" % ("break" if args.brk else "release" if args.release else "prune"))
+    code = None if args.list else remote_before(args.target, "`chongdae claim`")
+    if code is not None:
+        return code
     d = run_dir(args.target)
     if not d:
         raise SystemExit("no run")
     state = load_state(d)
+    if args.list:
+        plan = load(os.path.join(d, "plan.json"))
+        rows = [(t["id"], state["tasks"].get(t["id"], {})) for t in all_tasks(plan, state)]
+        rows = [(tid, ts) for tid, ts in rows if ts.get("claimed_by")]
+        for tid, ts in rows:
+            print("%s  claimed by %s  (%s; in the record — no lease setting)" % (tid, signer_text(ts["claimed_by"]), ts.get("status", "?")))
+        if not rows:
+            print("no task of %s is claimed (claims are written in the record: no lease setting)" % os.path.basename(d))
+        return 0
+    if not args.task:
+        raise SystemExit("claim TASK, or claim --list")
     ts = state["tasks"].get(args.task)
     if not ts:
         raise SystemExit("no task %s" % args.task)
@@ -2742,6 +3897,103 @@ def cmd_claim(args):
     return 0
 
 
+def claim_lease(args, leases):
+    """`claim TASK` takes a hold for this session (one at a time by default: `lease-max`); `claim --list` shows every hold with
+    its age and last progress, lapsed and long-held ones marked; `claim --break TASK --why` takes over a live hold — a
+    judgment, recorded on the task and committed; the old holder is told at its next renewal; `claim TASK --release` (or
+    `--by ""`) gives a hold back. Done, drop and close give holds back on their own."""
+    target = args.target
+    try:
+        if args.list:
+            if args.prune:
+                gone = leases.prune(leases.ceiling)
+                print("pruned %d released marker(s) older than lease-ceiling%s — a take of those keys now counts its generation from the record"
+                      % (len(gone), ": " + ", ".join(gone) if gone else ""))
+            now, rows = clock(), leases.list()
+            if not rows:
+                print("no hold in the lease store (%s)" % leases.kind)
+                return 0
+            for l in sorted(rows, key=lambda l: l.get("key", "")):
+                marks = [m for m, on in (("lapsed", lapsed(l, now)), ("long-held", long_held(l, leases.ceiling, now))) if on]
+                print("%s  %s  gen %s  %s%s%s" % (l.get("scope") and "scope %s (%s)" % (l["scope"] or ".", l.get("task")) or l.get("task") or l.get("key"),
+                                                 holder_text(l.get("holder")), l.get("gen"), lease_age(l, now),
+                                                 "  [%s]" % ", ".join(marks) if marks else "", "  — " + lease_from_text(l["from"]) if l.get("from") else ""))
+            return 0
+        if not args.task:
+            raise SystemExit("claim TASK, claim --list, or claim --break TASK --why WHY")
+        code = remote_before(target, "`chongdae claim`")
+        if code is not None:
+            return code
+        d = run_dir(target)
+        if not d:
+            raise SystemExit("no run")
+        plan, state = load(os.path.join(d, "plan.json")), load_state(d)
+        ts = state["tasks"].get(args.task)
+        task = next((t for t in all_tasks(plan, state) if t.get("id") == args.task), None)
+        if not ts or not task:
+            raise SystemExit("no task %s" % args.task)
+        run_name, key = os.path.basename(d), task_key(os.path.basename(d), args.task)
+        holder = lease_holder(target, by=args.by or None)
+        cur = leases.current(key)
+        if args.release or args.by == "":
+            held = ts.get("lease-held")
+            if not (cur and same_holder(cur.get("holder"), holder)):
+                raise SystemExit("%s: this session holds no lease on it%s" % (args.task, " (%s does)" % holder_text(cur.get("holder")) if cur else ""))
+            ts["lease-held"] = held or {"gen": cur["gen"], "holder": holder, "scopes": []}
+            release_task(leases, run_name, args.task, ts)
+            save_state(d, state)
+            print("%s released (gen %s)" % (args.task, cur["gen"]))
+            return 0
+        if ts.get("status") in CLOSED:
+            raise SystemExit("%s is %s — nothing to hold" % (args.task, ts["status"]))
+        if args.brk:
+            if not args.why:
+                raise SystemExit("--break takes over someone's live hold: say why (--why) — it is recorded and they are told")
+            if not cur:
+                raise SystemExit("%s is not held — `claim %s` takes it" % (args.task, args.task))
+            if same_holder(cur.get("holder"), holder):
+                raise SystemExit("%s is this session's already (gen %s)" % (args.task, cur.get("gen")))
+            was_long, was_lapsed = long_held(cur, leases.ceiling), lapsed(cur)
+            r = take_task(leases, run_name, task, ts, holder, over=cur.get("gen"), why=args.why)
+            if not r["ok"]:
+                raise SystemExit("%s: the hold changed while it was broken (%s holds it at gen %s) — `claim --list`, then again"
+                                 % (args.task, holder_text((r.get("lease") or {}).get("holder")), (r.get("lease") or {}).get("gen")))
+            ts.setdefault("lease-breaks", []).append({"from": cur.get("holder"), "gen": cur.get("gen"), "to-gen": r["lease"]["gen"], "why": args.why,
+                                                      "by": signer(args), **({"long-held": True} if was_long else {}), **({"lapsed": True} if was_lapsed else {}), **stamp()})
+            save_state(d, state)
+            commit_record(target, run_name, "break the hold on %s: %s" % (args.task, args.why))
+            print("broke %s's hold on %s (gen %s -> %s): %s — recorded; they are told at their next renewal, and a result made under gen %s is not accepted"
+                  % (holder_text(cur.get("holder")), args.task, cur.get("gen"), r["lease"]["gen"], args.why, cur.get("gen")))
+            return 0
+        if cur and same_holder(cur.get("holder"), holder) and not args.by:
+            if not ts.get("lease-held"):
+                take_task(leases, run_name, task, ts, holder)
+                save_state(d, state)
+            print("%s is this session's already (gen %s, %s)" % (args.task, cur.get("gen"), lease_age(cur)))
+            return 0
+        mine = [l for l in live_holds(leases, holder) if l.get("key") != key]
+        if len(mine) >= leases.max:
+            raise SystemExit("this session holds %s already (settings.chongdae.lease-max: %d) — finish or give one back (`claim TASK --release`) first"
+                             % (", ".join(l.get("task") or l["key"] for l in mine), leases.max))
+        r = take_task(leases, run_name, task, ts, holder)
+        if not r["ok"]:
+            who = r.get("lease") or {}
+            ready = [t["id"] for t in all_tasks(plan, state) if t["id"] != args.task and state["tasks"].get(t["id"], {}).get("status") not in CLOSED
+                     and all(state["tasks"].get(n, {}).get("status") == "done" for n in t.get("needs", []))
+                     and not (lambda c: c and not lapsed(c))(leases.current(task_key(run_name, t["id"])))]
+            print("%s: %s%s" % (args.task, "its scope overlaps %s, held by %s for %s" % (who.get("scope") or who.get("key"), holder_text(who.get("holder")), who.get("task"))
+                                if r.get("conflict") == "scope" else "held by %s (gen %s, %s)" % (holder_text(who.get("holder")), who.get("gen"), lease_age(who)),
+                                " — ready and unheld: %s (`chongdae run` takes the next one)" % ", ".join(ready) if ready else " — no other task is ready and unheld"))
+            return 1
+        save_state(d, state)
+        lease = r["lease"]
+        print("%s claimed by %s (gen %s)%s" % (args.task, holder_text(holder), lease["gen"], " — " + lease_from_text(lease.get("from")) if lease.get("from") else ""))
+        return 0
+    except LeaseError as err:
+        print("decision: the lease store cannot be reached (%s) — this machine cannot take a task; nothing was started untaken" % err)
+        return DECISION
+
+
 def cmd_close(args):
     """A session run ends. Open tasks stay in the record as open; nothing is decided for them.
     A worktree run also merges back: commit the worktree, merge into main — clean merge + green recheck ends the run;
@@ -2754,10 +4006,19 @@ def cmd_close(args):
         # a plan/bootstrap run in a worktree ends by `run` (complete); `close` is then its way back to main
         if not (wt and state.get("status") == "complete"):
             raise SystemExit("no session run in progress" + (" — this %s run is %s; `chongdae run` completes it, then `close` merges its worktree back" % (plan.get("kind"), state.get("status")) if wt else ""))
+        refused = parent_refusal(args.target, state)
+        if refused:
+            raise SystemExit("not merged back: " + refused)
         return merge_back(args.target, wt, os.path.basename(d))
     if state.get("status") != "running":
         raise SystemExit("no session run in progress")
-    open_ = [tid for tid, ts in state["tasks"].items() if ts["status"] not in ("done", "skipped", "dropped")]
+    refused = parent_refusal(args.target, state)
+    if refused:
+        raise SystemExit("not closed: " + refused)
+    open_ = open_tasks(plan, state)
+    for tid, ts in state["tasks"].items():
+        if ts.get("lease-held"):
+            release_result(args.target, d, tid, ts, only_mine=True)   # the run ends: what this session held goes back
     state["status"] = "complete"   # which tasks stayed open is the tasks' own status; `report`/`status` recount it, nothing read a copy
     state["ended"] = stamp()
     save_state(d, state)
@@ -2782,6 +4043,9 @@ def cmd_confirm(args):
         raise SystemExit("say who confirmed (--by) or why the human delegated it (--delegated)")
     plan = load(os.path.join(d, "plan.json"))
     task = next((t for t in plan.get("tasks", []) if t.get("id") == args.task), {})
+    refused = result_gen_refusal(args.target, d, args.task, ts)
+    if refused:
+        raise SystemExit("%s: %s" % (args.task, refused))
     verdict = (ts.get("review") or {}).get("verdict")
     if args.delegated and gate_of(task).get("delegate") == "after-verifier" and verdict != "accept":
         raise SystemExit("%s: this gate delegates only after a verifier accepts (verdict: %s) — a person must read it, or the plan must say otherwise" % (args.task, verdict or "none"))
@@ -2789,6 +4053,7 @@ def cmd_confirm(args):
     ts["confirmed"] = {**({"by": args.by} if args.by else {**delegation_record(d, args.delegated, "confirm"), "verifier": verdict}), **stamp()}
     ts["status"] = "done"
     ts["done"] = {k: ts["confirmed"][k] for k in ("at", "chongdae")}   # the confirmation is the moment it became done
+    release_result(args.target, d, args.task, ts)
     save_state(d, state)
     commit_record(args.target, os.path.basename(d), "confirm %s (%s)" % (args.task, "by " + args.by if args.by else "delegated"))
     print("confirmed %s (%s)" % (args.task, "by " + args.by if args.by else "delegated: " + args.delegated))
@@ -2836,7 +4101,7 @@ def cmd_retry(args):
     # not a gate: a retry the session decides alone is signed by the session (`--by NAME` when a person decided it)
     judgment = delegation_record(d, args.delegated, "retry") if args.delegated else {"by": signer(args)}
     plan, to = load(os.path.join(d, "plan.json")), ""
-    checked = run_checked(args.target, args.checked) if args.checked else None   # before anything is recorded: a failing one refuses the retry
+    checked = run_checked(args.target, args.checked, args.checked_red) if (args.checked or args.checked_red) else None   # before anything is recorded: a failing one refuses the retry
     if args.requires:
         # what the work requires of its sandbox, said on the task now that a member's sandbox lacked it: the request names it
         # (`needs`), and the lock's `<role>@<cap>` alternate, when it has one, is hired instead of the plain role
@@ -2881,8 +4146,8 @@ def cmd_retry(args):
         judgment["checked"] = [r["command"] for r in checked["ran"]]
     n = resend(args.target, d, state, args.task, judgment, checked=checked)
     print("retry %s: attempt %d kept in the record%s; `chongdae run` sends the task out again with it attached" % (args.task, n, to))
-    if args.checked:
-        print("  checked by chongdae: %s — the verifier gets them as evidence chongdae saw" % ", ".join("`%s` exit 0" % c for c in judgment["checked"]))
+    if checked:
+        print("  checked by chongdae: %s — the verifier gets them as evidence chongdae saw" % checked_text(checked))
     for line in lines:
         print("  " + line)
     return 0
@@ -3159,6 +4424,18 @@ def cmd_report(args):
                 if is_agent(by):
                     findings.append({"kind": "session-judged", "where": "%s/%s" % (name, tid), "layer": "observation", "by": by,
                                      "text": "%s decided by %s, not a person%s" % (what, signer_text(by), ": " + str(j.get("why") or j.get("taken") or "") if isinstance(j, dict) and (j.get("why") or j.get("taken")) else "")})
+            for i, r in enumerate(ts.get("did") or [], 1):
+                # an operation outside the repository, as chongdae ran it: what it was is an observation; one that failed is an
+                # objection — a deploy or a deletion that exited non-zero left the outside in a state nobody has looked at
+                f = {"kind": "did", "where": "%s/%s did %d" % (name, tid, i), "by": r.get("signer"),
+                     "text": "`%s` -> exit %s%s, run by chongdae at %s, signed %s%s%s" % (
+                         r.get("command"), r.get("exit"), " (it did not run)" if r.get("ran") is False else "", r.get("at"), signer_text(r.get("signer")),
+                         ": " + r["why"] if r.get("why") else "", "; approved in %s" % r["approved-in"] if r.get("approved-in") else "; no approval cited")}
+                if r.get("exit") == 0:
+                    f["layer"] = "observation"
+                else:
+                    f["text"] += " — it said: " + " / ".join(r.get("tail") or [])
+                findings.append(f)
             if (ts.get("performed_by") or {}).get("provider") == "subagent" and ts.get("status") in ("done", "dropped"):
                 findings.append({"kind": "subagent", "where": "%s/%s" % (name, tid), "layer": "observation",
                                  "text": "done by the session's sub-agent (%s) — declared hands, not self-performed; chongdae saw the session's tree, not the sub-agent%s"
@@ -3302,7 +4579,7 @@ def cmd_status(args):
         print("no run — `init --session --goal \"...\"` for a piece of work, `init --goal \"...\"` for the bootstrap plan, `init --plan FILE`, `init --merge` after a merge")
         return 0
     plan, state = load(os.path.join(d, "plan.json")), load_state(d)
-    open_ = [t["id"] for t in all_tasks(plan, state) if state["tasks"][t["id"]]["status"] not in ("done", "skipped", "dropped")]
+    open_ = open_tasks(plan, state)
     print("run %s (%s: %r) is %s — %d task(s), %d open: %s%s" % (os.path.basename(d), plan.get("kind", "?"), plan.get("goal", ""), state.get("status"),
                                                                  len(state["tasks"]), len(open_), ", ".join(open_) or "-",
                                                                  ". `run` advances it" if state.get("status") == "running" else ". Start a new run for new work"))
@@ -3483,7 +4760,8 @@ def task_story(run_d, task, ts, day, run_end):
                 out.append(pad + "  %s @ %s: %s — record: “%s” — tree: “%s”" % (f.get("kind"), f.get("where"), f.get("why"), f.get("record_quote"), f.get("tree_quote")))
         rj = a.get("rejected")
         if isinstance(rj, dict) and rj.get("by") != "verifier":
-            out.append(pad + "rejected by %s: %s%s" % (rj.get("by"), rj.get("why"), " (restored: %s)" % ", ".join(rj["restored"]) if rj.get("restored") else ""))
+            out.append(pad + "rejected by %s: %s%s%s" % (rj.get("by"), rj.get("why"), " (restored: %s)" % ", ".join(rj["restored"]) if rj.get("restored") else "",
+                                                     " (removed again: %s)" % ", ".join(rj["removed"]) if rj.get("removed") else ""))
         for role_, rec in (a.get("stages") or {}).items():
             out += stage_lines(run_d, role_, rec, day, pad)
         if isinstance(a.get("reopened"), dict):
@@ -3515,6 +4793,15 @@ def task_story(run_d, task, ts, day, run_end):
         c = ts["confirmed"]
         stood = "" if "by" in c else (" (verifier: %s)" % c.get("verifier") if c.get("verifier") else " (no verifier)")
         out.append("  confirmed at %s %s%s" % (when(c.get("at"), day), judged_by(run_d, c), stood))
+    for t, w in sorted((ts.get("deleted-tests") or {}).items()):
+        out.append("  deleted by the contract: %s (%s deleted it) — not sent as a test to keep" % (t, w))
+    for r in ts.get("checked", {}).get("ran", []) if isinstance(ts.get("checked"), dict) else []:
+        out.append("  checked by chongdae at %s: %s -> exit %s%s" % (when(r.get("at"), day), r.get("command"), r.get("exit"), " (%s)" % r["outcome"] if r.get("outcome") else ""))
+    for r in ts.get("did") or []:
+        out.append("  did at %s by %s: %s -> exit %s%s%s%s" % (when(r.get("at"), day), signer_text(r.get("signer")), r.get("command"), r.get("exit"),
+                                                          " (it did not run)" if r.get("ran") is False else "",
+                                                          " — " + r["why"] if r.get("why") else "", "; approved in %s" % r["approved-in"] if r.get("approved-in") else ""))
+        out += [pad + "| " + line for line in r.get("tail") or []]
     if isinstance(ts.get("dropped"), dict):
         dr = ts["dropped"]
         out.append("  dropped at %s by %s: %s" % (when(dr.get("at"), day), signer_text(dr.get("by")), dr.get("why")))
@@ -3772,6 +5059,11 @@ def cmd_show(args):
         print("landed %s as %s" % (when(state["landed"].get("at"), day), str(state["landed"].get("commit"))[:12]))
     if plan.get("from"):
         print("contract: %s" % plan["from"])
+    link = state.get("parent")
+    if isinstance(link, dict) and link.get("run"):
+        print("parent: %s / task %s%s" % (link["run"], link.get("task", "?"), " (held at gen %s)" % link["gen"] if link.get("gen") else ""))
+    for cid, clink, cstatus, counts, where in child_runs(target, os.path.basename(d)):
+        print("child %s — task %s: %s (%s) [%s]" % (cid, clink.get("task", "?"), cstatus, ", ".join("%d %s" % (n, k) for k, n in sorted(counts.items())) or "no tasks", where))
     print(tally_text(run_tally(d, plan, state)))
     tasks = all_tasks(plan, state)
     for task in tasks:
@@ -3799,9 +5091,15 @@ def cmd_show(args):
 # ---------------------------------------------------------------- main
 
 def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    command = None
+    if argv[:1] == ["did"] and "--" in argv:
+        # `did TASK [options] -- COMMAND ARG...`: everything after the first `--` is the command's own argv, options included
+        i = argv.index("--")
+        argv, command = argv[:i], argv[i + 1:]
     ap = argparse.ArgumentParser(prog="chongdae", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
-    for name in ("init", "status", "run", "confirm", "accept", "retry", "recheck", "add", "claim", "take", "drop", "dispute", "adopt", "unstage", "close", "report", "delegate", "show"):
+    for name in ("init", "status", "run", "confirm", "accept", "retry", "recheck", "add", "claim", "take", "drop", "dispute", "adopt", "unstage", "close", "report", "delegate", "show", "did"):
         p = sub.add_parser(name)
         p.add_argument("--target", default=None, help="the project (default: the nearest directory at or above this one that holds .chongdae/, else this one)")
         if name == "init":
@@ -3811,6 +5109,7 @@ def main(argv=None):
             p.add_argument("--session", action="store_true", help="a session run: tasks are added as the work goes")
             p.add_argument("--from", dest="from_doc", default=None, help="session run: the plan document (plan/PLAN.md) whose `## Q-…` sections tasks `--closes`; providers receive those sections as the contract")
             p.add_argument("--base", default=None, help="with --merge: the revision the other side's relations are compared from (default: the merge base of HEAD^1 and HEAD^2)")
+            p.add_argument("--parent", default=None, metavar="RUN/TASK", help="this run does TASK of run RUN (typically a worktree run on its own branch): recorded as `parent`; the parent's `show` lists its children and their states, computed from the children's records. Under a lease the task is taken for this session now")
             p.add_argument("--worktree", action="store_true", help="the run's container is physical: its own worktree and branch under .chongdae/wt/ (from HEAD, or from --base REV: two independent slices branch from the same base); `close` merges it back")
         if name == "close":
             p.add_argument("--run", default=None, help="the run to close (default: the one running, else the newest) — a completed worktree run is named here to merge it back")
@@ -3822,6 +5121,7 @@ def main(argv=None):
             p.add_argument("--requires", nargs="+", default=None, choices=list(REQUIRES), help="say on the task what its sandbox must give (a member's sandbox lacked it): added to its `requires`; the lock's `<role>@<cap>` alternate, when it has one, is hired")
         if name in ("retry", "take"):
             p.add_argument("--checked", action="append", default=None, metavar="COMMAND", help="a command (quoted) chongdae runs itself in the project now; exit 0 is recorded as evidence chongdae saw and goes to the verifier (with what changed after), a failure refuses. Repeatable — e.g. the full test run a worker's report could not show")
+            p.add_argument("--checked-red", action="append", default=None, metavar="COMMAND", help="a tests task's expected red run (quoted): chongdae runs it now; a non-zero exit is recorded as red as expected, a zero exit as passed before the build — both recorded, as evidence chongdae saw. Repeatable")
         if name == "dispute":
             p.add_argument("task", help="the open build whose protected tests are wrong")
             p.add_argument("--tests", nargs="+", required=True, help="the protected test files that contradict the contract (FILE or FILE::test)")
@@ -3854,6 +5154,16 @@ def main(argv=None):
             p.add_argument("role", help="a role hired before or after the task (quibble, newbie, ...)")
             p.add_argument("--why", required=True)
             p.add_argument("--by", default=None, help="who decided (default: the session — its host and model, not git user.name)")
+        if name == "did":
+            p.usage = "chongdae did TASK [--why WHY] [--approved-in SOURCE:ID] [--by NAME] [--target DIR] -- COMMAND [ARG...]"
+            p.description = ("Run one operation outside the repository (a deploy, a secret deleted, a remote database changed) for TASK: the command after `--` "
+                             "runs in the project without a shell, and {command, exit, tail, at, why, approved-in, signer} is recorded on the task whatever "
+                             "the exit, printed, and committed. `show` prints it; `report` lists it as an observation, or as an objection when it exited non-zero.")
+            p.add_argument("task", help="the task whose work the operation is")
+            p.add_argument("--why", default=None, help="what the operation is for")
+            p.add_argument("--approved-in", dest="approved_in", default=None, metavar="SOURCE:ID",
+                           help="where the person agreed to it (a mangsang source, `source:at-63`) — cite it when the operation cannot be undone")
+            p.add_argument("--by", default=None, help="who decided to run it (default: the session — its host and model)")
         if name == "take":
             p.add_argument("task")
             p.add_argument("--why", required=True, help="why the session finishes it (the worker's sandbox could not, a guard judged the tree the session was also writing)")
@@ -3863,8 +5173,14 @@ def main(argv=None):
             p.add_argument("--why", required=True, help="why this task will not be done (mis-specified, superseded, abandoned)")
             p.add_argument("--by", default=None, help="who decided (default: the session — its host and model, not git user.name)")
         if name == "claim":
-            p.add_argument("task")
+            p.add_argument("task", nargs="?", default=None)
             p.add_argument("--by", default=None, help="who takes it (default: the session, on this machine — `run` on other machines skips it); an empty string releases")
+            p.add_argument("--list", action="store_true", help="every hold: who (machine/session), its generation, its age and last progress; lapsed and long-held ones marked "
+                           "(without a lease setting: the record's claims)")
+            p.add_argument("--break", dest="brk", action="store_true", help="with --why: take over a live hold (a lease setting) — a judgment, recorded and committed; the old holder is told at its next renewal")
+            p.add_argument("--why", default=None, help="with --break: why the hold is broken")
+            p.add_argument("--release", action="store_true", help="give this session's hold back (done, drop and close give holds back on their own); the key stays as a released marker that keeps its generation")
+            p.add_argument("--prune", action="store_true", help="with --list: delete released markers older than lease-ceiling (a take of such a key then counts its generation from the record)")
         if name == "add":
             p.add_argument("id")
             p.add_argument("--role", default=None, help="who does it. Left out, the lock says: a task with --check goes to its `implementer`, one that writes --tests to its `nitpick`, anything else to this session. `session` where the lock declares a provider needs --why (recorded); `subagent`: the session's own sub-agent (the host's Agent tool) — declared hands, not self-performed (a lock role may name `subagent` as its provider too); any role the lock declares can be named outright")
@@ -3881,11 +5197,20 @@ def main(argv=None):
             p.add_argument("--domain", default=None, help="what kind of artifact the task makes (code, site, plan, ...): carried in every request, so a worker reads it in that domain's terms")
             p.add_argument("--requires", nargs="*", default=None, choices=list(REQUIRES), help="what the work requires of the sandbox its hands run in (network, loopback): sent as the request's `needs`; a member that cannot give it refuses before starting. The lock's `<role>@<cap>[+<cap>]` alternate whose capabilities cover it is hired instead of the plain role")
     args = ap.parse_args(argv)
+    if args.cmd == "did":
+        args.command = command
     if args.target is None:
         # the shell's directory is not the project: `cd tests` and then `chongdae run` found no run there
         args.target = record_root(os.getcwd()) or "."
-    return {"init": cmd_init, "status": cmd_status, "run": cmd_run, "confirm": cmd_confirm, "recheck": cmd_recheck, "accept": cmd_accept, "retry": cmd_retry,
-            "add": cmd_add, "claim": cmd_claim, "take": cmd_take, "drop": cmd_drop, "dispute": cmd_dispute, "adopt": cmd_adopt, "unstage": cmd_unstage, "close": cmd_close, "report": cmd_report, "delegate": cmd_delegate, "show": cmd_show}[args.cmd](args)
+    try:
+        return COMMANDS[args.cmd](args)
+    except RemoteStop as err:
+        print("decision: %s" % err)
+        return DECISION
+
+
+COMMANDS = {"init": cmd_init, "status": cmd_status, "run": cmd_run, "confirm": cmd_confirm, "recheck": cmd_recheck, "accept": cmd_accept, "retry": cmd_retry,
+            "add": cmd_add, "claim": cmd_claim, "take": cmd_take, "drop": cmd_drop, "dispute": cmd_dispute, "adopt": cmd_adopt, "unstage": cmd_unstage, "close": cmd_close, "report": cmd_report, "delegate": cmd_delegate, "show": cmd_show, "did": cmd_did}
 
 
 if __name__ == "__main__":

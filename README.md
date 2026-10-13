@@ -31,10 +31,104 @@ or bootstrap run once `run` completed it: commit the worktree, `--no-ff` merge i
 green recheck removes the worktree and branch; a conflict or a red recheck comes back as a `decision:` — resolve in
 main and `init --merge`, and the worktree stays until the merge landed.
 
+`init ... --parent RUN/TASK` starts a **child** run: it does task TASK of run RUN (typically a worktree run on its own
+branch, on whichever machine took the task). The child records `parent: {run, task[, gen]}`; the parent's `show` lists its
+children with their states (`child run-… — task T1: running (2 done, 1 todo) [worktree run-… | branch … | remote branch …]`),
+computed from the children's own records — in this tree, its worktrees, and its local and remote-tracking branches — never
+stored in the parent's state, so machines writing children never rewrite one parent file. `show` of a child names its
+parent. A child may start beside its running parent; it is then the run being worked. Under a lease the parent's task is
+taken for this session at `init` (held elsewhere: refused), the child's own tasks are this session's by that hold, `run`
+renews it on the child's progress, and the child does not close or land if the hold moved on to another generation.
+
+## Many machines on one plan
+
+Off by default: a project that declares neither setting below behaves as before — `claim` writes the record, nothing is
+pushed.
+
+**Leases** — `settings.chongdae.lease` in hunsu.json (hunsu.local.json on top, as for every chongdae setting). A lease is who
+holds a task right now: coordination, not the record. It enters no branch; what the record keeps is the result's generation
+and how its hold began.
+
+| `lease` | where a hold lives | atomic across |
+|---|---|---|
+| absent | the record (`claimed_by`, as before) | — |
+| `"local"` | a file per key under this machine's git common dir (`chongdae-claims/`, shared by its worktrees; `.chongdae/local/claims/` with no git), created with `O_CREAT\|O_EXCL`, swapped under a per-key lock | the sessions of one machine |
+| `"git"` | a ref per key on the remote `origin` (or `lease-remote`): `refs/chongdae/claims/<run>/<task>` → a parentless commit with the empty tree whose message is the lease. Taken with `git push --force-with-lease=<ref>: origin <sha>:<ref>` (only if absent), renewed, broken or released by pushing against the value read | machines that reach the remote (it must accept custom refs; the lease's end is the machines' clocks) |
+| `["cmd", ...]` | a service's command (contract below) | whatever the service guarantees |
+
+A lease is `{key, holder: {machine, session, agent[, by]}, gen, taken, renewed, last-progress, ttl, task[, scope][, from]}`
+(times in UTC). The machine is `CHONGDAE_MACHINE` or the host name; the session is `CHONGDAE_SESSION`, else the host's own
+session id. `from` says how a hold began when it replaced another: `{holder, gen, lapsed: true, last-progress}` or
+`{holder, gen, broken: WHY, …}`.
+
+**A release keeps the generation.** Giving a hold back does not delete its key: the key is swapped (against the value read)
+to a released marker, `{key, released: <at>, gen: N, by}`, and a take succeeds on an absent or a released key, storing gen =
+max(the marker's gen, the gen in this machine's record) + 1 — so a machine whose record never saw another's hold still counts
+on from it. `claim --list --prune` deletes released markers older than `lease-ceiling`; a take of a pruned key falls back
+to the generation in the taker's record, which (without `remote: "shared"`) may not have seen the last holder's — prune
+only what no result is still waiting on.
+
+- `claim TASK` takes a hold for this session; one per session (`lease-max`, default 1). Lost: who holds it, and the ready
+  unheld tasks (exit 1). `claim --list`: every hold with its generation, age and last progress, `[lapsed]` and `[long-held]`
+  marked. `claim TASK --release` (or `--by ""`) gives it back; done (`run`, `confirm`), `drop` and `close` give holds back
+  on their own — each leaving a released marker that keeps the generation (`claim --list --prune` removes old ones).
+- Under a lease `run` advances only the tasks this session holds; holding fewer than `lease-max`, it takes the next ready
+  unheld one (a lost race: told who, the next one is tried). A store it cannot reach stops it — a task is never started
+  untaken.
+- **Renewed by progress, never by time alone.** After a `run` call, a hold is renewed when the task's record or the tree
+  moved since its last renewal; a `run` that only finds the task still waiting at its gate does not renew it. A hold with
+  no progress for `lease-ttl` seconds (default 1800) lapses: another session may take it, and its result records `from:
+  {lapsed: true}`. A hold older than `lease-ceiling` (default 14400) is shown as long-held.
+- `claim --break TASK --why WHY [--by NAME]` takes over a live hold: a judgment, recorded on the task (`lease-breaks`:
+  from, gen, to-gen, why, by, at) and committed. The old holder is told at its next renewal: its `run` stops with who holds
+  the task now and why, and its work stays in its tree or branch for the new holder.
+- **Generations.** Each take raises the task's `gen`; the task's result carries it (`gen`, and `lease: {gen, holder, taken[,
+  from]}` in its record). A result made under an older generation is refused: `run` stops instead of recording it done,
+  `confirm` refuses it, and a child run whose parent's hold moved on does not close or land.
+- **Scopes are keys.** A task with `scope` (`add --scope`, or a plan task's `scope`) also holds `scope/<path>` per entry;
+  a take whose scope overlaps (one holds the other) a live scope held by another session gives every key back and is
+  refused. An unscoped task meets its overlap at the merge, as before.
+- `lease-ttl`, `lease-ceiling`, `lease-max`, `lease-remote` sit beside `lease`.
+
+**The argv backend contract.** `settings.chongdae.lease: ["cmd", "arg", ...]`; chongdae appends one operation and reads one
+JSON object from the last line of stdout. Exit non-zero (or no JSON): the store could not be reached.
+
+```
+cmd take    KEY --holder H --ttl S --gen N [--task T] [--scope P] [--over G --why W] -> {"ok": bool, "lease": L|null}
+cmd renew   KEY --holder H --gen N                                                  -> {"ok": bool, "lease": L|null}
+cmd release KEY --gen N [--by B]                                                    -> {"ok": bool, "lease": null}
+cmd list    PREFIX                                                                  -> {"leases": [L, ...]}
+cmd prune   PREFIX --age S                                                          -> {"pruned": [KEY, ...]}
+```
+
+H is the holder as JSON (`{"machine", "session", "agent"[, "by"]}`); `--task` and `--scope` are stored as the lease's own
+fields, so a lease (and the record made from it) has one shape whatever the backend. `take` succeeds when KEY is absent,
+released, held by the same machine and session (it answers the hold as it is), or lapsed by the service's clock (`from:
+{holder, gen, lapsed: true}`); it stores a lease of the shape above with `gen` = max(N, the stored gen + 1) (N is one more
+than the generation chongdae last recorded; a released key's marker keeps the stored gen). With `--over G` it succeeds only when the current
+generation is G — a break — and records `from: {holder, gen, broken: W}`. `renew` succeeds when the current lease has gen
+N and the same machine and session, and sets `renewed` and `last-progress`. `release`, when KEY's gen is N, replaces the lease with the
+released marker `{key, released, gen: N, by: B}` — it keeps the generation. `list` answers every lease (markers may be
+included; chongdae leaves them out) whose key starts with PREFIX; `prune` deletes released markers older than S seconds. Keys are `<run>/<task>` and `scope/<path>`, each part
+percent-encoded. Otherwise `ok: false` with the current lease, so chongdae can say who holds it.
+
+**The remote** — `settings.chongdae.remote`:
+
+| `remote` | after each judgment's record commit | a push that fails | before a claim, an `add` or a `run` step |
+|---|---|---|---|
+| absent | nothing is pushed | — | — |
+| `"sync"` | pushed to the branch's remote (else `lease-remote`, else origin) | said, with how many commits are not there; the next judgment pushes again | — |
+| `"shared"` | pushed | fetch, reconcile (fast-forward or merge), push again; still refused: the command stops (exit 2) and says to fetch, reconcile and push | fetched and taken (fast-forward or merge); a conflict stops |
+
+Declaring `sync` or `shared` is the project's consent to chongdae pushing its records; absent, chongdae never pushes. Under
+either, a task named with `add` is committed and pushed at once (absent, it waits for the run's next commit as before), so another
+machine can claim it. A claim under a lease adds no commit anywhere — `git log main` holds the runs' judgments and the merges; a break is a
+judgment, and is committed.
+
 ## Git as notary
 
 Every judgment is one record-only commit, made by the engine itself: `init`, `confirm`, `accept`, `retry`, `dispute`, `drop`,
-`close`, `complete`, and a worktree run's landing each commit `.chongdae/run-<id>/` — that path pinned, so someone
+`close`, `complete`, `claim --break`, and a worktree run's landing each commit `.chongdae/run-<id>/` — that path pinned, so someone
 else's work in flight is never swept in (the one addition: what the reviewer wrote when the run ended goes into the
 close commit). `init` and `close` name the run's goal in the commit, so the log reads without opening the record.
 git's immutability then notarizes the judgment: its content, its time, any later edit as a visible diff. Durability is
@@ -70,7 +164,8 @@ for the owner's.
 
 Start a run: `--session` (with `--from plan/PLAN.md` when a plan document exists: tasks `--closes Q-…` and the people
 hired get those sections as the contract), the bootstrap plan (`--goal`), `--plan FILE` or `--plan -`, or `--merge
-[--base REV]`; `--worktree` for the run's own worktree + branch
+[--base REV]`; `--worktree` for the run's own worktree + branch; `--parent RUN/TASK` for a child run that does one task
+of another run (above: Runs)
 
 ### `/chongdae:add`
 
@@ -112,10 +207,33 @@ said in `run`'s output (`note: scope: …`) with the `adopt` that settles it; a 
 measure too until then. Unscoped tasks with no scoped task open keep the window rule. On guin-site, concurrent sub-agents
 needed `adopt` to split the files each had been told were its own
 
+**Tests the contract deletes.** A contract that retires code can retire its tests: the task that writes the contract's
+tests deletes them. A build's protected test that is absent, and that the task which wrote the build's tests deleted (it is
+in that writer's `touched` and gone from the tree), is *deleted by the contract*. `add` (or `run`, when the deletion came
+after `add`) says so once (`note: … deleted by the contract`) and keeps it on the task (`deleted-tests: {path: writer}`);
+the request leaves it out of `tests` and sends it as `deleted-tests: [paths]` (hacheong keeps them absent and skips them
+in red-before-build); a tests task's own retry sends what its earlier attempt deleted the same way. Nothing restores or
+demands them: `add --tests` naming such a file is accepted, `run` does not stop because it is missing, and a build that
+recreates one is refused like a build that changes its tests — the file is removed again (`rejected.removed`). guin-site
+run-20261012-052255-3556: the tests writer deleted four retired test files that were also in the build's `--tests`; the
+build was refused because its protected tests did not exist, and the session dropped it and added it again without them.
+
+**`--closes` needs a contract document.** The sections a task closes come from the run's plan document (`init --session
+--from PLAN`, a plan's `from`). In a run without one — or when the document has no `## Q-…` heading for a closed id —
+`add` says so, and `run` refuses to send a quibbler (the task's role, or one hired `--before`) or the verifier a request
+whose contract is missing the sections: it stops for the session with the fix (start the run with `--from`, add the
+section to the document, or put the section's text in the brief and drop `--closes`). guin-site
+run-20261012-052024-de21: a session run started without `--from`; the quibble got `contract: {}` and answered that the
+contract was empty
+
 ### `/chongdae:claim`
 
 Take a task for this machine (`--by NAME`; left out, the session claims it on this machine, signed as itself; an empty
-string releases). `run` skips tasks claimed by someone else; chongdae never assigns
+string releases). `run` skips tasks claimed by someone else; chongdae never assigns. Without a lease setting the claim is
+written in the record, as before (`--list` shows the record's claims). With `settings.chongdae.lease` it is a hold in the
+lease store: `claim TASK` takes, `claim --list` shows every hold (age, last progress, lapsed, long-held; `--prune`
+deletes released markers older than `lease-ceiling`), `claim TASK --release` gives it back, `claim --break TASK --why WHY` takes over a live hold as a recorded judgment (Many machines on
+one plan, above)
 
 ### `/chongdae:take`
 
@@ -135,6 +253,12 @@ give each its own `--checked`. The verifier gets them with the files changed sin
 run for, and a retry moves them there. On
 guin-site the session took a build, ran the full test run itself, and had nowhere to put it: the verifier rejected the
 builder's old claim three more times
+
+`--checked-red "COMMAND"` (repeatable, also on `retry`): a tests task's expected red run — `--checked` records only a pass,
+so the red run a tests task exists for had nowhere to go. chongdae runs it the same way; a non-zero exit is recorded as
+`red as expected`, a zero exit as `passed before the build` (both recorded, `expect: fail` and `outcome` on the entry); a
+command that is not there or times out did not run, and refuses. `take` without either prints both, so the session that
+ran something knows where it goes; `show` prints what was checked
 
 ### `/chongdae:dispute`
 
@@ -173,6 +297,23 @@ A session task that will not be done (mis-specified, superseded, abandoned): `--
 open set as `dropped`. The alternative was closing the run around it — open forever, nobody looking. When the task's hands
 changed the tree, `drop` says so and points at `take`: work that stands is done, not dropped
 
+### `/chongdae:did`
+
+`did TASK [--why WHY] [--approved-in source:ID] [--by NAME] -- COMMAND...`: an operation outside the repository — a deploy,
+a secret deleted, a remote database changed — run through chongdae for a task. Everything after `--` is the command's own
+argv, run once in the project with no shell (a `&&`, `|`, `;`, redirect or leading `VAR=` is refused, as for `--checked`)
+and no input; the task gets, whatever the exit, a `did` entry:
+
+    {"command": "wrangler d1 delete guin", "exit": 0, "tail": ["…last 6 lines…"], "at": "…+00:00", "chongdae": "…",
+     "why": "retire the old D1", "approved-in": "source:at-63", "signer": {"agent": "claude-code claude-opus-5-5"}}
+
+(`why` and `approved-in` only when given; `signer` is `--by NAME`, else the session; `ran: false` when the command was not
+there or timed out). It is printed, and committed like any judgment; `did` exits 1 when the command did. `show` prints
+each one with its output's end; `report` lists every `did` of a run as an observation, and one with a non-zero exit as an
+objection (it left the outside in a state nobody has looked at), saying `no approval cited` when none was. guin-site
+run-20261012-052255-3556: the cleanup's eight operations (an archive, the deploys, secrets, Access, R2 and D1 deleted) ran
+as plain Bash in a todo task and survive only as prose in a plan file
+
 ### `/chongdae:unstage`
 
 Take a role hired `before` or `after` a task off that task, with `--why`: a role that cannot do its work here (a
@@ -189,7 +330,8 @@ End the session run (open tasks recorded as open); the lock's `reviewer` is plac
 What this record says a reviewer should see, typed `dwitbuk/findings@1`: outside-run, unattributed, delegated,
 self-performed (with who decided it: `NAME`, or `the session (<host> <model>)`), session-judged (a drop, take, claim,
 retry, adopt, reopen or dispatch the session signed as itself — an observation, carrying `by`), subagent (a task the
-session's sub-agent did — an observation), stage-finding, verifier-reject (every rejected attempt's findings), left-open, non-claims (the same
+session's sub-agent did — an observation), did (an operation run with `did` — an observation; an objection when it
+exited non-zero), stage-finding, verifier-reject (every rejected attempt's findings), left-open, non-claims (the same
 sentence on several tasks of a run is said once, with the tasks), unreleased-writer (a committed record a working
 source wrote) — with `--since REV`, changes since that revision and the runs whose record was not complete there
 (earlier runs were the previous review's). Only those runs claim a change since REV: an earlier run's `touched` names
@@ -213,7 +355,9 @@ is timed from its own record commits, and says so. `--since REV`: one line per r
 (the runs `report --since` reads) — goal, status, tasks done/dropped/open, self-performed and taken, attempts, verifier
 rejects, delegated judgments, duration — and a totals line. `--path FILE`: the runs and tasks whose `touched` holds that
 file (or a file under that directory), newest first, with who did each. A judgment that moved a file (`adopt`) is told on
-both tasks, and a file two open tasks measured is told as not settled.
+both tasks, and a file two open tasks measured is told as not settled. A task's `did` operations, what chongdae ran for it
+(`--checked`, `--checked-red`) and the tests the contract deleted are told with it. A child run names its parent
+(`parent: run-… / task T1`); a parent lists its children and their states, read from the children's records.
 
 `--brief` is the reader's first look, one line per fact (jokbo's `note` and `map` reads; full outputs pasted into an
 agent's context were ignored): `show --path FILE --brief` prints at most two lines — `last changed in run-… (date), task ID:
@@ -226,7 +370,10 @@ running run and its open tasks are the SessionStart line's, and are not repeated
 
 ### `/chongdae:run`
 
-Advance the current run one step; exit 2 = stopped for the session agent or a human
+Advance the current run one step; exit 2 = stopped for the session agent or a human. A call waits for providers at most
+four minutes (`CHONGDAE_WAIT`, below), then says the provider is still working — `run` again. Under a lease it advances
+only the tasks this session holds (taking a ready unheld one when it holds fewer than `lease-max`) and renews a hold
+where it saw progress; under `remote: "shared"` it fetches and takes the remote's record first
 
 ### `/chongdae:delegate`
 
@@ -295,6 +442,10 @@ review, `stages` (the before/after roles' answers and who gave them), attempts, 
 `self-performed` (the session took a task the lock had hired someone for, and why), `dispatched` (a sub-agent stood where
 the lock declared someone else), `def.scope` (the files its hands own), `done` (when it became done),
 `answered` and `verdict-given` (when an attempt's answer and its verdict came back; a retried attempt keeps both),
+`did` (operations outside the repository chongdae ran for it), `checked` (what `--checked`/`--checked-red` ran),
+`deleted-tests` (its protected tests the contract deleted, and which task did), under a lease `gen` and `lease` (the
+generation its result was made under, and how that hold began) and `lease-breaks` (each `claim --break`: from, gen, why,
+by) — what this machine holds now (`lease-held`) stays in `local/`,
 `performed_by` and `verified_by` —
 each author line with its `trace` (the files that call changed, how many commands it ran and how many failed) — and
 for session tasks the task's own definition
@@ -339,7 +490,8 @@ model
 Committed: yes.
 
 the run's status, `created`, `ended`, `environment.locked` (the lock every call ran under — a task's author line says `locked`
-only when its call ran under another), `reviewed` (what the reviewer said and wrote when the run ended), `landed`
+only when its call ran under another), `reviewed` (what the reviewer said and wrote when the run ended), `parent` (a
+child run's `{run, task[, gen]}`; a parent keeps nothing of its children), `landed`
 (older runs kept their tasks here; still read)
 
 ### `.chongdae/run-<id>/delegations/D-<id>.json`
@@ -476,8 +628,9 @@ the closing record and goes into the close commit with it; what it said last is 
 reviewer places no stop; what its findings need from a person is the reviewer's own business (dwitbuk says so at the
 next session start).
 
-`run` waits for providers up to eight minutes per call (`CHONGDAE_WAIT` seconds — one budget for the call, however
-many providers it starts), then stops with `still working — run again`; the pending record lets the next `run` resume
+`run` waits for providers up to four minutes per call (`CHONGDAE_WAIT` seconds, default 240 — one budget for the call,
+however many providers it starts), then stops with `still working — run again`: well under a host's 10-minute tool limit
+(guin-site, 2026-10-12: at eight minutes `run` came close enough that the session wrapped it in polling loops of its own); the pending record lets the next `run` resume
 waiting for the same work, so a session whose tool calls have their own timeout never has to background `run` — a
 backgrounded `run` outlives the session that started it only on paper; the provider is that session's child and dies
 with it.
@@ -499,6 +652,9 @@ the role again only when it changed.
   `hunsu.local.json`, else the host's installed plugin) — a plan never carries a machine path. A check that measures
   nothing passes; name what a check covers (a test runner that fails when a key selects no tests).
 - Not built yet: re-planning on failure, the ideation branch when the goal is under-shaped.
+- Leases: the git backend has no server clock — a lapse is the machines' clocks, so keep `lease-ttl` generous or declare a
+  service. A child's parent task is decided by the parent's own `run` (its checks on the merged tree), not by the child's
+  landing. A version of chongdae before 1.20.0 does not know a lease: every machine on one plan runs 1.20.0 or later.
 
 - **The other products' records** — what a task's `touched`, `outside-run` and the snapshots leave out — come from the
   lock: `record-paths` in hunsu.lock.json, each plugin's own `records` declaration. A project whose lock has no such key gets

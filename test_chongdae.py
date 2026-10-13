@@ -242,9 +242,10 @@ def test_verifier_before_the_gate_protected_tests_and_delegation_policy():
     with Project() as pj:
         write(os.path.join(pj.dir, "check.py"), "import sys; sys.exit(0)\n")
         write(os.path.join(pj.dir, "test_x.py"), "# the contract's test\n")
+        write(os.path.join(pj.dir, "PLAN.md"), "# plan\n\n## Q1 count\n\nAcceptance: count prints the number.\n")   # the verifier is sent Q1's section, never an empty contract
         subprocess.run(["git", "-c", "core.autocrlf=false", "add", "-A"], cwd=pj.dir, check=True)
         subprocess.run(["git", "-c", "core.autocrlf=false", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "base"], cwd=pj.dir, check=True)
-        plan = {"artifact-type": "chongdae/plan@1", "goal": "g",
+        plan = {"artifact-type": "chongdae/plan@1", "goal": "g", "from": "PLAN.md",
                 "providers": {"implementer": pj.fake_provider(RESPONSE_DONE), "verifier": pj.fake_provider(REVIEW_REJECT, "verifier")},
                 "tasks": [{"id": "S1", "role": "implementer", "gate": {"human": True, "delegate": "after-verifier"}, "tests": ["test_x.py"],
                            "checks": [[sys.executable, "check.py"]], "closes": ["Q1"]}]}
@@ -2428,6 +2429,606 @@ def test_a_brief_note_says_a_drop_only_while_it_is_news():
         assert run("run", "--target", pj.dir)[0] == 0
         out = note()
         assert out.startswith("last changed in run-") and "task e: write README" in out and "dropped" not in out and len(out.strip().splitlines()) == 1, out
+
+
+def git_commit(pj, msg="base"):
+    subprocess.run(["git", "add", "-A"], cwd=pj.dir, check=True)
+    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", msg], cwd=pj.dir, check=True)
+
+
+def test_tests_the_contract_deleted_are_sent_as_deleted_tests_never_demanded_and_never_recreated():
+    """guin-site, 2026-10-12: the tests writer deleted four retired test files that were also in the build's --tests; `run`
+    refused the build because its protected tests did not exist, and the session dropped it and added it again. A protected
+    test that the task which wrote the contract's tests deleted (in its `touched`, gone from the tree) is deleted by the
+    contract: said once, left out of `tests` and sent as `deleted-tests`, and a build that recreates one is refused."""
+    with Project() as pj, a_session():
+        write(os.path.join(pj.dir, "tests", "test_old.py"), "# retired\n")
+        write(os.path.join(pj.dir, "tests", "test_keep.py"), "# kept\n")
+        git_commit(pj)
+        seen = os.path.join(pj.dir, "builder.py")
+        write(seen, "import json, shutil, sys\nshutil.copy(sys.argv[1], sys.argv[1] + '.seen')\n"
+                    "json.dump(%r, open(sys.argv[2], 'w'))\n" % RESPONSE_DONE)
+        write(os.path.join(pj.dir, "hunsu.lock.json"), {"roles": {"implementer": [sys.executable, seen, "{request}", "{response}"]}})
+        assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
+        assert run("add", "t", "--tests", "tests/test_old.py", "tests/test_keep.py", "tests/test_new.py", "--target", pj.dir)[0] == 0
+        os.remove(os.path.join(pj.dir, "tests", "test_old.py"))
+        write(os.path.join(pj.dir, "tests", "test_new.py"), "# new\n")
+        assert run("run", "--target", pj.dir)[0] == 0
+        assert "tests/test_old.py" in pj.state()["tasks"]["t"]["touched"], pj.state()["tasks"]["t"]
+        code, out = run("add", "b", "--check", sys.executable + " -c pass", "--tests", "tests/test_old.py", "tests/test_keep.py", "tests/test_new.py", "--target", pj.dir)
+        assert code == 0 and "tests/test_old.py deleted by the contract" in out and "t by tests/test_old.py" in out, out
+        assert pj.state()["tasks"]["b"]["deleted-tests"] == {"tests/test_old.py": "t"}
+        code, out = run("run", "--target", pj.dir)
+        assert code == 0 and "do not exist" not in out and "deleted by the contract" not in out, out   # said once, at `add`
+        req = json.load(open(os.path.join(chongdae.run_dir(pj.dir), "local", "b.request.json.seen"), encoding="utf-8"))
+        assert req["tests"] == ["tests/test_keep.py", "tests/test_new.py"] and req["deleted-tests"] == ["tests/test_old.py"], req
+        assert not os.path.exists(os.path.join(pj.dir, "tests", "test_old.py")), "nothing recreates it"
+        assert "deleted by the contract: tests/test_old.py (t deleted it)" in run("show", "--target", pj.dir)[1]
+        # a session build accepts the deleted file at `add` (it would refuse any other absent test), and is refused when it recreates it
+        code, out = run("add", "c", "--role", "session", "--why", "one line", "--check", sys.executable + " -c pass",
+                        "--tests", "tests/test_old.py", "tests/test_keep.py", "--target", pj.dir)
+        assert code == 0 and "deleted by the contract" in out, out
+        assert run("add", "e", "--role", "session", "--why", "x", "--check", sys.executable + " -c pass", "--tests", "tests/nowhere.py", "--target", pj.dir)[0] != 0
+        write(os.path.join(pj.dir, "tests", "test_old.py"), "# back again\n")
+        write(os.path.join(pj.dir, "c.py"), "x = 1\n")
+        code, out = run("run", "--target", pj.dir)
+        assert code == chongdae.DECISION and "recreated tests the contract deleted (tests/test_old.py — t deleted them)" in out, out
+        ts = pj.state()["tasks"]["c"]
+        assert ts["rejected"]["by"] == "contract" and ts["rejected"]["removed"] == ["tests/test_old.py"], ts["rejected"]
+        assert not os.path.exists(os.path.join(pj.dir, "tests", "test_old.py")), "the contract's deletion stands"
+    with Project() as pj:   # a provider build added before the writer deleted the file: `run` says it, once, and sends it
+        write(os.path.join(pj.dir, "tests", "test_old.py"), "# retired\n")
+        git_commit(pj)
+        write(os.path.join(pj.dir, "hunsu.lock.json"), {"roles": {"implementer": pj.fake_provider(RESPONSE_DONE)}})
+        assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
+        assert run("add", "t", "--role", "session", "--tests", "tests/test_old.py", "--target", pj.dir)[0] == 0
+        assert run("add", "b", "--check", sys.executable + " -c pass", "--tests", "tests/test_old.py", "--target", pj.dir)[0] == 0
+        os.remove(os.path.join(pj.dir, "tests", "test_old.py"))
+        code, out = run("run", "--target", pj.dir)
+        assert code == 0 and out.count("deleted by the contract") == 1 and "b: note: tests/test_old.py deleted by the contract" in out, out
+        assert pj.state()["tasks"]["b"]["status"] == "done"
+
+
+def test_did_runs_one_operation_records_it_whatever_the_exit_and_report_lists_it():
+    """guin-site, 2026-10-12: the cleanup's deploys, secret deletions and remote database changes ran as plain Bash in a todo
+    task and survive only as prose in a plan file. `did TASK -- COMMAND...` runs one command (argv, no shell) and records
+    {command, exit, tail, at, why, approved-in, signer} on the task whatever the exit; `show` prints it, `report` lists it —
+    an observation, or an objection when it exited non-zero."""
+    with Project() as pj, a_session() as agent:
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "base"], cwd=pj.dir)
+        assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
+        assert run("did", "ops", "--target", pj.dir, "--", sys.executable, "-c", "pass")[0] != 0, "no such task"
+        assert run("add", "ops", "--brief", "deploy and delete", "--target", pj.dir)[0] == 0
+        code, out = run("did", "ops", "--why", "deploy the site", "--approved-in", "source:at-63", "--target", pj.dir, "--",
+                        sys.executable, "-c", "import sys; print('deployed ' + sys.argv[1])", "--why")
+        assert code == 0 and "-> exit 0" in out and "deployed --why" in out and "source:at-63" in out, out   # options after `--` are the command's
+        code, out = run("did", "ops", "--by", "kim", "--target", pj.dir, "--", sys.executable, "-c", "import sys; print('no such bucket'); sys.exit(3)")
+        assert code == 1 and "-> exit 3" in out and "no such bucket" in out, out
+        code, out = run("did", "ops", "--target", pj.dir, "--", "echo", "a", "&&", "rm", "x")
+        assert code != 0 and "not a shell line" in out, out
+        assert run("did", "ops", "--approved-in", "the chat", "--target", pj.dir, "--", sys.executable, "-c", "pass")[0] != 0
+        assert run("did", "ops", "--target", pj.dir)[0] != 0, "no command"
+        did = pj.state()["tasks"]["ops"]["did"]
+        assert len(did) == 2, did
+        first = dict(did[0])
+        assert first.pop("at").endswith("+00:00") and first.pop("chongdae") == chongdae.engine()
+        assert first == {"command": chongdae.shlex.join([sys.executable, "-c", "import sys; print('deployed ' + sys.argv[1])", "--why"]), "exit": 0,
+                         "tail": ["deployed --why"], "why": "deploy the site", "approved-in": "source:at-63", "signer": agent}, first
+        assert did[1]["exit"] == 3 and did[1]["signer"] == "kim" and "approved-in" not in did[1]
+        log = subprocess.run(["git", "log", "--format=%s"], cwd=pj.dir, capture_output=True, text=True).stdout
+        assert "did ops:" in log, log
+        out = run("show", "--target", pj.dir)[1]
+        assert "did at" in out and "-> exit 0 — deploy the site; approved in source:at-63" in out and "| no such bucket" in out, out
+        found = [f for f in json.loads(run("report", "--target", pj.dir)[1])["findings"] if f["kind"] == "did"]
+        assert [f.get("layer") for f in found] == ["observation", None], found
+        assert "no such bucket" in found[1]["text"] and "no approval cited" in found[1]["text"] and "source:at-63" in found[0]["text"], found
+        assert run("drop", "ops", "--why", "x", "--target", pj.dir)[0] == 0
+        assert run("did", "ops", "--target", pj.dir, "--", sys.executable, "-c", "pass")[0] != 0, "not on a dropped task"
+
+
+def test_closes_without_a_contract_document_is_said_at_add_and_no_quibbler_or_verifier_gets_an_empty_contract():
+    """guin-site run-20261012-052024-de21: a session run started without `--from`; `add --closes Q-cleanup` was accepted and the
+    quibble was sent `contract: {}` — it answered that the contract was empty. `add` says so; `run` refuses to send a quibbler
+    or verifier a request whose contract is missing a closed section, and says the fix."""
+    with Project() as pj:
+        quib = os.path.join(pj.dir, "quib.py")
+        write(quib, "import json, shutil, sys\nshutil.copy(sys.argv[1], sys.argv[1] + '.seen')\n"
+                    "json.dump({'status': 'done', 'summary': 'read it', 'findings': [], 'non-claims': []}, open(sys.argv[2], 'w'))\n")
+        write(os.path.join(pj.dir, "hunsu.lock.json"), {"roles": {"quibble": [sys.executable, quib, "{request}", "{response}"]}})
+        assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
+        code, out = run("add", "q", "--role", "quibble", "--closes", "Q-cleanup", "--target", pj.dir)
+        assert code == 0 and "no contract document" in out and "--from" in out, out
+        code, out = run("run", "--target", pj.dir)
+        assert code == chongdae.DECISION and "empty contract" in out and "init --session --from PLAN" in out, out
+        assert not glob.glob(os.path.join(chongdae.run_dir(pj.dir), "local", "q*.request.json")), "nothing was sent"
+        assert run("drop", "q", "--why", "no contract", "--target", pj.dir)[0] == 0 and run("close", "--target", pj.dir)[0] == 0
+        write(os.path.join(pj.dir, "plan", "PLAN.md"), "# p\n\n## Q-cleanup retire\n\nAcceptance: /admin is 404.\n")
+        assert run("init", "--session", "--from", "plan/PLAN.md", "--goal", "g2", "--target", pj.dir)[0] == 0
+        code, out = run("add", "q2", "--role", "quibble", "--closes", "Q-cleanup", "--target", pj.dir)
+        assert code == 0 and "note: --closes" not in out, out
+        assert run("run", "--target", pj.dir)[0] == 0
+        req = json.load(open(glob.glob(os.path.join(chongdae.run_dir(pj.dir), "local", "q2*.request.json.seen"))[0], encoding="utf-8"))
+        assert "/admin is 404" in req["contract"]["Q-cleanup"], req["contract"]
+        # a role hired before the work reads the contract too: a section the document lacks stops it, with that fix
+        code, out = run("add", "b", "--before", "quibble", "--closes", "Q-other", "--target", pj.dir)
+        assert code == 0 and "has no `## Q-other` section" in out, out
+        code, out = run("run", "--target", pj.dir)
+        assert code == chongdae.DECISION and "plan/PLAN.md has no `## Q-other` section" in out and "Add the section to plan/PLAN.md" in out, out
+
+
+def test_the_session_start_line_counts_open_tasks_by_the_rule_run_uses():
+    """guin-site, 2026-10-12: the SessionStart line said "2 task(s) open: cleanup-build, cleanup-ops" with cleanup-build
+    dropped. One rule (`open_tasks`) for `run`, `status`, `close` and the hook."""
+    with Project() as pj:
+        assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
+        assert run("add", "a", "--target", pj.dir)[0] == 0 and run("add", "b", "--target", pj.dir)[0] == 0
+        assert run("drop", "a", "--why", "superseded", "--target", pj.dir)[0] == 0
+        out = hook("session_start.py", {"cwd": pj.dir})[1]
+        assert "1 task(s) open: b." in out, out
+        assert "1 open: b" in run("status", "--target", pj.dir)[1]
+
+
+def test_checked_red_records_a_tests_tasks_expected_red_and_take_says_both_flags():
+    """`take` printed no hint of `--checked`, and `--checked` records only a pass: a tests task's red run had nowhere to go.
+    `--checked-red COMMAND` runs it and records a non-zero exit as red as expected, a zero exit as passed before the build."""
+    blocked = {"status": "blocked", "summary": "no port here", "verified": [], "decisions": [], "non-claims": []}
+    with Project() as pj:
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "base"], cwd=pj.dir)
+        rec = chongdae.run_checked(pj.dir, [], red=[sys.executable + " -c pass"])["ran"][0]
+        assert rec["exit"] == 0 and rec["expect"] == "fail" and rec["outcome"] == "passed before the build", rec
+        try:
+            chongdae.run_checked(pj.dir, [], red=["no-such-command-xyz"])
+            assert False
+        except SystemExit as e:
+            assert "did not run" in str(e) and "exit 127" in str(e), e
+        write(os.path.join(pj.dir, "hunsu.lock.json"), {"roles": {"nitpick": pj.fake_provider(blocked)}})
+        assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
+        assert run("add", "t", "--tests", "test_a.py", "--target", pj.dir)[0] == 0
+        assert run("add", "u", "--tests", "test_b.py", "--target", pj.dir)[0] == 0
+        assert run("run", "--target", pj.dir)[0] == chongdae.DECISION
+        code, out = run("take", "t", "--why", "the sandbox had no port", "--target", pj.dir)
+        assert code == 0 and "--checked \"COMMAND\"" in out and "--checked-red" in out, out
+        write(os.path.join(pj.dir, "test_b.py"), "raise SystemExit(1)\n")
+        code, out = run("take", "u", "--why", "the sandbox had no port", "--checked-red", sys.executable + " test_b.py", "--target", pj.dir)
+        assert code == 0 and "exit 1 — red as expected" in out and "evidence chongdae saw:" not in out, out
+        ck = pj.state()["tasks"]["u"]["checked"]["ran"][0]
+        assert ck["exit"] == 1 and ck["outcome"] == "red as expected" and ck["expect"] == "fail", ck
+        assert "checked by chongdae at" in run("show", "--target", pj.dir)[1]
+        assert "--checked-red" in run("take", "--help")[1]
+
+
+def test_run_waits_well_under_a_hosts_ten_minute_tool_limit_by_default():
+    """guin-site, 2026-10-12: `run` blocked ~8 minutes on a provider against a 10-minute tool limit, and the session wrapped it
+    in polling loops. The default budget is four minutes; CHONGDAE_WAIT still overrides it."""
+    env = {k: v for k, v in os.environ.items() if k != "CHONGDAE_WAIT"}
+    said = lambda e: subprocess.run([sys.executable, "-c", "import chongdae; print(chongdae.WAIT_BUDGET)"], cwd=HERE, env=e,
+                                    capture_output=True, text=True).stdout.strip()
+    assert said(env) == "240", said(env)
+    assert said(dict(env, CHONGDAE_WAIT="17")) == "17"
+
+
+
+# ---------------------------------------------------------------- many machines on one plan: leases, the remote, parents (1.20.0)
+
+@contextlib.contextmanager
+def isolated_git(home):
+    """git with no global or system config, and an identity from the environment: these tests never read or write the
+    machine's own git config."""
+    keep = dict(os.environ)
+    write(os.path.join(home, "gitconfig"), "")
+    os.environ.update(GIT_CONFIG_GLOBAL=os.path.join(home, "gitconfig"), GIT_CONFIG_NOSYSTEM="1", GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t",
+                      GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t")
+    for k in ("CHONGDAE_MACHINE", "CHONGDAE_SESSION", "CHONGDAE_USER"):
+        os.environ.pop(k, None)
+    real_clock = chongdae.clock
+    try:
+        yield
+    finally:
+        chongdae.clock = real_clock
+        os.environ.clear()
+        os.environ.update(keep)
+
+
+def g(cwd, *a, check=True):
+    done = subprocess.run(["git", *a], cwd=cwd, capture_output=True, text=True)
+    if check and done.returncode:
+        raise AssertionError("git %s: %s" % (" ".join(a), done.stderr))
+    return done.stdout.strip()
+
+
+class Machines:
+    """Two clones of one local bare repository: machine A and machine B on one plan. `settings` goes into the committed
+    hunsu.json (settings.chongdae)."""
+
+    def __init__(self, settings, tasks=None):
+        self.top = tempfile.mkdtemp(prefix="chongdae-machines-")
+        self.cm = isolated_git(self.top)
+        self.cm.__enter__()
+        self.remote = os.path.join(self.top, "remote.git")
+        g(self.top, "init", "-q", "--bare", "-b", "main", self.remote)
+        self.a, self.b = os.path.join(self.top, "a"), os.path.join(self.top, "b")
+        g(self.top, "clone", "-q", self.remote, self.a)
+        g(self.a, "checkout", "-q", "-b", "main")
+        write(os.path.join(self.a, "hunsu.json"), {"settings": {"chongdae": settings}})
+        g(self.a, "add", "hunsu.json")
+        g(self.a, "commit", "-qm", "base")
+        g(self.a, "push", "-q", "origin", "main")
+        g(self.top, "clone", "-q", self.remote, self.b)
+        self.offset = [0.0]
+        chongdae.clock = lambda: time.time() + self.offset[0]
+        self.plan = os.path.join(self.top, "plan.json")
+        write(self.plan, {"artifact-type": "chongdae/plan@1", "goal": "three pieces", "providers": {"implementer": "session"},
+                          "tasks": tasks or [{"id": t, "role": "implementer", "gate": "human", "needs": [], "checks": [[sys.executable, "-c", "pass"]]}
+                                             for t in ("T1", "T2", "T3")]})
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        self.cm.__exit__(*a)
+        shutil.rmtree(self.top, ignore_errors=True)
+
+    def on(self, who, *argv, session="s1"):
+        """A chongdae command on machine A or B (a session of it)."""
+        os.environ["CHONGDAE_MACHINE"], os.environ["CHONGDAE_SESSION"] = who, session
+        return run(*argv, "--target", self.a if who == "A" else self.b)
+
+    def state(self, who):
+        return chongdae.load_state(chongdae.run_dir(self.a if who == "A" else self.b))
+
+    def refs(self):
+        return g(self.top, "--git-dir", self.remote, "for-each-ref", "--format=%(refname)", "refs/chongdae/")
+
+    def start(self):
+        """Machine A starts the plan run and the remote has it; machine B pulls it."""
+        assert self.on("A", "init", "--plan", self.plan)[0] == 0
+        g(self.a, "push", "-q", "origin", "main")
+        g(self.b, "pull", "-q", "origin", "main")
+        return os.path.basename(chongdae.run_dir(self.a))
+
+
+def test_c1_two_machines_claim_one_task_one_holds_it_the_other_is_told_who_and_takes_the_next_ready():
+    with Machines({"lease": "git"}) as m:
+        run_id = m.start()
+        # at the same moment: two processes, one per clone — the remote takes exactly one create
+        procs = []
+        for who, tree in (("A", m.a), ("B", m.b)):
+            env = dict(os.environ, CHONGDAE_MACHINE=who, CHONGDAE_SESSION="s1")
+            procs.append(subprocess.Popen([sys.executable, os.path.join(HERE, "chongdae.py"), "claim", "T1", "--target", tree], env=env,
+                                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True))
+        outs = [(p.wait(), p.stdout.read()) for p in procs]
+        winners = [i for i, (code, _) in enumerate(outs) if code == 0]
+        assert len(winners) == 1, outs
+        loser = "B" if winners == [0] else "A"
+        code, out = outs[1 - winners[0]]
+        assert code == 1 and "held by %s/s1 (gen 1" % ("A" if loser == "B" else "B") in out and "ready and unheld: T2, T3" in out, out
+        assert m.refs() == "refs/chongdae/claims/%s/T1" % run_id, m.refs()
+        # the loser's run passes over the held task and takes the next ready one
+        code, out = m.on(loser, "run")
+        assert code == chongdae.DECISION and "T1 is held by" in out and "claimed T2 (gen 1)" in out and "human: review task T2" in out, out
+        assert m.state(loser)["tasks"]["T2"]["gen"] == 1 and "T1" in m.state(loser)["tasks"] and m.state(loser)["tasks"]["T1"]["status"] == "todo"
+        # one hold per session: the loser cannot also take T3 while it holds T2
+        code, out = m.on(loser, "claim", "T3")
+        assert code != 0 and "holds %s/T2 already" % run_id in out, out
+        code, out = m.on(loser, "claim", "--list")
+        assert code == 0 and "%s/T1" % run_id in out and "%s/T2" % run_id in out and "gen 1" in out, out
+
+
+def test_c2_a_lapsed_hold_is_taken_over_and_the_record_says_so():
+    with Machines({"lease": "git", "lease-ttl": 60}) as m:
+        m.start()
+        assert m.on("A", "claim", "T1")[0] == 0
+        m.offset[0] = 61   # A's session died: no progress for longer than the ttl
+        code, out = m.on("B", "claim", "--list")
+        assert "[lapsed]" in out, out
+        code, out = m.on("B", "claim", "T1")
+        assert code == 0 and "claimed by B/s1 (gen 2)" in out and "taken over from a lapsed hold of A/s1 (gen 1" in out, out
+        code, out = m.on("B", "run")
+        assert code == chongdae.DECISION and "human: review task T1" in out, out
+        assert m.on("B", "confirm", "T1", "--by", "kim")[0] == 0
+        ts = m.state("B")["tasks"]["T1"]
+        assert ts["status"] == "done" and ts["gen"] == 2 and ts["lease"]["from"]["lapsed"] is True and ts["lease"]["from"]["holder"]["machine"] == "A", ts
+        rec = chongdae.load(os.path.join(chongdae.run_dir(m.b), "tasks", "T1.json"))
+        assert "lease-held" not in rec and rec["lease"]["gen"] == 2, rec   # the record carries the generation; what this machine holds stays local
+
+
+def test_c3_a_break_is_a_judgment_with_its_reason_and_the_old_holder_is_refused_at_its_next_renewal():
+    with Machines({"lease": "git"}) as m:
+        run_id = m.start()
+        assert m.on("A", "claim", "T1")[0] == 0
+        assert m.on("A", "run")[0] == chongdae.DECISION   # A works on T1: produced, waiting at its gate
+        assert m.on("B", "claim", "--break", "T1")[0] != 0, "a break needs a reason"
+        code, out = m.on("B", "claim", "--break", "T1", "--why", "A's laptop is in a bag for the week")
+        assert code == 0 and "broke A/s1's hold on T1 (gen 1 -> 2)" in out and "next renewal" in out, out
+        brk = m.state("B")["tasks"]["T1"]["lease-breaks"][0]
+        assert brk["why"] == "A's laptop is in a bag for the week" and brk["from"]["machine"] == "A" and brk["gen"] == 1 and brk["to-gen"] == 2, brk
+        assert "break the hold on T1" in g(m.b, "log", "-1", "--format=%s"), "a break is a judgment: committed"
+        write(os.path.join(m.a, "more.py"), "x = 1\n")   # A goes on working
+        code, out = m.on("A", "run")
+        assert code == chongdae.DECISION and "this session's hold (gen 1) was taken — B/s1 holds it now (gen 2) and broke it: A's laptop is in a bag for the week" in out, out
+        assert "%s/T1" % run_id in m.refs()
+
+
+def test_c4_without_a_lease_setting_claims_are_the_records_as_before():
+    with Machines({}) as m:
+        m.start()
+        assert m.on("A", "claim", "T1", "--by", "bob")[0] == 0
+        assert m.state("A")["tasks"]["T1"]["claimed_by"] == "bob"
+        code, out = m.on("A", "claim", "--list")
+        assert code == 0 and "T1  claimed by bob" in out and "no lease setting" in out, out
+        code, out = m.on("A", "claim", "--break", "T1", "--why", "x")
+        assert code != 0 and "needs a lease" in out, out
+        code, out = m.on("A", "run")
+        assert "T1 is claimed by bob" in out, out
+        assert m.refs() == "" and not os.path.exists(os.path.join(m.a, ".git", "chongdae-claims")), "no lease store is touched"
+        assert g(m.top, "--git-dir", m.remote, "rev-parse", "main") == g(m.a, "rev-parse", "origin/main"), "nothing pushed without a remote setting"
+
+
+def test_c5_claims_and_releases_leave_no_commit_on_main_and_no_ref_behind():
+    with Machines({"lease": "git", "remote": "sync"}) as m:
+        run_id = m.start()
+        assert m.on("A", "claim", "T1")[0] == 0 and m.on("B", "claim", "T2")[0] == 0
+        assert m.on("A", "run")[0] == chongdae.DECISION and m.on("B", "run")[0] == chongdae.DECISION
+        assert sorted(m.refs().split("\n")) == ["refs/chongdae/claims/%s/T1" % run_id, "refs/chongdae/claims/%s/T2" % run_id], m.refs()
+        assert m.on("A", "confirm", "T1", "--by", "kim")[0] == 0
+        assert m.on("B", "claim", "T2", "--release")[0] == 0
+        assert m.on("A", "claim", "--list")[1].startswith("no hold"), "released: nobody holds anything"
+        markers = [json.loads(g(m.top, "--git-dir", m.remote, "log", "-1", "--format=%B", r)) for r in m.refs().split("\n")]
+        assert sorted((x["key"].split("/")[-1], x["gen"], bool(x.get("released"))) for x in markers) == [("T1", 1, True), ("T2", 1, True)], markers
+        m.offset[0] = chongdae.LEASE_CEILING + 1
+        code, out = m.on("A", "claim", "--list", "--prune")
+        assert code == 0 and "pruned 2 released marker(s)" in out, out
+        assert m.refs() == "", "pruned: the refs are gone"
+        log = g(m.top, "--git-dir", m.remote, "log", "--format=%s", "main")
+        assert log and "confirm T1" in log and "claim" not in log.lower(), log   # the judgments travelled; no claim did
+        assert g(m.top, "--git-dir", m.remote, "for-each-ref", "--format=%(refname)", "refs/heads") == "refs/heads/main"
+
+
+def test_c7_a_hold_lapses_without_progress_and_progress_past_the_ceiling_is_long_held():
+    with Machines({"lease": "git", "lease-ttl": 60, "lease-ceiling": 300}) as m:
+        m.start()
+        assert m.on("A", "claim", "T1")[0] == 0
+        assert m.on("A", "run")[0] == chongdae.DECISION
+        m.offset[0] = 50
+        assert m.on("A", "run")[0] == chongdae.DECISION   # waiting at the gate, nothing moved: not progress
+        m.offset[0] = 70
+        code, out = m.on("A", "claim", "--list")
+        assert "[lapsed]" in out, out   # renewed by progress, never by time alone
+        assert m.on("B", "claim", "T1")[0] == 0, "a lapsed hold is anyone's"
+        assert m.on("A", "claim", "T2", session="s2")[0] == 0
+        for step in range(1, 8):   # progress every 50 s: the tree moves, `run` sees it
+            m.offset[0] = 70 + 50 * step
+            write(os.path.join(m.a, "work.py"), "x = %d\n" % step)
+            m.on("A", "run", session="s2")
+        code, out = m.on("A", "claim", "--list")
+        line = next(l for l in out.split("\n") if "/T2" in l)
+        assert "long-held" in line and "lapsed" not in line, out
+
+
+def test_c8_a_result_made_under_an_old_generation_is_refused_and_the_old_holder_stops():
+    with Machines({"lease": "git", "lease-ttl": 60}) as m:
+        m.start()
+        assert m.on("A", "claim", "T1")[0] == 0
+        assert m.on("A", "run")[0] == chongdae.DECISION   # the laptop produced T1 under gen 1, then slept
+        assert m.state("A")["tasks"]["T1"]["gen"] == 1
+        m.offset[0] = 4000
+        assert m.on("B", "claim", "T1")[0] == 0
+        code, out = m.on("A", "confirm", "T1", "--by", "kim")
+        assert code != 0 and "made under gen 1" in out and "B/s1 holds the task at gen 2" in out, out
+        write(os.path.join(m.a, "awake.py"), "x = 1\n")
+        code, out = m.on("A", "run")
+        assert code == chongdae.DECISION and "(gen 1) was taken — B/s1 holds it now (gen 2) and took it after it lapsed" in out and "stays in this tree" in out, out
+        assert m.state("A")["tasks"]["T1"]["status"] == "produced", "nothing recorded done under the old generation"
+
+
+def test_c9_overlapping_scopes_are_not_held_at_once():
+    tasks = [{"id": "T1", "role": "implementer", "gate": "human", "scope": ["src"], "checks": [[sys.executable, "-c", "pass"]]},
+             {"id": "T2", "role": "implementer", "gate": "human", "scope": ["src/a"], "checks": [[sys.executable, "-c", "pass"]]},
+             {"id": "T3", "role": "implementer", "gate": "human", "scope": ["docs"], "checks": [[sys.executable, "-c", "pass"]]}]
+    with Machines({"lease": "local"}, tasks=tasks) as m:   # two sessions on one machine: the local backend
+        assert m.on("A", "init", "--plan", m.plan)[0] == 0
+        assert m.on("A", "claim", "T1", session="s1")[0] == 0
+        code, out = m.on("A", "claim", "T2", session="s2")
+        assert code == 1 and "its scope overlaps src, held by A/s1" in out, out
+        assert m.on("A", "claim", "T3", session="s2")[0] == 0
+        code, out = m.on("A", "claim", "--list")
+        assert "scope src (" in out and "scope docs (" in out and "scope src/a" not in out, out   # the refused take gave every key back
+        store = os.path.join(m.a, ".git", "chongdae-claims")
+        files = [json.load(open(os.path.join(store, f))) for f in os.listdir(store) if f.endswith(".json")]
+        assert sum(1 for f in files if not f.get("released")) == 4 and sorted(f["key"] for f in files if f.get("released")) == sorted(["scope/src%2Fa", "%s/T2" % os.path.basename(chongdae.run_dir(m.a))]), files   # the refused take's keys: given back, gens kept
+        assert m.on("A", "claim", "T1", "--release", session="s1")[0] == 0
+        assert m.on("A", "claim", "T3", "--release", session="s2")[0] == 0
+        assert m.on("A", "claim", "T2", session="s2")[0] == 0, "free once the overlapping scope is given back"
+
+
+def test_under_a_lease_one_run_takes_finishes_and_gives_back_one_task_at_a_time():
+    with Machines({"lease": "local"}) as m:
+        assert m.on("A", "init", "--session", "--goal", "g")[0] == 0
+        assert m.on("A", "add", "T1", "--brief", "x")[0] == 0 and m.on("A", "add", "T2", "--brief", "y")[0] == 0
+        write(os.path.join(m.a, "a.py"), "x = 1\n")
+        code, out = m.on("A", "run")
+        assert code == chongdae.DECISION and "claimed T1 (gen 1)" in out and "done T1" in out and "claimed T2 (gen 1)" in out, out   # T1 given back, so T2 could be taken
+        write(os.path.join(m.a, "b.py"), "x = 2\n")
+        code, out = m.on("A", "run")
+        assert code == 0 and "done T2" in out and "claimed" not in out, out
+        st = m.state("A")
+        assert st["tasks"]["T1"]["gen"] == 1 and st["tasks"]["T2"]["lease"]["holder"]["machine"] == "A", st["tasks"]["T2"]
+        assert m.on("A", "claim", "--list")[1].startswith("no hold"), "done gives every hold back"
+
+
+def test_sync_pushes_each_judgment_and_goes_on_when_the_push_fails():
+    with Machines({"remote": "sync"}) as m:
+        assert m.on("A", "init", "--session", "--goal", "g")[0] == 0
+        assert g(m.top, "--git-dir", m.remote, "rev-parse", "main") == g(m.a, "rev-parse", "HEAD"), "the judgment was pushed"
+        hook_path = os.path.join(m.remote, "hooks", "pre-receive")
+        write(hook_path, "#!/bin/sh\necho closed for the night >&2\nexit 1\n")
+        os.chmod(hook_path, 0o755)
+        assert m.on("A", "add", "T1", "--brief", "x")[0] == 0
+        code, out = m.on("A", "drop", "T1", "--why", "superseded")
+        assert code == 0 and "record not pushed to origin/main" in out and "the next judgment pushes again" in out, out
+        os.remove(hook_path)
+        assert m.on("A", "add", "T2", "--brief", "y")[0] == 0
+        assert m.on("A", "drop", "T2", "--why", "superseded too")[0] == 0
+        assert g(m.top, "--git-dir", m.remote, "rev-parse", "main") == g(m.a, "rev-parse", "HEAD"), "retried: everything behind went"
+
+
+def test_shared_fetches_before_a_step_and_stops_when_the_push_is_refused():
+    with Machines({"remote": "shared"}) as m:
+        assert m.on("A", "init", "--session", "--goal", "g")[0] == 0
+        assert m.on("A", "add", "T1", "--brief", "x")[0] == 0
+        assert m.on("A", "drop", "T1", "--why", "superseded")[0] == 0
+        assert g(m.b, "rev-parse", "HEAD") != g(m.a, "rev-parse", "HEAD")
+        code, out = m.on("B", "run")   # a step under shared: fetch and take what the remote has first
+        assert g(m.b, "rev-parse", "HEAD") == g(m.a, "rev-parse", "HEAD") and "session run" in out, out
+        # B judges while A moved on: B's push is refused, fetch + reconcile + push again goes through
+        assert m.on("B", "add", "T3", "--brief", "w")[0] == 0
+        assert m.on("A", "add", "T2", "--brief", "y")[0] == 0 and m.on("A", "drop", "T2", "--why", "z")[0] == 0
+        code, out = m.on("B", "drop", "T3", "--why", "not needed")
+        assert code == 0 and "fetched, reconciled and pushed" in out, out
+        assert g(m.top, "--git-dir", m.remote, "rev-parse", "main") == g(m.b, "rev-parse", "HEAD")
+        hook_path = os.path.join(m.remote, "hooks", "pre-receive")
+        write(hook_path, "#!/bin/sh\nexit 1\n")
+        os.chmod(hook_path, 0o755)
+        code, out = m.on("B", "add", "T4", "--brief", "v")   # naming a task is a judgment that travels too
+        assert code == chongdae.DECISION and "decision: the record is committed here, but origin/main did not take it" in out and "fetch, reconcile" in out, out
+
+
+def test_under_shared_a_task_travels_when_it_is_named():
+    """On GitHub with two clones, `add` left the task uncommitted and the other machine said "no task T1". Under `sync` or
+    `shared`, `add` commits and pushes the task; under `shared` it fetches first."""
+    with Machines({"remote": "shared", "lease": "git"}) as m:
+        assert m.on("A", "init", "--session", "--goal", "g")[0] == 0
+        assert m.on("A", "add", "T1", "--brief", "x")[0] == 0
+        assert g(m.top, "--git-dir", m.remote, "rev-parse", "main") == g(m.a, "rev-parse", "HEAD"), "the new task was pushed"
+        code, out = m.on("B", "claim", "T1")
+        assert code == 0 and "T1 claimed by B" in out, out
+        assert m.on("B", "add", "T2", "--brief", "y")[0] == 0, "B fetched A's record before naming its own task"
+        code, out = m.on("A", "claim", "T2")
+        assert code == 0 and "T2 claimed by A" in out, out
+    with Machines({}) as m:
+        assert m.on("A", "init", "--session", "--goal", "g")[0] == 0
+        head = g(m.a, "rev-parse", "HEAD")
+        assert m.on("A", "add", "T1", "--brief", "x")[0] == 0
+        assert g(m.a, "rev-parse", "HEAD") == head, "no remote setting: add commits nothing, as before"
+
+
+def test_a_child_run_names_its_parent_and_the_parent_shows_its_children():
+    with Machines({"lease": "local"}) as m:
+        parent = m.start()
+        assert m.on("A", "init", "--parent", "nope/T1")[0] != 0
+        code, out = m.on("A", "init", "--session", "--goal", "do T1", "--worktree", "--parent", "%s/T1" % parent)
+        assert code == 0 and "child of %s / task T1 (held at gen 1)" % parent in out, out
+        wt = out.split("--target ")[-1].strip()
+        child = os.path.basename(chongdae.run_dir(wt))
+        assert chongdae.load_state(chongdae.run_dir(wt))["parent"] == {"run": parent, "task": "T1", "gen": 1}
+        os.environ["CHONGDAE_MACHINE"] = "A"
+        code, out = run("show", "--target", wt)
+        assert "parent: %s / task T1 (held at gen 1)" % parent in out, out
+        assert run("add", "c1", "--brief", "piece", "--target", wt)[0] == 0
+        code, out = m.on("A", "show", "--run", parent)
+        assert "child %s — task T1: running (1 todo) [worktree %s]" % (child, child) in out, out
+        assert "child" not in chongdae.load(os.path.join(m.a, ".chongdae", parent, "state.json")), "the parent's state holds nothing of its children"
+        # someone else breaks the parent task's hold: the child does not land
+        assert m.on("A", "claim", "--break", "T1", "--why", "reassigned", session="s9")[0] == 0
+        code, out = run("close", "--target", wt)
+        assert code != 0 and "not closed:" in out and "held by A/s9 at gen 2" in out, out
+
+
+def test_a_service_backend_speaks_the_argv_contract():
+    backend = SERVICE_BACKEND
+    with Machines({}) as m:
+        write(os.path.join(m.top, "svc.py"), backend)
+        write(os.path.join(m.a, "hunsu.local.json"), {"settings": {"chongdae": {"lease": [sys.executable, os.path.join(m.top, "svc.py")]}}})
+        assert m.on("A", "init", "--plan", m.plan)[0] == 0
+        code, out = m.on("A", "claim", "T1")
+        assert code == 0 and "claimed by A/s1 (gen 1)" in out, out
+        code, out = m.on("A", "claim", "T1", session="s2")
+        assert code == 1 and "held by A/s1 (gen 1" in out, out
+        code, out = m.on("A", "claim", "--list")
+        assert "T1  A/s1  gen 1" in out, out
+        assert m.on("A", "run")[0] == chongdae.DECISION
+        assert m.on("A", "confirm", "T1", "--by", "kim")[0] == 0
+        kept = chongdae.load(os.path.join(m.top, "leases.json"))
+        assert [(v["gen"], bool(v.get("released"))) for v in kept.values()] == [(1, True)], kept   # done gives the hold back; the gen stays
+        assert m.on("A", "claim", "--list")[1].startswith("no hold")
+        write(os.path.join(m.top, "svc.py"), "import sys; sys.exit(3)\n")
+        code, out = m.on("A", "claim", "T2")
+        assert code == chongdae.DECISION and "cannot be reached" in out and "nothing was started untaken" in out, out
+
+
+SERVICE_BACKEND = r'''
+import json, sys, os
+db = os.path.join(os.path.dirname(os.path.abspath(__file__)), "leases.json")
+data = json.load(open(db)) if os.path.exists(db) else {}
+op, a = sys.argv[1], sys.argv[2:]
+key = a[0] if a else ""
+opt = dict(zip(a[1::2], a[2::2]))
+cur = data.get(key)
+out = {}
+if op == "take":
+    h = json.loads(opt["--holder"])
+    free = cur is None or cur.get("released")
+    same = not free and cur["holder"]["machine"] == h["machine"] and cur["holder"]["session"] == h["session"]
+    if free or same or ("--over" in opt and str(cur["gen"]) == opt["--over"]):
+        gen = max(int(opt["--gen"]), (cur or {}).get("gen", 0) + 1) if not same else cur["gen"]
+        new = {"key": key, "holder": h, "gen": gen, "taken": "2026-10-13T00:00:00+00:00", "renewed": "2026-10-13T00:00:00+00:00",
+               "last-progress": "2026-10-13T00:00:00+00:00", "ttl": int(opt["--ttl"])}
+        new.update({k: opt["--" + k] for k in ("task", "scope") if "--" + k in opt})
+        if "--over" in opt:
+            new["from"] = {"holder": cur["holder"], "gen": cur["gen"], "broken": opt.get("--why", "")}
+        data[key] = new
+        out = {"ok": True, "lease": new}
+    else:
+        out = {"ok": False, "lease": cur}
+elif op == "renew":
+    out = {"ok": bool(cur and str(cur["gen"]) == opt["--gen"]), "lease": cur}
+elif op == "release":
+    ok = bool(cur and not cur.get("released") and str(cur["gen"]) == opt["--gen"])
+    if ok:
+        data[key] = {"key": key, "released": "2026-10-13T00:00:00+00:00", "gen": cur["gen"], "by": opt.get("--by", "")}
+    out = {"ok": ok, "lease": None}
+elif op == "list":
+    out = {"leases": [v for k, v in sorted(data.items()) if k.startswith(key)]}
+elif op == "prune":
+    gone = [k for k, v in data.items() if k.startswith(key) and v.get("released")]
+    for k in gone:
+        del data[k]
+    out = {"pruned": gone}
+json.dump(data, open(db, "w"))
+print(json.dumps(out))
+'''
+def test_a_release_keeps_the_generation_so_a_machine_that_never_saw_the_record_still_counts_on():
+    with Machines({"lease": "git"}) as m:
+        m.start()
+        assert m.on("A", "claim", "T1")[0] == 0
+        code, out = m.on("A", "claim", "T1", "--release")
+        assert code == 0 and "released (gen 1)" in out, out
+        assert "gen" not in m.state("B")["tasks"]["T1"], "B has not fetched anything of A's hold"
+        code, out = m.on("B", "claim", "T1")
+        assert code == 0 and "claimed by B/s1 (gen 2)" in out, out
+
+
+def lease_record_after(m, who="A"):
+    """One scenario on one backend: take T1, work it to its gate, confirm it. The task's record, as committed."""
+    assert m.on(who, "init", "--plan", m.plan)[0] == 0
+    assert m.on(who, "claim", "T1")[0] == 0
+    assert m.on(who, "run")[0] == chongdae.DECISION
+    assert m.on(who, "confirm", "T1", "--by", "kim")[0] == 0
+    return chongdae.load(os.path.join(chongdae.run_dir(m.a), "tasks", "T1.json"))
+
+
+def test_c6_changing_the_backend_changes_no_record():
+    shape = lambda rec: (sorted(k for k in rec if k not in ("start", "touched")), sorted(rec["lease"]), sorted(rec["lease"]["holder"]),
+                         rec["gen"], rec["lease"]["gen"], rec["lease"]["holder"]["machine"])
+    with Machines({"lease": "local"}) as m:
+        local = lease_record_after(m)
+    with Machines({}) as m:
+        write(os.path.join(m.top, "svc.py"), SERVICE_BACKEND)
+        write(os.path.join(m.a, "hunsu.local.json"), {"settings": {"chongdae": {"lease": [sys.executable, os.path.join(m.top, "svc.py")]}}})
+        service = lease_record_after(m)
+    assert shape(local) == shape(service), (shape(local), shape(service))
+    assert sorted(local["lease"]["holder"]) == ["agent", "machine"], local["lease"]   # a holder is a holder on every backend; the host's session id stays in local/
+
 
 if __name__ == "__main__":
     if hasattr(sys.stdout, "reconfigure"):

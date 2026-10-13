@@ -1,5 +1,5 @@
 ---
-description: Advance the current run one step; exit 2 = stopped for the session agent or a human
+description: Advance the current run one step; exit 2 = stopped for the session agent or a human. It waits for providers at most four minutes (CHONGDAE_WAIT), then says the provider is still working — run again
 ---
 !`python3 "${CLAUDE_PLUGIN_ROOT}/chongdae.py" status`
 
