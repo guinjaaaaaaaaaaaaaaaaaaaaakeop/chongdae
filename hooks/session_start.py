@@ -56,6 +56,9 @@ def main():
     else:
         msg = ("chongdae: no run in progress — the run is the agent's container, so Edit/Write are refused until one starts: "
                "`%s \"%s\" init --session --goal \"...\"` (tasks added as you go) or `... init --plan FILE`. The engine is that file; there is no `chongdae` binary." % (PY, engine))
+    line = chongdae.upstream_line(cwd)   # local remote-tracking refs only, no fetch: 213 commits sat unpushed for 10 days and nothing said so (guin-site, 10-15)
+    if line:
+        msg += " " + line + "."
     print(json.dumps({"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": msg}}))
     return 0
 

@@ -120,7 +120,9 @@ percent-encoded. Otherwise `ok: false` with the current lease, so chongdae can s
 | `"sync"` | pushed to the branch's remote (else `lease-remote`, else origin) | said, with how many commits are not there; the next judgment pushes again | — |
 | `"shared"` | pushed | fetch, reconcile (fast-forward or merge), push again; still refused: the command stops (exit 2) and says to fetch, reconcile and push | fetched and taken (fast-forward or merge); a conflict stops |
 
-Declaring `sync` or `shared` is the project's consent to chongdae pushing its records; absent, chongdae never pushes. Under
+Declaring `sync` or `shared` is the project's consent to chongdae pushing its records; absent, chongdae never pushes. Whatever
+`remote` says, the SessionStart line and `close` say when the branch has no upstream or holds commits its upstream has not
+(from the last fetch; see `close`). Under
 either, a task named with `add` is committed and pushed at once (absent, it waits for the run's next commit as before), so another
 machine can claim it. A claim under a lease adds no commit anywhere — `git log main` holds the runs' judgments and the merges; a break is a
 judgment, and is committed.
@@ -128,9 +130,12 @@ judgment, and is committed.
 ## Git as notary
 
 Every judgment is one record-only commit, made by the engine itself: `init`, `confirm`, `accept`, `retry`, `dispute`, `drop`,
-`close`, `complete`, `claim --break`, and a worktree run's landing each commit `.chongdae/run-<id>/` — that path pinned, so someone
+a task's `done` in `run`, `did`, `close`, `complete`, `claim --break`, and a worktree run's landing each commit `.chongdae/run-<id>/` — that path pinned, so someone
 else's work in flight is never swept in (the one addition: what the reviewer wrote when the run ended goes into the
-close commit). `init` and `close` name the run's goal in the commit, so the log reads without opening the record.
+close commit). A `done` reached in `run` is committed when it is made (guin-site run-20261015-054352-a0ec: five tasks' done
+results waited, and landed in a commit titled "accept decisions on cache-build (delegated)"). A record file is written only
+when what it says changed, so a task nobody judged again keeps the `written_by` that wrote it (guin-site d281c8a: a `did` on one
+task restamped six done and dropped tasks 1.19.0 -> 1.20.0). `init` and `close` name the run's goal in the commit, so the log reads without opening the record.
 git's immutability then notarizes the judgment: its content, its time, any later edit as a visible diff. Durability is
 the engine's, not a habit of whoever remembered to commit (best effort: no repo or an identity-less git config never
 stops the run; the reviewer sees uncommitted records as what they are).
@@ -141,6 +146,10 @@ the moments `show` reads durations from: a task's `done`, each attempt's `answer
 run's place in history is `created: {at, based_on}` (the commit it started from) and, when a worktree run lands,
 `landed: {at, commit}` (the merge commit, pinned into the record in main): ancestry decides, run-id timestamps only
 approximate. `git log -- .chongdae/run-<id>` joins the record to the changes.
+
+The work itself is the session's to commit, and its subject has its own form: `run-<id>/<task> (session): <what>` — never
+the engine's `run-<id>: …`, which is chongdae's record commits only. `run` (when it makes a task done) and `close` (when it
+stops on uncommitted work) print the exact `git add -- FILE…` and `git commit -m "…" -- FILE…` for each task.
 
 ## Commands
 
@@ -299,7 +308,7 @@ changed the tree, `drop` says so and points at `take`: work that stands is done,
 
 ### `/chongdae:did`
 
-`did TASK [--why WHY] [--approved-in source:ID] [--by NAME] -- COMMAND...`: an operation outside the repository — a deploy,
+`did TASK [--why WHY] [--approved-in source:ID] [--by NAME] (-- COMMAND... | --each FILE)`: an operation outside the repository — a deploy,
 a secret deleted, a remote database changed — run through chongdae for a task. Everything after `--` is the command's own
 argv, run once in the project with no shell (a `&&`, `|`, `;`, redirect or leading `VAR=` is refused, as for `--checked`)
 and no input; the task gets, whatever the exit, a `did` entry:
@@ -314,6 +323,26 @@ objection (it left the outside in a state nobody has looked at), saying `no appr
 run-20261012-052255-3556: the cleanup's eight operations (an archive, the deploys, secrets, Access, R2 and D1 deleted) ran
 as plain Bash in a todo task and survive only as prose in a plan file
 
+A file outside the project that the command runs (`python3 /private/tmp/…/empty_r2.py`: a script in a scratchpad) is written
+`<outside:empty_r2.py>` in `command`, and the entry keeps the file itself under `outside`: `{arg, name, sha256, size, content}` —
+its text when it is text and at most 32,000 bytes, with this machine's paths taken out (`content-portable` says so; the sha256 is
+the file's as it ran); otherwise `not-kept` says why. The command's program (an interpreter, a binary) is not such a file unless it
+is a `#!` script. `did` prints what it kept, `show` and `report` say it. The tail is the output's last six meaningful lines: blank
+lines, rules (`─────`, `=====`) and a tool's version banner (`⛅️ wrangler 4.143.1 (update available 4.149.0)`) are left out. The
+commit's subject keeps a long command's head and its last word's name around a `…`. guin-site run-20261012-052255-3556 kept only
+the machine path of the script that emptied the R2 bucket, its subject cut mid-name ("…/scratchpad/empty"), and two lines of
+banner and rule as the tail of each deletion.
+
+A done task that reads as an operation and has no `did` — its brief or role holds one of a small list: `deploy`, `push`,
+`publish`, `migrate`, `delete` (the verbs, not "deployed"), `배포`, `푸시`, `삭제`, `마이그레이션` (not as a modifier: "배포 버전",
+"배포한 …", "삭제된 …"); a task its checks decide is a build and is not read — stops `close` (below) and is an observation in
+`report` (`operation-unrecorded`): what ran and its exit are only in the session's transcript.
+
+`--each FILE` (or `--each -`, stdin): several operations as one judgment — one command per line (no shell line; blank lines and
+`#` comments skipped), each recorded with its own exit and tail (`batch: {of, n}`), all in one commit. A non-zero exit stops the
+rest, which are said as not run: what comes after a failure is not run on a state nobody has looked at. guin-site's R2 emptying
+and deletion, one decision, were two commits
+
 ### `/chongdae:unstage`
 
 Take a role hired `before` or `after` a task off that task, with `--why`: a role that cannot do its work here (a
@@ -325,13 +354,48 @@ non-claim), and what it answered before it came off stays under `stages-taken-of
 End the session run (open tasks recorded as open); the lock's `reviewer` is placed (below); a worktree run merges back
 — `--run ID` names a completed one. The commit names the goal: `run-…: close — <goal> (N done, M open)`
 
+Three stops before it is final, all the session's (`decision: session agent: …`), never a person's question:
+
+- **Work not committed.** A finished task's work — its `touched`, anything under its `--scope` — that differs from HEAD stops
+  the close, with the files, their tasks and the commands, a commit per task: `git add -- FILE…`, then
+  `git commit -m "run-<id>/<task> (session): <its brief>" -- FILE…`. That subject is the form for the session's commits of a
+  task's work; `run-<id>: …` is chongdae's own record commits (guin-site 10-15: the agent copied the engine's prefix in
+  737db95 and made up `run:` in 33b5bda, and `git log` could not tell them apart). `run` prints the same two lines when it
+  makes a task done with its work uncommitted. The record is committed by
+  chongdae; the work is the session's to commit, and a close over uncommitted work closes on work no commit holds. guin-site
+  run-20261012-052255-3556 closed with plan/ATPROTO.md (cleanup-ops' scope and `touched`) edited and uncommitted. A worktree run
+  is exempt: its merge-back commits the worktree.
+- **What the reviewer finds the tree can answer.** The reviewer runs with the run ended, before the commit. An open objection
+  (layer `objection`, no disposition, not a carry) of a kind the tree can answer now — `cq-failed`, `cq-drifted`,
+  `invariant-failed`, `stale`, `broken`, `contradiction`, `record-vs-tree`, `plan-vs-code`, `anomaly` — stops the close: each
+  is listed, the run stays running, and what the reviewer wrote for this close is taken back (a file it created removed, one it
+  changed put back to HEAD), so the next close's review is not based on a review of a close that did not happen. The session
+  fixes them and closes again. A non-claim, a delegation or a carried charge is a person's to dispose and never stops it.
+  guin-site run-20261012-052255-3556: two cq-failed arrived with the close commit and were fixed outside any run. The count is
+  the reviewer's own (dwitbuk's `count_text`): each open charge once under the kind of charge it makes — a carry (`undisposed`)
+  under the kind it carries — kinds sorted, then how many of them are carried: `cq-failed 2, non-claim 10; 3 of them carried,
+  already in the count`; two copies of one charge count once.
+
+- **An operation with no record.** A done task that reads as an operation outside the repository (above, under `did`) and
+  has no `did`: `did TASK --why … -- COMMAND` records it (it runs the command now), or `close --anyway --why` when nothing
+  outside was done. guin-site run-20261015-054352-a0ec: cache-ops' deploy and push ran as plain Bash.
+
+`close --anyway --why WHY [--by NAME]` closes with any of them standing: recorded in state.json `closed-anyway` (why, by, the
+uncommitted files, the tasks with no `did`, the standing objections, at) and said as a non-claim.
+
+The close then says, in one line, when the branch has no upstream (`main: no upstream`, when the repository has a remote) or
+commits its upstream has not (`main: 213 commits not on origin/main (as of the last fetch)`) — read from the local
+remote-tracking refs, never a fetch, whatever `settings.chongdae.remote` says; level, nothing. The SessionStart line says the
+same. guin-site: 213 commits sat unpushed for 10 days, main had no upstream, and nothing said so.
+
 ### `/chongdae:report`
 
 What this record says a reviewer should see, typed `dwitbuk/findings@1`: outside-run, unattributed, delegated,
 self-performed (with who decided it: `NAME`, or `the session (<host> <model>)`), session-judged (a drop, take, claim,
 retry, adopt, reopen or dispatch the session signed as itself — an observation, carrying `by`), subagent (a task the
 session's sub-agent did — an observation), did (an operation run with `did` — an observation; an objection when it
-exited non-zero), stage-finding, verifier-reject (every rejected attempt's findings), left-open, non-claims (the same
+exited non-zero), operation-unrecorded (a done task that reads as an operation with no `did` — an observation), verifier-non-claim (what a
+verifier says it did not do, such as an accept without reading the tree — an observation), stage-finding, verifier-reject (every rejected attempt's findings), left-open, non-claims (the same
 sentence on several tasks of a run is said once, with the tasks), unreleased-writer (a committed record a working
 source wrote) — with `--since REV`, changes since that revision and the runs whose record was not complete there
 (earlier runs were the previous review's). Only those runs claim a change since REV: an earlier run's `touched` names
@@ -366,12 +430,28 @@ the last 7 days, and only when no done task changed the file after it (guin-site
 51 times in one session) — and nothing at all when no task on record touched it; `show --brief` prints one line, `N runs (K this week), last closed: <goal> (date)` (this week: the last 7 days). The
 running run and its open tasks are the SessionStart line's, and are not repeated. The manifests declare them in `reads`
 (kind -> argv, for a reader plugin): `file` (`show --path {path}`), `since` (`show --since {since}`), `note`
-(`show --path {path} --brief`) and `map` (`show --brief`), each with `--target {target}`
+(`show --path {path} --brief`), `map` (`show --brief`) and `hands` (`show --after {after} --hands {paths}`), each with
+`--target {target}`.
+
+`show --after ISO --hands PATH...` is jokbo's `hands` read: given paths that changed while the session was not calling (jokbo's
+`{paths}`, one argument per path; `{after}`, when the session's last call left the tree, ISO UTC), it prints one JSON object
+from path to whose hands this record says changed it — `{"src/worker/index.ts": "the implementer of cache-build
+(run-20261015-054352-a0ec)"}` — so the change line says the session's hired worker, not "another hand" (guin-site 10-15
+05:53:57: the session's own builder's two files were told as anyone's). A path is a hired task's when its provider is out now
+(the task's `local/<tag>.pending.json`, its pid alive) and the file is not what it was at that provider's start, or when an
+attempt answered at or after `{after}` holds it in `touched_by_provider` (or `touched`); the role is the one the task was
+hired as (the lock's key). Only running runs, and runs closed within the window, are read. The session's own tasks (session,
+sub-agent, taken) are never named, nor is chongdae's own run of the checks. It runs inside a hook: no git, no network, and
+`{}` — never an error — when nothing is on record, `--after` does not parse, or anything else goes wrong.
 
 ### `/chongdae:run`
 
-Advance the current run one step; exit 2 = stopped for the session agent or a human. A call waits for providers at most
-four minutes (`CHONGDAE_WAIT`, below), then says the provider is still working — `run` again. Under a lease it advances
+Advance the current run one step. Exit codes: 0 — advanced as far as it goes (a session run waiting for `add` or `close`, a
+plan run complete); 2 (`DECISION`) — stopped for the session agent or a human, the last line (`decision: …`) says who and what;
+4 (`WAITING`) — still working: the call's budget is spent while a provider or chongdae's own checks run, the line starts with
+`still working:`, and `run` again resumes the same work. A call takes at most about four minutes (`CHONGDAE_WAIT`, below). `run TASK…` names
+session tasks whose work leaves nothing in the tree: naming one is the session's word that it is done (said as a non-claim);
+unnamed, a task with no check, no change of its own and no `did` stays open (above). Under a lease it advances
 only the tasks this session holds (taking a ready unheld one when it holds fewer than `lease-max`) and renews a hold
 where it saw progress; under `remote: "shared"` it fetches and takes the remote's record first
 
@@ -442,7 +522,9 @@ review, `stages` (the before/after roles' answers and who gave them), attempts, 
 `self-performed` (the session took a task the lock had hired someone for, and why), `dispatched` (a sub-agent stood where
 the lock declared someone else), `def.scope` (the files its hands own), `done` (when it became done),
 `answered` and `verdict-given` (when an attempt's answer and its verdict came back; a retried attempt keeps both),
-`did` (operations outside the repository chongdae ran for it), `checked` (what `--checked`/`--checked-red` ran),
+`did` (operations outside the repository chongdae ran for it, with any script outside the project under `outside`), `checked`
+(what `--checked`/`--checked-red` ran), `checks-passed` (the task's own checks as chongdae last ran them green: what the verifier
+is told), `overruled` (the verifier's findings chongdae overruled, and why),
 `deleted-tests` (its protected tests the contract deleted, and which task did), under a lease `gen` and `lease` (the
 generation its result was made under, and how that hold began) and `lease-breaks` (each `claim --break`: from, gen, why,
 by) — what this machine holds now (`lease-held`) stays in `local/`,
@@ -489,7 +571,7 @@ model
 
 Committed: yes.
 
-the run's status, `created`, `ended`, `environment.locked` (the lock every call ran under — a task's author line says `locked`
+the run's status, `created`, `ended`, `closed-anyway` (a close with uncommitted work or answerable objections standing, and why), `environment.locked` (the lock every call ran under — a task's author line says `locked`
 only when its call ran under another), `reviewed` (what the reviewer said and wrote when the run ended), `parent` (a
 child run's `{run, task[, gen]}`; a parent keeps nothing of its children), `landed`
 (older runs kept their tasks here; still read)
@@ -527,10 +609,23 @@ progress (the record, `.claude/` and `hunsu*` are exempt — their own engines w
 which run is open (not inside a worker session, `AGENT_WORKER=1`: the run is the hiring session's). So runs must be cheap: `init --session` opens one with no plan, `add <id>` names each piece as the
 work starts (a task with no check is allowed — done is then the agent's word, recorded as a non-claim), `run` records
 what each piece touched (since its start, committed or not: work committed before `run` is still the task's), `close` ends it. A task's word stays its own: when a task is done, the files it recorded are
-measured from there for the session tasks still open, and a no-check task that changed nothing of its own is not swept
-to done by the same `run` right after the task before it. A session build's `--tests` must exist when it is added (its
+measured from there for the session tasks still open, and a no-check task that changed nothing of its own and has no `did`
+is not done by a `run` that did not name it — it stays open, the pass goes on to the next task, and the call ends (exit 2)
+with how to finish it: do the work; an operation through `did TASK -- COMMAND` first; work that leaves nothing in the tree
+(a decision, an answer) by naming it, `run TASK` (the session's word, said as a non-claim). guin-site
+run-20261015-054352-a0ec: the `run` for cache-comment also made cache-ops done (touched [], no `did`) two minutes before its
+deploy, its push and its Done line. A session build's `--tests` must exist when it is added (its
 start is taken then); write them in their own task first. Bash writes are not covered; dwitbuk's `outside-run` catches
 them. A task claimed by someone else (`claim`) is not this machine's to advance.
+
+**An operation run as plain Bash reaches no record.** A second PreToolUse hook reads each Bash command while a run is in
+progress; one that reads as an operation outside the repository — `git push`, `npm run deploy`, `npm publish`, `wrangler
+deploy`/`publish`/`… delete`, `terraform apply`, `kubectl apply`, `gh release create`, `fly`/`vercel`/`netlify`/`firebase
+deploy` — gets one line of context: `record it: chongdae did TASK --why "…" -- <command>`. Never a refusal, silent with no
+run and in a worker session (`AGENT_WORKER=1`), silent on `chongdae.py did` itself. hunsu.json
+`settings.chongdae.ops-patterns` (a list of regular expressions searched in the command) replaces the list; `[]` silences it.
+guin-site run-20261015-054352-a0ec ran `npm run deploy … | grep …; git push 2>&1 | tail -1` — both exits lost — and wrote
+the push into ATPROTO.md as prose.
 
 **What a project does by its own procedure** is not a run's. A site's posts are its author's, written by the project's
 own guide, and the pages built from them follow; a run around each would put the author's writing in the builders'
@@ -587,7 +682,10 @@ plan question, so the task waits — the hands do not move — until a human dec
 (`--by` or `--delegated`). An `after` role sees the result (touched files, the builder's report) once the checks and
 the verifier are through, before the gate; its findings go to the record and to `report` as `stage-finding`, never a
 verdict. Each answer is kept under the task's `stages[role]` with who gave it; a role with no provider is a non-claim.
-hacheong's 시비 (`quibble`) and 초짜 (`newbie`) are the first of these.
+hacheong's 시비 (`quibble`) and 초짜 (`newbie`) are the first of these. A contract reader added as a task of its own (`add q
+--role quibble --closes Q-…`) is sent its role as the `stage`, no checks or tests of its own, and the open builds' checks that
+close the same sections labelled as planned (`checks-are: planned: the checks of …`) — or `checks-are: not named yet` when none is
+added: guin-site's cache-quibble was sent `stage: build` and its own `checks: []`, and half its findings were "checks가 []라서…".
 
 A third kind: **`native:plugin:role`** — the host's own subagent does the work, dispatched by the session. chongdae
 cannot call a host's subagent tool (it has no brain and no host API), so it writes the same request, then stops with a
@@ -610,8 +708,23 @@ After a task's checks pass and before its gate, the verifier gets the contract, 
 changed after the builder answered, told apart), what the record paths left out of `touched` (`excluded.record-paths`:
 the environment — hunsu's manifest, lock and judgments — and records such as `mangsang/`, which are never a task's work
 by rule; a task whose whole work is `hunsu lock` has `touched: []`, and without this the verifier read the changed tree as
-an undeclared edit) and the builder's report, and answers `dwitbuk/review@1`: accept, or
-reject with findings quoted from both sides. Reject is the failed path: `retry`. After a reject the next verification
+an undeclared edit) and the builder's report, and what chongdae itself ran on the tree and saw (`checked`: `{command, exit,
+tail, at, changed_since, source}` — the session's `--checked` and the task's own checks chongdae ran to decide it; guin-site
+run-20261015-054352-a0ec's verifier was told nothing of the suite chongdae had just run green), and answers `dwitbuk/review@1`: accept, or
+reject with findings quoted from both sides. Reject is the failed path: `retry`. Before acting on a reject chongdae holds each
+finding to its quotes: a finding whose `where` names a field of the request and whose record quote (each backticked span, or
+the whole) is not in the request's own words — or is only in another hand's (`tests_non_claims`, `checked`) that `where` does
+not name — and a `claim-unverified` about a check `checked` shows passing with nothing changed since (unless it quotes the
+contract sentence the check may not decide), are overruled: printed, kept on the task (`overruled`: each finding and why) and
+said as a non-claim. A reject with nothing left standing goes on as accepted (a delegated `after-verifier` gate counts it so);
+otherwise only the standing findings are resent, each printed whole. guin-site: the verifier quoted "`built.non-claims` says: `I
+did not run the whole suite.`", a sentence only `tests_non_claims.cache-tests[8]` held, and the build was resent for it. What the
+verifier's own runner dropped as unfounded (`unfounded` in its answer) is printed and shown. What the verifier says it did not
+do — the verdict's `non-claims`, such as dwitbuk's "accepted without reading the tree: …" — is printed, kept on the task as
+`(verifier) …` (a resend takes it off with the review it came with), and is an observation in `report`
+(`verifier-non-claim`), not a charge. A resent build's `touched` for the verifier is every attempt's: a file an earlier attempt
+of the builder changed counts while it still differs from the task's start (guin-site run-20261015-054352-a0ec's second
+verify request said `touched: []`, the builder's files under `touched_since`). After a reject the next verification
 is a re-verification: the request carries `recheck` — the last reject's findings and the files changed since that verdict
 (the tree is kept at each verdict) — and the verifier checks those, not the whole slice again. A task's `tests` are the contract's
 own checks, as they are in the tree when the task starts (committed or not — kept then among the run's work files): a
@@ -625,11 +738,18 @@ lock's `reviewer` role in the project (a command, like `coherence`: `"reviewer":
 "{plugin:dwitbuk}/dwitbuk.py", "review", "--target", "."]` in hunsu.json `roles`). Whatever it wrote there is part of
 the closing record and goes into the close commit with it; what it said last is kept in state.json `reviewed`. No
 `reviewer` in the lock: a non-claim on the run. A reviewer that fails: a non-claim too — the run still ends. The
-reviewer places no stop; what its findings need from a person is the reviewer's own business (dwitbuk says so at the
-next session start).
+reviewer places no person's stop; what its findings need from a person is the reviewer's own business (dwitbuk says so at the
+next session start). At a session run's `close` it runs before the close is final, and an open objection the tree can answer
+stops the close for the session (above, `/chongdae:close`).
 
-`run` waits for providers up to four minutes per call (`CHONGDAE_WAIT` seconds, default 240 — one budget for the call,
-however many providers it starts), then stops with `still working — run again`: well under a host's 10-minute tool limit
+`run` takes up to four minutes per call (`CHONGDAE_WAIT` seconds, default 240 — one budget for the whole call, from its start:
+chongdae's own checks, the verifier and however many providers it starts all count), then stops with `still working: …` (exit
+4, not 2): well under a host's 10-minute tool limit. The task's checks run as a tracked process of their own
+(`<task>.checks.pending.json` in `local/`), like a provider: past the budget the call hands back, and the next `run` waits for
+the same run — never killed mid-way, never started twice — and reads what it found (run again only if the tree changed after
+they finished). Checks that passed on this tree are not run again when a later call resumes at the verifier. guin-site, 10-15:
+one call ran the suite (~4.5 minutes), the verifier (~1 minute), resent the build and waited 240 s more — 8m35s; and a backgrounded
+`run` said "still working" on a `decision:` line, the wrapper around it exited 0, and it read as done
 (guin-site, 2026-10-12: at eight minutes `run` came close enough that the session wrapped it in polling loops of its own); the pending record lets the next `run` resume
 waiting for the same work, so a session whose tool calls have their own timeout never has to background `run` — a
 backgrounded `run` outlives the session that started it only on paper; the provider is that session's child and dies

@@ -65,6 +65,10 @@ class Project:
 
 
 
+# a test that closes a session run on work it never commits says so: `close` stops on a finished task's uncommitted work
+UNCOMMITTED = ("--anyway", "--why", "a test project: its work is never committed")
+
+
 class Skip(Exception):
     """Raised by a test that cannot run on this host; the runner reports it as SKIP, never as PASS."""
 
@@ -656,7 +660,7 @@ def test_a_session_task_can_be_handed_to_the_locked_implementer():
         assert run("init", "--session", "--goal", "g", "--from", "plan/PLAN.md", "--target", pj.dir)[0] == 0
         assert run("add", "mine", "--brief", "the session does this", "--target", pj.dir)[0] == 0
         assert run("add", "theirs", "--role", "implementer", "--brief", "a fresh process does this", "--closes", "Q-add", "--check", sys.executable + " -c 'raise SystemExit(0)'", "--target", pj.dir)[0] == 0
-        code, out = run("run", "--target", pj.dir)
+        code, out = run("run", "mine", "--target", pj.dir)   # nothing of its own in the tree: done on the session's word by name
         assert code == 0, out
         tasks = pj.state()["tasks"]
         assert tasks["mine"]["status"] == "done" and tasks["mine"]["performed_by"]["provider"] == "session"
@@ -1226,7 +1230,7 @@ def test_the_record_carries_what_replays_a_run_and_nothing_of_this_machine():
             assert run("run", "--target", pj.dir)[0] == 0
             asked = open(os.path.join(rd, "asked", "T2.json"), encoding="utf-8").read()
             assert json.loads(asked)["task"] == "T2" and pj.dir not in asked and home not in asked, asked
-            assert run("close", "--target", pj.dir)[0] == 0
+            assert run("close", *UNCOMMITTED, "--target", pj.dir)[0] == 0
             tracked = subprocess.run(["git", "ls-files"], cwd=pj.dir, capture_output=True, text=True).stdout.split()
             assert any(t.endswith("asked/T2.json") for t in tracked) and not any("/local/" in t or t.endswith(".request.json") for t in tracked), tracked
             # the run's root is the record and nothing else: no work file beside it, the work under local/
@@ -1301,7 +1305,7 @@ def test_added_tasks_run_in_the_order_added_and_a_providers_task_starts_when_spa
         assert st["z-tests"]["status"] == "done" and "tests/test_x.py" in st["z-tests"]["touched"]
         assert st["a-build"]["status"] == "done" and "tests/test_x.py" not in (st["a-build"]["touched"] or []) and "rejected" not in st["a-build"], st["a-build"]
         # recheck leaves a record
-        assert run("close", "--target", pj.dir)[0] == 0
+        assert run("close", *UNCOMMITTED, "--target", pj.dir)[0] == 0
         code, out = run("recheck", "--target", pj.dir)
         assert code == 0 and "still green  %s/a-build" % os.path.basename(chongdae.run_dir(pj.dir)) in out and "recheck: 1 green" in out, out
         assert not os.path.exists(os.path.join(pj.dir, ".chongdae", "rechecks")), "the verdict is printed and returned; nothing is filed"
@@ -1321,7 +1325,7 @@ def test_run_waits_a_bounded_time_then_hands_back_and_the_next_run_resumes():
         old = chongdae.WAIT_BUDGET; chongdae.WAIT_BUDGET = 1
         try:
             code, out = run("run", "--target", pj.dir)
-            assert code == chongdae.DECISION and "T1: the provider is still working (pid" in out and "again keeps waiting" in out, out
+            assert code == chongdae.WAITING and out.startswith("still working: T1: the provider is still working (pid") and "again keeps waiting" in out, out
             d = chongdae.run_dir(pj.dir)
             assert os.path.exists(os.path.join(d, "local", "T1.pending.json")) and "response" not in pj.state()["tasks"]["T1"]
             chongdae.WAIT_BUDGET = 30
@@ -1368,7 +1372,7 @@ def test_a_retry_keeps_a_before_answer_whose_contract_did_not_change_and_the_bud
         old = chongdae.WAIT_BUDGET; chongdae.WAIT_BUDGET = 3
         try:
             t0 = time.time(); code, out = run("run", "--target", pj.dir); dt = time.time() - t0
-            assert code == chongdae.DECISION and "still working" in out and dt < 6, (out, dt)   # quibble took ~2s, the builder then hit the call's remaining budget — not a fresh 3s of its own
+            assert code == chongdae.WAITING and "still working" in out and dt < 6, (out, dt)   # quibble took ~2s, the builder then hit the call's remaining budget — not a fresh 3s of its own
         finally:
             chongdae.WAIT_BUDGET = old
 
@@ -1423,7 +1427,7 @@ def test_session_run_tasks_added_as_the_work_goes_claims_and_the_write_hook():
             code, out = run("drop", "T4", "--why", "the check named a pytest flag; unittest here", "--by", "alice", "--target", pj.dir)
             assert code == 0 and pj.state()["tasks"]["T4"]["status"] == "dropped" and pj.state()["tasks"]["T4"]["dropped"]["by"] == "alice"
             assert "t4-work.py" in pj.state()["tasks"]["T4"]["touched"], "what changed in a dropped task's window stays attributed to it"
-            code, out = run("close", "--target", pj.dir)
+            code, out = run("close", *UNCOMMITTED, "--target", pj.dir)
             assert code == 0 and "2 task(s) done, 1 open (T3), 1 dropped (T4)" in out, out
             assert pj.state()["status"] == "complete" and "open" not in pj.state()   # open tasks are the tasks' statuses; `report`/`status` recount them
             assert run("close", "--target", pj.dir)[0] != 0
@@ -1460,7 +1464,7 @@ def test_report_emits_findings_typed_for_a_reviewer():
             run("run", "--target", pj.dir)
             run("confirm", "T2", "--delegated", "late", "--target", pj.dir)
             run("run", "--target", pj.dir)
-            run("close", "--target", pj.dir)
+            run("close", *UNCOMMITTED, "--target", pj.dir)
         finally:
             os.environ.pop("CHONGDAE_USER", None)
         code, out = run("report", "--since", base, "--target", pj.dir)
@@ -1674,7 +1678,7 @@ def test_the_lock_says_who_does_a_task_and_the_session_says_why_when_it_does_it_
         assert run("add", "own2", "--check", sys.executable + " -c pass", "--role", "session", "--why", "a one-line fix", "--by", "kim", "--target", pj.dir)[0] == 0
         defs = {tid: ts["def"]["role"] for tid, ts in pj.state()["tasks"].items()}
         assert defs == {"plan": "session", "model": "session", "tests": "nitpick", "build": "implementer", "own": "session", "own2": "session"}, defs
-        assert run("run", "--target", pj.dir)[0] == 0
+        assert run("run", "plan", "model", "--target", pj.dir)[0] == 0
         st = pj.state()["tasks"]
         assert st["tests"]["performed_by"]["provider"] == "command" and st["build"]["performed_by"]["provider"] == "command" and st["own"]["performed_by"]["provider"] == "session"
         assert st["own2"]["self-performed"]["by"] == "kim" and st["own"]["self-performed"]["instead-of"] == "implementer"
@@ -1729,7 +1733,7 @@ def test_the_runner_places_the_reviewer_when_a_run_ends():
         write(os.path.join(pj.dir, "hunsu.lock.json"), {"roles": {"reviewer": [sys.executable, reviewer]}})
         assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
         assert run("add", "T1", "--brief", "b", "--target", pj.dir)[0] == 0
-        assert run("run", "--target", pj.dir)[0] == 0
+        assert run("run", "T1", "--target", pj.dir)[0] == 0
         code, out = run("close", "--target", pj.dir)
         assert code == 0 and "reviewer: review-1: 2 objection(s) — wrote reviews/review-1.json" in out, out
         st = pj.state()
@@ -1803,7 +1807,7 @@ def test_show_tells_what_happened_in_a_run_with_its_times_and_nothing_cut():
             assert run("add", "D", "--brief", "superseded piece", "--target", pj.dir)[0] == 0
             assert run("drop", "D", "--why", "superseded by B", "--target", pj.dir)[0] == 0
             assert run("add", "O", "--brief", "left for later", "--target", pj.dir)[0] == 0
-            assert run("close", "--target", pj.dir)[0] == 0
+            assert run("close", *UNCOMMITTED, "--target", pj.dir)[0] == 0
         finally:
             os.environ.pop("CHONGDAE_USER", None)
         st = pj.state()
@@ -1864,7 +1868,7 @@ def test_a_run_reviewed_before_since_does_not_claim_a_change_made_after_it():
             write(os.path.join(pj.dir, "a.py"), "x = 1\n")
             assert run("run", "--target", pj.dir)[0] == 0
             subprocess.run(["git", "commit", "-qam", "the old run's work"], cwd=pj.dir, check=True)
-            assert run("close", "--target", pj.dir)[0] == 0
+            assert run("close", *UNCOMMITTED, "--target", pj.dir)[0] == 0
             reviewed = subprocess.run(["git", "rev-parse", "HEAD"], cwd=pj.dir, capture_output=True, text=True).stdout.strip()   # the last review covered up to here
             write(os.path.join(pj.dir, "a.py"), "x = 2\n")   # outside any run, after the review
             subprocess.run(["git", "commit", "-qam", "a change no run made"], cwd=pj.dir, check=True)
@@ -1873,7 +1877,7 @@ def test_a_run_reviewed_before_since_does_not_claim_a_change_made_after_it():
             assert run("add", "T2", "--brief", "b", "--target", pj.dir)[0] == 0
             write(os.path.join(pj.dir, "b.py"), "y = 1\n")
             assert run("run", "--target", pj.dir)[0] == 0
-            assert run("close", "--target", pj.dir)[0] == 0
+            assert run("close", *UNCOMMITTED, "--target", pj.dir)[0] == 0
         finally:
             os.environ.pop("CHONGDAE_USER", None)
         doc = json.loads(run("report", "--since", reviewed, "--target", pj.dir)[1])
@@ -2226,7 +2230,7 @@ def test_two_open_session_tasks_the_first_to_finish_does_not_silently_own_the_ot
             assert run("show", "--path", "nothing.txt", "--brief", "--target", pj.dir) == (0, ""), "nothing on record: nothing printed"
             code, out = run("show", "--brief", "--target", pj.dir)
             assert code == 0 and out == "1 run (1 this week), none closed yet\n", out
-            assert run("close", "--target", pj.dir)[0] == 0
+            assert run("close", *UNCOMMITTED, "--target", pj.dir)[0] == 0
             code, out = run("show", "--brief", "--target", pj.dir)
             assert code == 0 and out.startswith("1 run (1 this week), last closed: escape (") and len(out.strip().splitlines()) == 1, out
             assert run("show", "--run", os.path.basename(chongdae.run_dir(pj.dir)), "--brief", "--target", pj.dir)[0] != 0
@@ -2308,7 +2312,7 @@ def test_an_omitted_by_is_the_session_and_readers_say_so():
         assert run("drop", "d", "--why", "superseded by c", "--target", pj.dir)[0] == 0
         assert run("add", "g", "--brief", "gated", "--gate", "human", "--target", pj.dir)[0] == 0
         assert run("add", "blk", "--check", sys.executable + " -c pass", "--target", pj.dir)[0] == 0
-        code, out = run("run", "--target", pj.dir)
+        code, out = run("run", "c", "--target", pj.dir)
         assert code == chongdae.DECISION and "human: review" in out, out
         assert run("confirm", "g", "--target", pj.dir)[0] != 0, "a gate still needs a person or a delegation"
         assert run("confirm", "g", "--by", "kim", "--target", pj.dir)[0] == 0
@@ -3028,6 +3032,533 @@ def test_c6_changing_the_backend_changes_no_record():
         service = lease_record_after(m)
     assert shape(local) == shape(service), (shape(local), shape(service))
     assert sorted(local["lease"]["holder"]) == ["agent", "machine"], local["lease"]   # a holder is a holder on every backend; the host's session id stays in local/
+
+
+
+def test_a_verifier_finding_whose_quote_is_not_where_it_says_is_overruled_and_the_work_is_not_resent():
+    """guin-site run-20261015-054352-a0ec: chongdae ran cache-build's suite green, then sent the verifier a request that said
+    nothing of it; the verifier rejected the build, quoting "`built.non-claims` says: `I did not run the whole suite.`" — a
+    sentence only the tests writer's tests_non_claims held — and the build was resent. chongdae's own check runs go to the
+    verifier as `checked`; a finding whose quote is not in the field it names, or that calls unverified a check chongdae saw
+    pass, is overruled — said and recorded — and the slice goes on as accepted. A finding that stands is printed whole when
+    the work goes back."""
+    request = {"built": {"summary": "the full check passes", "verified": [{"check": "python3 tests/run.py --all", "exit": 0}],
+                         "non-claims": ["I didn't run the TypeScript type-check"]},
+               "tests_non_claims": {"cache-tests": ["a", "b", "I did not run the whole suite."]}, "contract": {"Q-cache": "## Q-cache\n\nkeys carry the `version` id."},
+               "checked": [{"command": "python3 tests/run.py --all", "exit": 0, "tail": ["ok"], "changed_since": []}], "target": "."}
+    said = {"kind": "claim-unverified", "where": "built.verified[0] and built.non-claims",
+            "record_quote": "`built.verified` claims `python3 tests/run.py --all` exited 0, while `built.non-claims` says: `I did not run the whole suite.`",
+            "tree_quote": "x", "why": "the report contradicts itself"}
+    why = chongdae.unfounded(dict(said, kind="record-vs-tree"), request)
+    assert why and "I did not run the whole suite." in why and "tests_non_claims.cache-tests[2]" in why and "tests writer" in why, why
+    why = chongdae.unfounded(said, request)
+    assert why and "chongdae itself ran it" in why and "python3 tests/run.py --all" in why, why
+    ran_later = dict(request, checked=[dict(request["checked"][0], changed_since=["src/a.ts"])])
+    assert "tests_non_claims" in chongdae.unfounded(said, ran_later), "changed since it ran: the run is no ground — the quote still is"
+    grounded = {"kind": "plan-vs-code", "where": "contract.Q-cache", "record_quote": "keys carry the `version` id.", "tree_quote": "k", "why": "w"}
+    assert chongdae.unfounded(grounded, request) is None
+    assert chongdae.unfounded({"kind": "claim-unverified", "where": "built.verified[0]", "record_quote": "`python3 tests/run.py --all` decides `keys carry the`",
+                               "tree_quote": "t", "why": "w"}, request) is None, "a claim-unverified quoting the contract sentence the check may not decide stands"
+    assert chongdae.unfounded({"kind": "plan-vs-code", "where": "src/read.ts:12", "record_quote": "anything", "tree_quote": "t", "why": "w"}, request) is None
+    with Project() as pj:
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "base"], cwd=pj.dir)
+        writer = os.path.join(pj.dir, "writer.py")
+        write(writer, "import json, os, sys\nreq = json.load(open(sys.argv[1]))\nopen(os.path.join(req['target'], 'test_a.py'), 'w').write('# t\\n')\n"
+                      "json.dump({'status': 'done', 'summary': 'w', 'non-claims': ['I did not run the whole suite.']}, open(sys.argv[2], 'w'))\n")
+        check = sys.executable + " -c 'print(\"all groups passed\")'"
+        built = {"status": "done", "summary": "built; the full check passes", "verified": [{"check": check, "exit": 0}], "decisions": [], "non-claims": ["no type-check"]}
+        finding = {"kind": "claim-unverified", "where": "built.verified[0] and built.non-claims", "tree_quote": "tests/run.py", "why": "contradicts itself",
+                   "record_quote": "`built.non-claims` says: `I did not run the whole suite.`"}
+        eyes = os.path.join(pj.dir, "eyes.py")
+        write(eyes, "import json, shutil, sys\nshutil.copy(sys.argv[1], sys.argv[1] + '.seen')\n"
+                    "json.dump({'artifact-type': 'dwitbuk/review@1', 'verdict': 'reject', 'findings': [%r]}, open(sys.argv[2], 'w'))\n" % finding)
+        write(os.path.join(pj.dir, "hunsu.lock.json"), {"roles": {"nitpick": [sys.executable, writer, "{request}", "{response}"],
+                                                                  "implementer": pj.fake_provider(built), "verifier": [sys.executable, eyes, "{request}", "{response}"]}})
+        assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
+        assert run("add", "tests", "--role", "nitpick", "--tests", "test_a.py", "--target", pj.dir)[0] == 0
+        assert run("add", "build", "--role", "implementer", "--tests", "test_a.py", "--check", check, "--target", pj.dir)[0] == 0
+        code, out = run("run", "--target", pj.dir)
+        assert code == 0 and "unfounded, overruled" in out and "going on as accepted" in out and "sent back" not in out, out
+        req = json.load(open(glob.glob(os.path.join(chongdae.run_dir(pj.dir), "local", "build.verify*request*.seen"))[0]))
+        own = [c for c in req["checked"] if c["source"].startswith("the task's checks")]
+        assert own and own[0]["command"] == chongdae.shlex.join(chongdae.shlex.split(check)) and own[0]["exit"] == 0 and own[0]["tail"] == ["all groups passed"] \
+            and own[0]["changed_since"] == [] and own[0]["at"], req["checked"]
+        ts = pj.state()["tasks"]["build"]
+        assert ts["status"] == "done" and not ts.get("attempts") and "rejected" not in ts, ts
+        assert ts["overruled"]["findings"][0]["finding"] == finding and "tests_non_claims.tests[0]" in ts["overruled"]["findings"][0]["why"], ts["overruled"]
+        assert any("chongdae overruled the verifier's claim-unverified finding" in n for n in ts["non-claims"]), ts["non-claims"]
+        assert chongdae.verdict_of(ts) == "accept"
+        shown = run("show", "--target", pj.dir)[1]
+        assert "every one overruled — went on as accepted" in shown and "overruled by chongdae: its record quote" in shown, shown
+    with Project() as pj:   # a finding that stands goes back to the hands, and what goes back is said whole
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "base"], cwd=pj.dir)
+        write(os.path.join(pj.dir, "PLAN.md"), "# p\n\n## Q1 count\n\nids of the remaining memos do not change.\n")
+        write(os.path.join(pj.dir, "hunsu.lock.json"), {"roles": {"implementer": pj.fake_provider(RESPONSE_DONE), "verifier": pj.fake_provider(REVIEW_REJECT, "verifier")}})
+        assert run("init", "--session", "--goal", "g", "--from", "PLAN.md", "--target", pj.dir)[0] == 0
+        assert run("add", "b", "--role", "implementer", "--closes", "Q1", "--check", sys.executable + " -c pass", "--target", pj.dir)[0] == 0
+        code, out = run("run", "--target", pj.dir)
+        said = out[:out.index("sent back to the provider automatically")]
+        assert "the verifier rejected the slice:" in said and "plan-vs-code @ plan Q10 vs memo.py:clear: clear resets the counter" in said \
+            and "record: “ids of the remaining memos do not change”" in said, out
+
+
+def test_the_calls_budget_covers_chongdaes_own_checks_and_the_next_call_resumes_from_the_stage_it_stopped_at():
+    """guin-site, 10-15: one `run` call took 8m35s — accept, chongdae's own suite (~4.5 min), the verifier (~1 min), a resend and
+    240 s more — against the host's 10-minute tool limit; the budget counted only provider waits. The checks now run as a
+    tracked process of their own inside the call's budget: past it the call hands back (`still working:`, exit WAITING),
+    the next call waits for the same run, and checks that passed on this tree are not run again when a later call resumes
+    at the verifier."""
+    with Project() as pj:
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "base"], cwd=pj.dir)
+        outside = tempfile.mkdtemp(prefix="chongdae-count-")
+        count = os.path.join(outside, "ran")
+        write(os.path.join(pj.dir, "check.py"), "import sys, time\nopen(sys.argv[1], 'a').write('x')\ntime.sleep(float(sys.argv[2]))\nprint('suite ok')\n")
+        subprocess.run(["git", "add", "check.py"], cwd=pj.dir)
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "check"], cwd=pj.dir)
+        slow_eyes = os.path.join(outside, "eyes.py")
+        write(slow_eyes, "import json, sys, time\ntime.sleep(3)\njson.dump({'artifact-type': 'dwitbuk/review@1', 'verdict': 'accept', 'findings': []}, open(sys.argv[2], 'w'))\n")
+        write(os.path.join(pj.dir, "hunsu.lock.json"), {"roles": {"verifier": [sys.executable, slow_eyes, "{request}", "{response}"]}})
+        assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
+        assert run("add", "T1", "--role", "session", "--why", "small", "--check", "%s check.py %s 3" % (sys.executable, count), "--target", pj.dir)[0] == 0
+        old = chongdae.WAIT_BUDGET; chongdae.WAIT_BUDGET = 1
+        try:
+            t0 = time.time(); code, out = run("run", "--target", pj.dir); dt = time.time() - t0
+            assert code == chongdae.WAITING and out.startswith("still working: T1 (its checks): chongdae's own run of its checks is still going") and dt < 2.5, (out, dt)
+            d = chongdae.run_dir(pj.dir)
+            assert os.path.exists(os.path.join(d, "local", "T1.checks.pending.json"))
+            # the next call waits for the same run — never a second one — then the verifier, which outlasts the budget
+            t0 = time.time(); code, out = run("run", "--target", pj.dir); dt = time.time() - t0
+            assert code == chongdae.WAITING and "T1 (verify): the provider is still working" in out and dt < 4.5, (out, dt)
+            assert io.open(count).read() == "x", "the checks ran once"
+            ts = pj.state()["tasks"]["T1"]
+            assert ts["checks-passed"]["ran"][0]["tail"] == ["suite ok"] and "checks-tree" not in chongdae.load(os.path.join(d, "tasks", "T1.json")), ts
+            chongdae.WAIT_BUDGET = 30
+            code, out = run("run", "--target", pj.dir)   # resumes at the verifier: the checks passed on this very tree
+            assert code == 0 and pj.state()["tasks"]["T1"]["status"] == "done" and io.open(count).read() == "x", (out, io.open(count).read())
+        finally:
+            chongdae.WAIT_BUDGET = old
+            shutil.rmtree(outside, ignore_errors=True)
+    with Project() as pj:   # the process's exit code itself: still working is not a stop and not a finish
+        slow = os.path.join(pj.dir, "slow.py")
+        write(slow, "import json, sys, time\ntime.sleep(3)\njson.dump(%r, open(sys.argv[2], 'w'))\n" % RESPONSE_DONE)
+        plan = {"artifact-type": "chongdae/plan@1", "goal": "g", "providers": {"builder": [sys.executable, slow, "{request}", "{response}"]},
+                "tasks": [{"id": "T1", "role": "builder", "checks": [[sys.executable, "-c", "pass"]]}]}
+        write(os.path.join(pj.dir, "plan.json"), plan)
+        assert run("init", "--plan", "plan.json", "--target", pj.dir)[0] == 0
+        done = subprocess.run([sys.executable, os.path.join(HERE, "chongdae.py"), "run", "--target", pj.dir], capture_output=True, text=True,
+                              env=dict(os.environ, CHONGDAE_WAIT="1"))
+        assert done.returncode == chongdae.WAITING == 4 and done.stdout.startswith("still working: "), (done.returncode, done.stdout)
+        assert chongdae.WAITING not in (0, chongdae.DECISION, chongdae.DISPATCH)
+        time.sleep(3)
+
+
+def test_a_quibble_task_is_sent_a_review_shaped_request_not_its_own_empty_checks():
+    """guin-site run-20261015-054352-a0ec: cache-quibble, a task of its own with role quibble, was sent `stage: build` and its
+    own `checks: []`; 4 of its 8 findings were "unchecked: checks가 []라서…" — about the request. A contract reader's task
+    is sent its role as the stage, no checks of its own, and the planned builds' checks labelled as planned (or that none is
+    named yet)."""
+    with Project() as pj:
+        write(os.path.join(pj.dir, "plan", "PLAN.md"), "# p\n\n## Q-a\n\nthe count is printed.\n")
+        sibi = os.path.join(pj.dir, "sibi.py")
+        write(sibi, "import json, shutil, sys\nshutil.copy(sys.argv[1], sys.argv[1] + '.seen')\n"
+                    "json.dump({'status': 'done', 'summary': 's', 'findings': [], 'non-claims': []}, open(sys.argv[2], 'w'))\n")
+        write(os.path.join(pj.dir, "hunsu.lock.json"), {"roles": {"quibble": [sys.executable, sibi, "{request}", "{response}"]}})
+        assert run("init", "--session", "--goal", "g", "--from", "plan/PLAN.md", "--target", pj.dir)[0] == 0
+        assert run("add", "q1", "--role", "quibble", "--closes", "Q-a", "--brief", "read the contract", "--target", pj.dir)[0] == 0
+        assert run("run", "--target", pj.dir)[0] == 0
+        req = json.load(open(os.path.join(chongdae.run_dir(pj.dir), "local", "q1.request.json.seen")))
+        assert req["stage"] == "quibble" and req["role"] == "quibble" and "checks" not in req and "tests" not in req, req
+        assert req["checks-are"].startswith("not named yet") and req["contract"]["Q-a"].startswith("## Q-a"), req
+        assert run("add", "b", "--role", "session", "--why", "the test", "--closes", "Q-a", "--check", sys.executable + " -c pass", "--target", pj.dir)[0] == 0
+        assert run("add", "q2", "--role", "quibble", "--closes", "Q-a", "--target", pj.dir)[0] == 0
+        run("run", "--target", pj.dir)
+        req = json.load(open(os.path.join(chongdae.run_dir(pj.dir), "local", "q2.request.json.seen")))
+        assert req["stage"] == "quibble" and req["checks"] == [[sys.executable, "-c", "pass"]] and req["checks-are"].startswith("planned: the checks of b"), req
+
+
+def test_a_record_file_is_written_only_when_what_it_says_changed():
+    """guin-site d281c8a: a `did` on one task rewrote all seven task files, and six done or dropped tasks nobody had judged
+    again read `written_by` 1.19.0 -> 1.20.0 — false provenance and noise in the notary commit."""
+    with Project() as pj:
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "base"], cwd=pj.dir)
+        assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
+        assert run("add", "old", "--brief", "b", "--target", pj.dir)[0] == 0
+        assert run("drop", "old", "--why", "superseded", "--target", pj.dir)[0] == 0
+        assert run("add", "ops", "--brief", "b", "--target", pj.dir)[0] == 0
+        d = chongdae.run_dir(pj.dir)
+        f = os.path.join(d, "tasks", "old.json")
+        rec = chongdae.load(f); rec["written_by"] = "chongdae 1.19.0"; write(f, rec)
+        subprocess.run(["git", "add", "-A", "--", ".chongdae"], cwd=pj.dir)
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "as an older version wrote it"], cwd=pj.dir)
+        assert run("did", "ops", "--target", pj.dir, "--", sys.executable, "-c", "pass")[0] == 0
+        assert chongdae.load(f)["written_by"] == "chongdae 1.19.0", "an unchanged record keeps the version that wrote it"
+        names = subprocess.run(["git", "show", "--name-only", "--format=", "HEAD"], cwd=pj.dir, capture_output=True, text=True).stdout.split()
+        assert [n for n in names if "/tasks/" in n] == [os.path.relpath(os.path.join(d, "tasks", "ops.json"), pj.dir)], names
+        assert chongdae.load(os.path.join(d, "tasks", "ops.json"))["written_by"] == chongdae.engine()
+
+
+def test_did_keeps_a_script_outside_the_project_a_sensible_subject_a_meaningful_tail_and_a_batch_as_one_judgment():
+    """guin-site run-20261012-052255-3556: `did cleanup-ops -- python3 /private/tmp/…/scratchpad/empty_r2.py` was recorded with only
+    the machine path (the script is gone), its commit subject cut at 120 characters mid-name ("…/scratchpad/empty"), the
+    deletions' tails kept "⛅️ wrangler 4.143.1 (update available 4.149.0)" and rules of ─, and R2's emptying and deletion — one
+    decision — were separate commits. The record now keeps the script (sha256, its text when small) behind a marker, the
+    subject keeps the head and the name, the tail drops banners and rules, and `--each FILE` records several as one."""
+    assert chongdae.short_command("python3 " + "/x" * 80 + "/empty_r2.py", 60).endswith("… empty_r2.py") and len(chongdae.short_command("a " * 200, 60)) <= 60
+    assert chongdae.kept_tail("⛅️ wrangler 4.143.1 (update available 4.149.0)\n" + "─" * 40 + "\n\nDeleted bucket guin\n" + "═" * 10) == ["Deleted bucket guin"]
+    with Project() as pj, a_session():
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "base"], cwd=pj.dir)
+        scratch = tempfile.mkdtemp(prefix="chongdae-scratch-")
+        script = os.path.join(scratch, "a" * 30, "b" * 30, "empty_r2.py")
+        body = "print('⛅️ wrangler 4.143.1 (update available 4.149.0)')\nprint('─' * 30)\nprint('before: 41 objects')\nprint('deleted 41; after: 0 objects')\nprint('─' * 30)\n"
+        write(script, body)
+        try:
+            assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
+            assert run("add", "ops", "--brief", "retire R2", "--target", pj.dir)[0] == 0
+            code, out = run("did", "ops", "--why", "empty the bucket", "--target", pj.dir, "--", sys.executable, script)
+            assert code == 0 and "empty_r2.py is outside the project: sha256" in out and "its content kept in the record" in out, out
+            rec = pj.state()["tasks"]["ops"]["did"][0]
+            assert rec["command"] == chongdae.shlex.join([sys.executable, "<outside:empty_r2.py>"]) and scratch not in json.dumps(rec), rec
+            import hashlib
+            o = rec["outside"][0]
+            assert o["arg"] == 1 and o["sha256"] == hashlib.sha256(body.encode("utf-8")).hexdigest() and o["content"] == body and o["size"] == len(body.encode("utf-8")), o
+            assert rec["tail"] == ["before: 41 objects", "deleted 41; after: 0 objects"], rec["tail"]
+            subject = subprocess.run(["git", "log", "-1", "--format=%s"], cwd=pj.dir, capture_output=True, text=True).stdout
+            assert "'<outside:empty_r2.py>' -> exit 0" in subject, subject
+            f = [x for x in json.loads(run("report", "--target", pj.dir)[1])["findings"] if x["kind"] == "did"][0]
+            assert "it ran a file outside the project, empty_r2.py (sha256" in f["text"], f
+            assert "empty_r2.py is outside the project" in run("show", "--target", pj.dir)[1]
+            # several operations, one judgment: one commit, each its own exit and tail; a failure stops the rest
+            each = os.path.join(scratch, "ops.txt")
+            write(each, "# R2, then D1\n%s -c \"print('emptied')\"\n\n%s -c \"import sys; print('no such db'); sys.exit(2)\"\n%s -c \"print('never')\"\n"
+                  % (sys.executable, sys.executable, sys.executable))
+            before = subprocess.run(["git", "rev-list", "--count", "HEAD"], cwd=pj.dir, capture_output=True, text=True).stdout.strip()
+            code, out = run("did", "ops", "--each", each, "--why", "retire the old stores", "--target", pj.dir)
+            assert code == 1 and "| emptied" in out and "| no such db" in out and "not run (an earlier command exited non-zero)" in out and "never" not in out.split("not run")[0], out
+            after = subprocess.run(["git", "rev-list", "--count", "HEAD"], cwd=pj.dir, capture_output=True, text=True).stdout.strip()
+            assert int(after) == int(before) + 1, (before, after)
+            did = pj.state()["tasks"]["ops"]["did"]
+            assert [(r["exit"], r["batch"]) for r in did[1:]] == [(0, {"of": 3, "n": 1}), (2, {"of": 3, "n": 2})], did
+            subject = subprocess.run(["git", "log", "-1", "--format=%s"], cwd=pj.dir, capture_output=True, text=True).stdout
+            assert subject.startswith(os.path.basename(chongdae.run_dir(pj.dir)) + ": did ops: 2 operation(s) (stopped at 2 of 3)"), subject
+            assert run("did", "ops", "--each", each, "--target", pj.dir, "--", "echo")[0] != 0, "a command or a file, not both"
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
+
+
+def test_done_is_committed_when_it_is_made():
+    """guin-site run-20261015-054352-a0ec: five tasks became done in `run` calls that committed nothing; their results landed
+    in a commit titled "accept decisions on cache-build (delegated)", 12 files. Done is a judgment, notarized when made."""
+    with Project() as pj:
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "base"], cwd=pj.dir)
+        assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
+        assert run("add", "contract", "--brief", "write the contract", "--target", pj.dir)[0] == 0
+        write(os.path.join(pj.dir, "PLAN.md"), "# p\n")
+        assert run("run", "--target", pj.dir)[0] == 0
+        log = subprocess.run(["git", "log", "-1", "--format=%s", "--name-only"], cwd=pj.dir, capture_output=True, text=True).stdout
+        assert log.startswith(os.path.basename(chongdae.run_dir(pj.dir)) + ": done contract — write the contract") and "tasks/contract.json" in log, log
+        assert not subprocess.run(["git", "status", "--porcelain", "--", ".chongdae"], cwd=pj.dir, capture_output=True, text=True).stdout.strip()
+
+
+def test_close_stops_on_uncommitted_work_and_on_what_the_reviewer_finds_the_tree_can_answer():
+    """guin-site run-20261012-052255-3556 closed with plan/ATPROTO.md — in cleanup-ops' scope and `touched` — edited and not
+    committed; and the reviewer, run as the close was final, reported two cq-failed the tree could answer: they arrived after
+    the run was closed and were fixed outside any run. `close` now says the uncommitted work and stops; it runs the reviewer
+    before it is final, and an open objection the tree can answer stops it for the session (not a person's question), the
+    review written for it taken back; `--anyway --why` closes with them standing, recorded. Counted as the reviewer counts."""
+    assert chongdae.review_count([{"kind": "cq-failed", "where": "a"}, {"kind": "non-claim"}, {"kind": "undisposed", "carries": ["non-claim", "r", "t"]}, {"kind": "cq-failed", "where": "b"}]) \
+        == "cq-failed 2, non-claim 2; 1 of them carried, already in the count"   # dwitbuk's count_text, word for word
+    # two copies of one charge are one thing owed — a carry and the charge it carries, or one charge raised twice (its bearing struck)
+    assert chongdae.review_count([{"kind": "non-claim", "where": "r", "text": "t"}, {"kind": "undisposed", "carries": ["non-claim", "r", "t"]},
+                                  {"kind": "non-claim", "where": "s", "text": "u [tasks a, b]"}, {"kind": "non-claim", "where": "s", "text": "u [tasks a]"}]) == "non-claim 2"
+    assert chongdae.review_count([]) == "none"
+    with Project() as pj:
+        subprocess.run(["git", "config", "user.email", "t@t"], cwd=pj.dir, check=True)
+        subprocess.run(["git", "config", "user.name", "t"], cwd=pj.dir, check=True)
+        write(os.path.join(pj.dir, "plan", "ATPROTO.md"), "# a\n")
+        subprocess.run(["git", "add", "-A"], cwd=pj.dir, check=True)
+        subprocess.run(["git", "commit", "-qm", "base"], cwd=pj.dir, check=True)
+        reviewer = os.path.join(pj.dir, "reviewer.py")
+        write(reviewer, "import json, os, sys\nos.makedirs('reviews', exist_ok=True)\nfs = json.load(open('findings.json')) if os.path.exists('findings.json') else []\n"
+                        "json.dump({'artifact-type': 'dwitbuk/review@1', 'findings': fs}, open('reviews/review-1.json', 'w'))\nprint('review-1: %d finding(s)' % len(fs))\n")
+        subprocess.run(["git", "add", "-A"], cwd=pj.dir, check=True)
+        subprocess.run(["git", "commit", "-qm", "reviewer"], cwd=pj.dir, check=True)
+        write(os.path.join(pj.dir, "hunsu.lock.json"), {"roles": {"reviewer": [sys.executable, reviewer]}})
+        assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
+        assert run("add", "ops", "--brief", "the ops, then Done in ATPROTO.md", "--scope", "plan/ATPROTO.md", "--target", pj.dir)[0] == 0
+        write(os.path.join(pj.dir, "plan", "ATPROTO.md"), "# a\n\nDone: the ops.\n")
+        assert run("run", "--target", pj.dir)[0] == 0
+        code, out = run("close", "--target", pj.dir)
+        assert code == chongdae.DECISION and "decision: session agent: this run's work is not committed — plan/ATPROTO.md (ops)" in out \
+            and "git add -- plan/ATPROTO.md" in out and "close --anyway --why" in out, out
+        assert pj.state()["status"] == "running"
+        subprocess.run(["git", "add", "plan/ATPROTO.md"], cwd=pj.dir, check=True)
+        subprocess.run(["git", "commit", "-qm", "the ops' Done"], cwd=pj.dir, check=True)
+        # the reviewer finds what the tree can answer: the close stops for the session, the run stays open, the review is taken back
+        found = [{"kind": "cq-failed", "where": "records-kept", "text": "record-table lost a projection", "layer": "objection"},
+                 {"kind": "non-claim", "where": "run-x", "text": "no check decides this task", "layer": "objection"},
+                 {"kind": "undisposed", "where": "run-y", "text": "no check decides this task", "carries": ["non-claim", "run-y", "no check"], "layer": "objection"},
+                 {"kind": "cq-failed", "where": "post-fields", "text": "answered before", "layer": "objection", "disposition": {"as": "accepted"}}]
+        write(os.path.join(pj.dir, "findings.json"), found)
+        code, out = run("close", "--target", pj.dir)
+        assert code == chongdae.DECISION and "decision: session agent: the reviewer found 1 objection(s) this tree can answer (cq-failed 1)" in out \
+            and "cq-failed @ records-kept: record-table lost a projection" in out and "human:" not in out and "non-claim @" not in out, out
+        st = pj.state()
+        assert st["status"] == "running" and "ended" not in st and "reviewed" not in st, st
+        assert not os.path.exists(os.path.join(pj.dir, "reviews", "review-1.json")), "a review for a close that did not happen is not the next one's base"
+        # closed anyway: recorded, said
+        code, out = run("close", "--anyway", "--target", pj.dir)
+        assert code != 0 and "needs --why" in out, out
+        code, out = run("close", "--anyway", "--why", "the owner reads the cq at the next session", "--target", pj.dir)
+        assert code == 0 and "closed" in out, out
+        st = pj.state()
+        assert st["status"] == "complete" and st["closed-anyway"]["standing"] == [{"kind": "cq-failed", "where": "records-kept", "text": "record-table lost a projection"}], st.get("closed-anyway")
+        assert any("1 reviewer objection(s) the tree could answer (cq-failed 1)" in n for n in st["non-claims"]), st["non-claims"]
+        shown = subprocess.run(["git", "show", "--name-only", "--format=%s", "HEAD"], cwd=pj.dir, capture_output=True, text=True).stdout
+        assert ": close — g" in shown and "reviews/review-1.json" in shown, shown
+    with Project() as pj:   # nothing the tree can answer: close goes through as before
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "base"], cwd=pj.dir)
+        write(os.path.join(pj.dir, "hunsu.lock.json"), {"roles": {"reviewer": [sys.executable, "-c", "import json, os; os.makedirs('reviews', exist_ok=True); "
+                                                                                 "json.dump({'findings': [{'kind': 'non-claim', 'where': 'r', 'text': 't', 'layer': 'objection'}]}, open('reviews/r.json', 'w'))"]}})
+        assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
+        assert run("close", "--target", pj.dir)[0] == 0 and pj.state()["status"] == "complete"
+
+def _git(cwd, *a):
+    return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *a], cwd=cwd, capture_output=True, text=True, encoding="utf-8")
+
+
+def test_a_run_for_one_task_does_not_finish_another_with_nothing_of_its_own():
+    """guin-site run-20261015-054352-a0ec: the `run` for cache-comment also made cache-ops done (06:36:15, touched [], no
+    did) — its deploy, push and Done line happened 06:37–06:39. A session task with no check, no change of its own and no
+    `did` stays open; the pass goes on; the call says how to finish it. Named, or with a `did`, it is done."""
+    with Project() as pj:
+        _git(pj.dir, "commit", "-q", "--allow-empty", "-m", "base")
+        assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
+        assert run("add", "ops", "--brief", "npm run deploy와 push — 결과를 ATPROTO.md에 Done으로", "--scope", "plan/ATPROTO.md", "--target", pj.dir)[0] == 0
+        assert run("add", "comment", "--brief", "read.ts comments", "--scope", "read.ts", "--target", pj.dir)[0] == 0
+        write(os.path.join(pj.dir, "read.ts"), "// a snapshot per deployed version\n")
+        code, out = run("run", "--target", pj.dir)
+        st = pj.state()
+        assert code == chongdae.DECISION and "done comment" in out and st["tasks"]["comment"]["status"] == "done", out
+        assert st["tasks"]["ops"]["status"] == "todo" and "done ops" not in out, out
+        assert "ops has changed nothing of its own and has no `did` record" in out and "chongdae run ops" in out and "chongdae did ops" in out, out
+        # the commit form for the session's own commit of a task's work is printed with the done
+        assert "git commit -m '%s/comment (session): read.ts comments' -- read.ts" % os.path.basename(chongdae.run_dir(pj.dir)) in out, out
+        # a `run` naming another task does not finish it either
+        code, out = run("run", "comment", "--target", pj.dir)
+        assert code == chongdae.DECISION and pj.state()["tasks"]["ops"]["status"] == "todo", out
+        code, out = run("run", "nosuch", "--target", pj.dir)
+        assert code != 0 and "no task nosuch" in out, out
+        # its work done now, as a `did` and its Done line: the next `run` makes it done
+        assert run("did", "ops", "--why", "the deploy", "--target", pj.dir, "--", sys.executable, "-c", "print('deployed')")[0] == 0
+        write(os.path.join(pj.dir, "plan", "ATPROTO.md"), "Done: deployed\n")
+        code, out = run("run", "--target", pj.dir)
+        assert code == 0 and "done ops" in out and pj.state()["tasks"]["ops"]["touched"] == ["plan/ATPROTO.md"], out
+    with Project() as pj:   # naming it is the session's word: done, and said as a non-claim
+        _git(pj.dir, "commit", "-q", "--allow-empty", "-m", "base")
+        assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
+        assert run("add", "decide", "--brief", "decide the cache key", "--target", pj.dir)[0] == 0
+        code, out = run("run", "--target", pj.dir)
+        assert code == chongdae.DECISION and pj.state()["tasks"]["decide"]["status"] == "todo", out
+        code, out = run("run", "decide", "--target", pj.dir)
+        ts = pj.state()["tasks"]["decide"]
+        assert code == 0 and "done decide" in out and ts["status"] == "done", out
+        assert any("done on the session's word by name (`run decide`)" in n for n in ts["non-claims"]), ts["non-claims"]
+    with Project() as pj:   # a `did` recorded on it: done by a plain `run`
+        _git(pj.dir, "commit", "-q", "--allow-empty", "-m", "base")
+        assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
+        assert run("add", "ops", "--brief", "deploy", "--target", pj.dir)[0] == 0
+        code, out = run("did", "ops", "--why", "the deploy", "--target", pj.dir, "--", sys.executable, "-c", "print('deployed')")
+        assert code == 0, out
+        code, out = run("run", "--target", pj.dir)
+        assert code == 0 and "done ops" in out, out
+
+
+def test_close_and_report_name_an_operation_with_no_did_and_a_bash_operation_gets_a_did_nudge():
+    """guin-site run-20261015-054352-a0ec: cache-ops' deploy and push ran as `npm run deploy … | grep …; git push 2>&1 |
+    tail -1` (both exits lost), the push written as prose in ATPROTO.md; nothing in the record says what ran."""
+    with Project() as pj:
+        _git(pj.dir, "commit", "-q", "--allow-empty", "-m", "base")
+        assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
+        assert run("add", "ops", "--brief", "npm run preview → 소유자 확인 → 배포와 push", "--target", pj.dir)[0] == 0
+        assert run("add", "comment", "--brief", "주석을 배포 버전마다로 맞춘다", "--target", pj.dir)[0] == 0   # a modifier, not an operation
+        assert run("run", "ops", "comment", "--target", pj.dir)[0] == 0
+        code, out = run("close", "--target", pj.dir)
+        assert code == chongdae.DECISION and "ops reads as an operation outside the repository and has no `did` record" in out \
+            and "chongdae did ops" in out and "comment:" not in out, out
+        assert pj.state()["status"] == "running"
+        code, out = run("report", "--target", pj.dir)
+        found = [f for f in json.loads(out)["findings"] if f["kind"] == "operation-unrecorded"]
+        assert [f["where"].split("/")[-1] for f in found] == ["ops"] and found[0]["layer"] == "observation", found
+        code, out = run("close", "--anyway", "--why", "the preview only; the owner deploys later", "--target", pj.dir)
+        st = pj.state()
+        assert code == 0 and st["closed-anyway"]["operations-unrecorded"] == ["ops"], (out, st.get("closed-anyway"))
+        assert any("task(s) reading as an operation with no `did` (ops)" in n for n in st["non-claims"]), st["non-claims"]
+    assert chongdae.reads_as_operation({"brief": "the deployed version in the key"}) is None
+    assert chongdae.reads_as_operation({"brief": "delete the old D1"}) == "delete"
+    assert chongdae.reads_as_operation({"brief": "deploy", "checks": [["true"]]}) is None, "a build its checks decide is not an operation"
+    assert chongdae.reads_as_operation({"brief": "배포한 템플릿은 다음 요청부터"}) is None and chongdae.reads_as_operation({"brief": "R2 삭제"}) == "삭제"
+    with Project() as pj:   # the Bash hook: a line of context while a run is running, never a refusal
+        _git(pj.dir, "commit", "-q", "--allow-empty", "-m", "base")
+        payload = lambda c: {"cwd": pj.dir, "tool_name": "Bash", "tool_input": {"command": c}}
+        assert hook("pre_bash.py", payload("git push origin main")) == (0, ""), "no run: silent"
+        assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
+        assert run("add", "ops", "--brief", "b", "--target", pj.dir)[0] == 0
+        code, out = hook("pre_bash.py", payload("npm run deploy 2>&1 | grep -E 'Version'; git push 2>&1 | tail -1"))
+        said = json.loads(out)["hookSpecificOutput"]
+        assert code == 0 and said["hookEventName"] == "PreToolUse" and "permissionDecision" not in said, out
+        assert "record it:" in said["additionalContext"] and "did TASK" in said["additionalContext"] and "ops" in said["additionalContext"], out
+        assert hook("pre_bash.py", payload("git status && ls")) == (0, "")
+        assert hook("pre_bash.py", payload('python3 "/x/chongdae.py" did ops --why w -- git push')) == (0, ""), "did itself is the record"
+        assert hook("pre_bash.py", payload("git push"), AGENT_WORKER="1") == (0, ""), "a worker session: silent"
+        write(os.path.join(pj.dir, "hunsu.json"), {"settings": {"chongdae": {"ops-patterns": [r"\bmake\s+release\b"]}}})
+        assert hook("pre_bash.py", payload("git push")) == (0, "") and "make release" in hook("pre_bash.py", payload("make release"))[1]
+        hooks = json.load(open(os.path.join(HERE, "hooks", "hooks.json"), encoding="utf-8"))["hooks"]["PreToolUse"]
+        assert any(h["matcher"] == "Bash" and "pre_bash.py" in h["hooks"][0]["command"] for h in hooks), hooks
+
+
+def test_the_session_start_and_close_say_unpushed_commits_and_no_upstream():
+    """guin-site 10-15: 213 commits sat unpushed for 10 days and main had no upstream; with settings.chongdae.remote absent
+    nothing read ahead or behind. Read from the local remote-tracking refs only — no fetch."""
+    with Project() as pj:
+        _git(pj.dir, "commit", "-q", "--allow-empty", "-m", "base")
+        branch = _git(pj.dir, "symbolic-ref", "--short", "HEAD").stdout.strip()
+        assert chongdae.upstream_line(pj.dir) is None, "no remote at all: nothing to say"
+        bare = tempfile.mkdtemp(prefix="chongdae-remote-")
+        try:
+            subprocess.run(["git", "init", "-q", "--bare", bare], check=True)
+            _git(pj.dir, "remote", "add", "origin", bare)
+            assert chongdae.upstream_line(pj.dir) == "%s: no upstream" % branch
+            code, out = hook("session_start.py", {"cwd": pj.dir})
+            assert "%s: no upstream." % branch in json.loads(out)["hookSpecificOutput"]["additionalContext"], out
+            assert _git(pj.dir, "push", "-q", "-u", "origin", branch).returncode == 0
+            assert chongdae.upstream_line(pj.dir) is None, "level: silent"
+            assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0   # a record commit, not pushed (remote absent)
+            code, out = run("close", "--target", pj.dir)
+            assert code == 0 and "%s: 2 commits not on origin/%s (as of the last fetch)" % (branch, branch) in out, out
+            code, out = hook("session_start.py", {"cwd": pj.dir})
+            assert "commits not on origin/%s" % branch in json.loads(out)["hookSpecificOutput"]["additionalContext"], out
+        finally:
+            shutil.rmtree(bare, ignore_errors=True)
+
+
+def test_close_prints_the_commit_of_each_tasks_work_in_the_sessions_own_form():
+    """guin-site 10-15: with no form given, the agent's own work commits copied the engine's `run-<id>:` (737db95, bf90cdf) or
+    made up `run:` (33b5bda): engine and agent commits read alike in `git log`. The session's form is
+    `run-<id>/<task> (session): …`; the printed commands commit exactly that task's files."""
+    with Project() as pj:
+        _git(pj.dir, "commit", "-q", "--allow-empty", "-m", "base")
+        write(os.path.join(pj.dir, "other.txt"), "someone else's\n")
+        _git(pj.dir, "add", "other.txt")   # staged by someone else before the task: the printed commit leaves it out
+        assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
+        rid = os.path.basename(chongdae.run_dir(pj.dir))
+        assert run("add", "docs", "--brief", "the README says it", "--target", pj.dir)[0] == 0
+        write(os.path.join(pj.dir, "README.md"), "# it\n")
+        assert run("run", "docs", "--target", pj.dir)[0] == 0
+        code, out = run("close", "--target", pj.dir)
+        lines = [l.strip() for l in out.splitlines()]
+        assert code == chongdae.DECISION and "git add -- README.md" in lines, out
+        commit = [l for l in lines if l.startswith("git commit")]
+        assert commit == ["git commit -m '%s/docs (session): the README says it' -- README.md" % rid], commit
+        assert "`%s/<task> (session): …`" % rid in out, out
+        assert _git(pj.dir, "add", "--", "README.md").returncode == 0
+        import shlex
+        assert _git(pj.dir, *shlex.split(commit[0])[1:]).returncode == 0
+        assert _git(pj.dir, "log", "-1", "--format=%s").stdout.strip() == "%s/docs (session): the README says it" % rid
+        assert "other.txt" in _git(pj.dir, "diff", "--cached", "--name-only").stdout, "only the task's files were committed"
+        _git(pj.dir, "commit", "-qm", "other")
+        code, out = run("close", "--target", pj.dir)
+        assert code == 0, out
+
+
+def test_a_resent_builds_verifier_is_told_the_builders_files_and_what_the_eyes_did_not_read_is_said():
+    """guin-site run-20261015-054352-a0ec: after the resend the builder found its first attempt's work in the tree and changed
+    nothing more; the second verify request said `touched: []`, the builder's index.ts and read.ts under `touched_since`
+    ("changed after the builder answered"). And dwitbuk 1.14.0's eyes say in the verdict's `non-claims` when they accepted
+    without reading the tree — stored by chongdae, read by nobody: printed, kept on the task, an observation in `report`."""
+    with Project() as pj:
+        _git(pj.dir, "commit", "-q", "--allow-empty", "-m", "base")
+        outside = tempfile.mkdtemp(prefix="chongdae-calls-")
+        try:
+            builder = os.path.join(pj.dir, "builder.py")
+            write(builder, "import json, os, sys\nif not os.path.exists('a.py'):\n    open('a.py', 'w').write('x = 1\\n')\n"
+                           "json.dump(%r, open(sys.argv[2], 'w'))\n" % (RESPONSE_DONE,))
+            accept = dict(REVIEW_ACCEPT, **{"non-claims": ["accepted without reading the tree: the eyes opened no file and ran no command — the verdict rests on the packet alone"]})
+            verifier = os.path.join(pj.dir, "eyes.py")
+            write(verifier, "import json, os, sys\nn = os.path.join(%r, 'n')\nfirst = not os.path.exists(n)\nopen(n, 'a').write('x')\n"
+                            "json.dump(%r if first else %r, open(sys.argv[2], 'w'))\n" % (outside, REVIEW_REJECT, accept))
+            _git(pj.dir, "add", "-A")
+            _git(pj.dir, "commit", "-qm", "the providers")
+            write(os.path.join(pj.dir, "PLAN.md"), "# p\n\n## Q1 count\n\nids of the remaining memos do not change.\n")
+            write(os.path.join(pj.dir, "hunsu.lock.json"), {"roles": {"implementer": [sys.executable, builder, "{request}", "{response}"],
+                                                                      "verifier": [sys.executable, verifier, "{request}", "{response}"]}})
+            assert run("init", "--session", "--goal", "g", "--from", "PLAN.md", "--target", pj.dir)[0] == 0
+            assert run("add", "b", "--role", "implementer", "--closes", "Q1", "--check", sys.executable + " -c pass", "--target", pj.dir)[0] == 0
+            code, out = run("run", "--target", pj.dir)
+            assert "sent back to the provider automatically" in out, out
+            reqs = sorted(glob.glob(os.path.join(chongdae.run_dir(pj.dir), "local", "b.verify*request*")), key=os.path.getmtime)
+            assert len(reqs) == 2, reqs
+            second = json.load(open(reqs[-1], encoding="utf-8"))
+            assert second["touched"] == ["a.py"] and "a.py" not in second.get("touched_since", []), (second["touched"], second.get("touched_since"))
+            assert "b: the verifier's non-claim: accepted without reading the tree" in out, out
+            ts = pj.state()["tasks"]["b"]
+            assert ts["status"] == "done" and any(n.startswith("(verifier) accepted without reading the tree") for n in ts["non-claims"]), ts.get("non-claims")
+            doc = json.loads(run("report", "--target", pj.dir)[1])
+            said = [f for f in doc["findings"] if f["kind"] == "verifier-non-claim"]
+            assert len(said) == 1 and said[0]["layer"] == "observation" and "accepted without reading the tree" in said[0]["text"], said
+            assert not [f for f in doc["findings"] if f["kind"] == "non-claim" and "(verifier)" in f["text"]], doc["findings"]
+        finally:
+            shutil.rmtree(outside, ignore_errors=True)
+
+
+def test_the_hands_read_names_a_hired_provider_out_now_or_answered_since_and_never_the_session():
+    """guin-site 10-15 05:53:57: jokbo told the session's own hired builder's edits (cache-build, run-20261015-054352-a0ec) as
+    another hand's. `show --after ISO --hands PATH...` (jokbo's `hands` read) prints one JSON object, path -> whose: a hired
+    provider out now (its pending pid alive, the file not what it was at its start) or an attempt answered at or after --after
+    (the path in its `touched_by_provider`/`touched`). A session task's file is not named; a bad --after is `{}`, exit 0."""
+    import datetime
+    with Project() as pj, a_session():
+        for f in ("a.py", "b.py", "s.py", "old.py", "z.py"):
+            write(os.path.join(pj.dir, f), "# %s\n" % f)
+        write(os.path.join(pj.dir, "hunsu.lock.json"), {"roles": {"implementer": [sys.executable, "-c", "pass", "{request}", "{response}"]}})
+        git_commit(pj)
+        assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
+        for tid in ("build", "fix", "prior"):
+            assert run("add", tid, "--role", "implementer", "--brief", tid, "--check", sys.executable + " -c pass", "--target", pj.dir)[0] == 0, tid
+        assert run("add", "own", "--brief", "the session's", "--target", pj.dir)[0] == 0
+        d = chongdae.run_dir(pj.dir)
+        rid = os.path.basename(d)
+        utc = lambda dt: dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+        now = datetime.datetime.now(datetime.timezone.utc)
+        after = utc(now - datetime.timedelta(minutes=5))
+        state = chongdae.load_state(d)
+        hired = {"provider": "command", "argv": ["x"]}
+        state["tasks"]["fix"].update({"answered": {"at": now.isoformat()}, "performed_by": hired, "touched_by_provider": ["b.py"]})
+        state["tasks"]["prior"].update({"answered": {"at": (now - datetime.timedelta(hours=1)).isoformat()}, "performed_by": hired, "touched_by_provider": ["old.py"]})
+        state["tasks"]["own"].update({"answered": {"at": now.isoformat()}, "performed_by": {"provider": "session", "host": "claude-code"}, "touched": ["s.py"]})
+        chongdae.save_state(d, state)
+        for f in ("b.py", "s.py", "old.py", "z.py"):
+            write(os.path.join(pj.dir, f), "# changed\n")
+        # in flight: build's provider is out now (this process's pid: alive), started on the tree as it is; a.py changed since
+        write(os.path.join(d, "local", "build.pending.json"), {"pid": os.getpid(), "argv": ["x"], "start": chongdae.dirty(pj.dir)})
+        write(os.path.join(pj.dir, "a.py"), "# the builder's\n")
+
+        def hands(at, *paths):
+            code, out = run("show", "--target", pj.dir, "--after", at, "--hands", *paths)
+            assert code == 0, out
+            return json.loads(out)
+
+        said = hands(after, "a.py", "b.py", "s.py", "old.py", "z.py")
+        assert said == {"a.py": "the implementer of build (%s)" % rid, "b.py": "the implementer of fix (%s)" % rid}, said
+        assert hands(utc(now + datetime.timedelta(hours=1)), "b.py") == {}   # answered before --after: not this window's
+        assert hands("not-a-time", "a.py", "b.py") == {}
+        assert hands(after) == {}
+        # the provider gone: not out now, so a.py is nobody's this record knows
+        write(os.path.join(d, "local", "build.pending.json"), {"pid": 2 ** 22 + 12345, "start": {}})
+        assert "a.py" not in hands(after, "a.py")
+        # the declared read, as jokbo calls it: one argument per path
+        for m in ("plugin.json", os.path.join(".claude-plugin", "plugin.json"), os.path.join(".codex-plugin", "plugin.json")):
+            argv = json.load(open(os.path.join(HERE, m), encoding="utf-8"))["reads"]["hands"]
+            assert argv[2:] == ["show", "--target", "{target}", "--after", "{after}", "--hands", "{paths}"], (m, argv)
 
 
 if __name__ == "__main__":

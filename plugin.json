@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "chongdae",
-  "version": "1.20.0",
+  "version": "1.21.0",
   "engines": {
     "python": ">=3.9"
   },
@@ -50,6 +50,17 @@
       "--brief",
       "--target",
       "{target}"
+    ],
+    "hands": [
+      "python3",
+      "{plugin:chongdae}/chongdae.py",
+      "show",
+      "--target",
+      "{target}",
+      "--after",
+      "{after}",
+      "--hands",
+      "{paths}"
     ]
   }
 }
