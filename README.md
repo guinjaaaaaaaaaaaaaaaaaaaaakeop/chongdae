@@ -323,15 +323,26 @@ objection (it left the outside in a state nobody has looked at), saying `no appr
 run-20261012-052255-3556: the cleanup's eight operations (an archive, the deploys, secrets, Access, R2 and D1 deleted) ran
 as plain Bash in a todo task and survive only as prose in a plan file
 
-A file outside the project that the command runs (`python3 /private/tmp/…/empty_r2.py`: a script in a scratchpad) is written
-`<outside:empty_r2.py>` in `command`, and the entry keeps the file itself under `outside`: `{arg, name, sha256, size, content}` —
-its text when it is text and at most 32,000 bytes, with this machine's paths taken out (`content-portable` says so; the sha256 is
-the file's as it ran); otherwise `not-kept` says why. The command's program (an interpreter, a binary) is not such a file unless it
-is a `#!` script. `did` prints what it kept, `show` and `report` say it. The tail is the output's last six meaningful lines: blank
-lines, rules (`─────`, `=====`) and a tool's version banner (`⛅️ wrangler 4.143.1 (update available 4.149.0)`) are left out. The
-commit's subject keeps a long command's head and its last word's name around a `…`. guin-site run-20261012-052255-3556 kept only
-the machine path of the script that emptied the R2 bucket, its subject cut mid-name ("…/scratchpad/empty"), and two lines of
-banner and rule as the tail of each deletion.
+A file outside the project that the command names (`python3 /private/tmp/…/empty_r2.py`: a script in a scratchpad) is written
+`<outside:empty_r2.py>` in `command`, and the entry keeps what it was under `outside`: `{arg, name, role, sha256, size, content}`.
+Only the program the command runs (`role: program`) keeps its `content` — argv[0] when it is a `#!` script, or the first
+non-option argument after an interpreter (`node`, `python3`, `bash`, `sh`, `deno`, `bun`, `ruby`, `perl`, `npx tsx`, …) — its
+text when it is text and at most 32,000 bytes, with this machine's paths taken out (`content-portable` says so; the sha256 is
+the file's as it ran). Every other outside file is data the command was given (`role: argument`): its sha256 and size, and
+`not-kept: an argument, not the program`. Nothing is kept, the program included, when the file's name looks like secrets
+(`.env`, `.env.*`, `.dev.vars`, `*.pem`, `*.key`, `id_rsa*`, a name with key, secret, token, credential or password in it) or
+its text does (a line `NAME=value` whose NAME says TOKEN, SECRET, KEY, PASSWORD or PRIVATE; a `-----BEGIN … PRIVATE KEY-----`
+block; a `ghp_`, `sk-`, `xoxb-` or `AKIA…` token): `not-kept: looks like secrets`. The command line and the tail are read for the
+same patterns and a matched value is written `NAME=<masked>` (or `<masked>`); `masked` counts them and `did`, `show` and
+`report` say so. guin-site 10-16: `did lexicon-publish -- node <scratch>/publish_lexicons.mjs ./lexicons/… <the PDS's
+.dev.vars> --write` kept the secrets file passed as data whole in the committed record, and the report said "it ran a file outside the
+project, .dev.vars" — it now says which file was the program run and which was an argument. `did` prints what it kept, `show`
+and `report` say it. The tail is the output's last six meaningful lines: blank lines, rules (`─────`, `=====`) and a tool's
+version banner (`⛅️ wrangler 4.143.1 (update available 4.149.0)`) are left out. The commit's subject is cut at argument
+boundaries: the command's head words, a `…`, its last word (a long path as its name) — never inside a word, a quoted argument or
+an `<outside:…>` marker. guin-site run-20261012-052255-3556 kept only the machine path of the script that emptied the R2 bucket,
+its subject cut mid-name ("…/scratchpad/empty"), and two lines of banner and rule as the tail of each deletion; f3beee0's subject
+ended `'<outsi… --write`.
 
 A done task that reads as an operation and has no `did` — its brief or role holds one of a small list: `deploy`, `push`,
 `publish`, `migrate`, `delete` (the verbs, not "deployed"), `배포`, `푸시`, `삭제`, `마이그레이션` (not as a modifier: "배포 버전",

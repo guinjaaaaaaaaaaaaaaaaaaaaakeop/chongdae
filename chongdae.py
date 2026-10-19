@@ -43,8 +43,9 @@
   did   <id> [--why WHY] [--approved-in source:ID] [--by NAME] (-- COMMAND... | --each FILE)   an operation outside the repository (deploy,
                                         secret deletion, remote database change): one command, run without a shell; recorded on the task as `did`
                                         {command, exit, tail, at, why, approved-in, signer} whatever the exit, printed, committed. A script outside
-                                        the project is kept in the record (`outside`: sha256, its text when small) behind `<outside:NAME>`; the tail
-                                        drops banners and rules. --each FILE: one command per line, one judgment, one commit; a failure stops the rest.
+                                        the project is kept in the record (`outside`: sha256, its text when small) behind `<outside:NAME>` — the
+                                        program only: a file given as an argument keeps its sha256 and size, and nothing that looks like secrets is
+                                        kept (a value in the command or the tail is masked); the tail drops banners and rules. --each FILE: one command per line, one judgment, one commit; a failure stops the rest.
                                         `show` prints it; `report` lists it (an observation; an objection when it exited non-zero)
   dispute <build> --tests F... --why WHY [--by NAME | --delegated WHY]   a build's protected tests contradict the contract: the task
                                         that wrote them is reopened to amend them (or a tests task is made); the build then takes the
@@ -4349,10 +4350,16 @@ def cmd_did(args):
     for i, argv in enumerate(commands, 1):
         shown, outside = outside_argv(args.target, argv)
         code, said, ran = run_argv(args.target, argv)
+        # what the record keeps of the command line and of what it answered, a secret's value masked (guin-site 10-16: a
+        # secrets file's text went into a committed record; a value on the command line or echoed back would go the same way)
+        shown, in_command = mask_argv(shown)
+        said, in_tail = mask_secrets(said)
         rec = {"command": shlex.join(shown), "exit": code, "tail": portable(kept_tail(said), args.target), **stamp(),
                **({"why": args.why} if args.why else {}), **({"approved-in": args.approved_in} if args.approved_in else {}), "signer": signer(args)}
         if outside:
             rec["outside"] = outside   # a script outside the project: the record keeps what it was, not a path on this machine
+        if in_command or in_tail:
+            rec["masked"] = {k: v for k, v in (("command", in_command), ("tail", in_tail)) if v}
         if len(commands) > 1:
             rec["batch"] = {"of": len(commands), "n": i}
         if not ran:
@@ -4366,8 +4373,8 @@ def cmd_did(args):
     bad = [r for r in recs if r["exit"]]
     subject = (short_command(recs[0]["command"]) + " -> exit %d" % recs[0]["exit"] if len(commands) == 1
                else "%d operation(s)%s: %s" % (len(recs), " (stopped at %d of %d)" % (first_bad, len(commands)) if first_bad else "",
-                                                 "; ".join("%s -> %d" % (short_command(r["command"], 60), r["exit"]) for r in recs)))
-    commit_record(args.target, os.path.basename(d), "did %s: %s" % (args.task, cut(subject, 200)))
+                                                 short_join(["%s -> %d" % (short_command(r["command"], 60), r["exit"]) for r in recs], 150)))
+    commit_record(args.target, os.path.basename(d), "did %s: %s" % (args.task, subject))   # cut at argument boundaries already, never inside a marker
     for r in recs:
         print("did %s: `%s` -> exit %d%s — recorded on %s, signed %s%s" % (
             args.task, r["command"], r["exit"], "" if r.get("ran", True) else " (it did not run)", args.task, signer_text(r["signer"]),
@@ -4375,26 +4382,127 @@ def cmd_did(args):
         for line in r["tail"]:
             print("  | " + line)
         for o in r.get("outside") or []:
-            print("  %s is outside the project: %s" % (o["name"], outside_text(o)))
+            print("  %s is outside the project: %s" % (outside_what(o), outside_text(o)))
+        if r.get("masked"):
+            print("  " + masked_text(r["masked"]))
     if first_bad and first_bad < len(commands):
-        print("  not run (an earlier command exited non-zero): %s" % "; ".join(shlex.join(c) for c in commands[first_bad:]))
+        print("  not run (an earlier command exited non-zero): %s" % "; ".join(shlex.join(mask_argv(outside_argv(args.target, c)[0])[0]) for c in commands[first_bad:]))
     if bad:
         print("  a non-zero exit stays in the record: `report` lists it as an objection until a reviewer disposes of it")
     return 1 if bad else 0
 
 
-DID_CONTENT_CAP = 32000   # bytes of an outside script the record keeps whole; past it, its hash and size
+DID_CONTENT_CAP = 32000   # bytes of an outside program the record keeps whole; past it, its hash and size
+
+# The program a command runs, when argv[0] is an interpreter: the first argument after it that is not an option (`node x.mjs`,
+# `python3 -u x.py`, `npx tsx x.ts`, `deno run x.ts`). Every other file the command names is data it was given.
+INTERPRETERS = re.compile(r"^(?:python[\d.]*|pypy[\d.]*|node|nodejs|bash|sh|zsh|dash|ksh|fish|deno|bun|ruby|perl|php|lua|Rscript|tsx|ts-node(?:-esm)?|npx|bunx|pnpx|uv)$")
+RUNNER_WORDS = ("run", "x", "exec", "dlx", "tsx", "ts-node", "ts-node-esm")   # `npx tsx F`, `deno run F`, `bun run F`, `uv run F`: the word before the program
+INLINE_CODE = ("-c", "-e", "--eval", "-p", "--print", "-m")   # `python3 -c CODE`, `node -e CODE`, `python3 -m MOD`: no program file
+
+# What looks like secrets — a file's name, or text in it, in the command or in what it answered. guin-site 10-16:
+# `did lexicon-publish -- node <scratch>/publish_lexicons.mjs ./lexicons/… <the PDS's .dev.vars> --write` kept the
+# data argument `.dev.vars` whole in `did[0].outside[1].content`, and the record was committed: a secrets file in history.
+SECRET_NAME = re.compile(r"^(?:\.env(?:\..+)?|\.dev\.vars(?:\..+)?|\.netrc|\.npmrc|\.pypirc|id_(?:rsa|dsa|ecdsa|ed25519).*|.*\.(?:pem|key|p12|pfx|jks|keystore)"
+                         r"|.*(?:key|secret|token|credential|password|passwd).*)$", re.I)
+SECRET_WORD = r"[A-Za-z0-9_]*(?:TOKEN|SECRET|KEY|PASSWORD|PASSWD|PRIVATE|CREDENTIAL)[A-Za-z0-9_]*"
+SECRET_ASSIGN = re.compile(r"(?m)(?<![\w.])((?:export\s+)?%s\s*[=:]\s*)(?!<masked>)(\"[^\"\n]+\"|'[^'\n]+'|[^\s\"'#;,]+)" % SECRET_WORD)
+SECRET_TOKENS = [re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)"),
+                 re.compile(r"\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}"), re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}"),
+                 re.compile(r"\bsk-[A-Za-z0-9_-]{20,}"), re.compile(r"\bxox[abprs]-[A-Za-z0-9-]{10,}"), re.compile(r"\bAKIA[0-9A-Z]{16}\b")]
+SECRET_OPTION = re.compile(r"^--?[\w-]*(?:token|secret|password|passwd|api-?key|private-?key|credential)s?$", re.I)
+
+
+def looks_secret_name(name):
+    return bool(SECRET_NAME.match(os.path.basename(str(name))))
+
+
+def is_secret_value(v):
+    """A value that names where a secret comes from (`$X`, `process.env.X`, `os.environ[...]`) is not one."""
+    v = v.strip("\"'")
+    return len(v) >= 6 and not re.match(r"^(?:\$|process\.env|os\.environ|os\.getenv|getenv|env\(|Deno\.env|<)", v)
+
+
+def looks_secret_text(text):
+    """Does this text hold what reads as a secret: `NAME=value` where NAME says TOKEN, SECRET, KEY, PASSWORD or PRIVATE, a private
+    key block, or a known token's shape (ghp_, sk-, xoxb-, AKIA…)?"""
+    text = str(text)
+    return any(is_secret_value(m.group(2)) for m in SECRET_ASSIGN.finditer(text)) or any(p.search(text) for p in SECRET_TOKENS)
+
+
+def mask_secrets(text):
+    """(text with every secret-looking value replaced by `<masked>`, how many were). `NAME=value` keeps its name."""
+    n = [0]
+
+    def assign(m):
+        if not is_secret_value(m.group(2)):
+            return m.group(0)
+        n[0] += 1
+        return m.group(1) + "<masked>"
+
+    def token(m):
+        n[0] += 1
+        return "<masked>"
+    text = SECRET_ASSIGN.sub(assign, str(text))
+    for p in SECRET_TOKENS:
+        text = p.sub(token, text)
+    return text, n[0]
+
+
+def mask_argv(argv):
+    """(argv with secret-looking values masked, how many were): an argument's own text, and the value after an option named
+    for a secret (`--token VALUE`)."""
+    out, n = [], 0
+    for i, a in enumerate(argv):
+        if i and SECRET_OPTION.match(str(argv[i - 1])) and not str(a).startswith("-") and is_secret_value(str(a)):
+            out.append("<masked>")
+            n += 1
+            continue
+        a, k = mask_secrets(a)
+        out.append(a)
+        n += k
+    return out, n
+
+
+def program_arg(target, argv):
+    """The index of the argument that is the program this command runs, or None: argv[0] when it is itself a script (`#!`), else
+    the first argument after an interpreter that is not an option (`node x.mjs data.json` -> 1; `npx tsx x.ts` -> 2). Inline
+    code (`python3 -c …`, `node -e …`) or a module (`-m`) runs no file."""
+    if not argv:
+        return None
+    first = os.path.join(target, argv[0])
+    if os.path.isfile(first):
+        try:
+            if io.open(first, "rb").read(2) == b"#!":
+                return 0
+        except OSError:
+            pass
+    if not INTERPRETERS.match(os.path.basename(str(argv[0]))):
+        return None
+    for i in range(1, len(argv)):
+        a = str(argv[i])
+        if a in INLINE_CODE:
+            return None
+        if a.startswith("-"):
+            continue
+        if a in RUNNER_WORDS and not os.path.isfile(os.path.join(target, a)):
+            continue
+        return i
+    return None
 
 
 def outside_argv(target, argv):
     """(argv as the record writes it, [the files outside the project it names]). An argument that is a file outside the project —
     a script in a scratchpad, `python3 /private/tmp/…/empty_r2.py` — becomes `<outside:empty_r2.py>`, and the record keeps the
-    file itself: its sha256, its size, its text when it is text and small (paths of this machine taken out). guin-site
-    run-20261012-052255-3556 kept only the machine path, and the script that emptied the R2 bucket is gone. The program
-    itself (argv[0], found on PATH or an interpreter) counts only when it is a script: `#!` text. Everything else is written
-    portably (the project `.`, the home `~`)."""
+    file itself: its sha256, its size, and — for the program the command runs only — its text when it is text and small (paths
+    of this machine taken out). guin-site run-20261012-052255-3556 kept only the machine path, and the script that emptied the
+    R2 bucket is gone. Every other file the command names is data it was given (`role: argument`): its sha256 and size, never
+    its text — guin-site 10-16 kept a secrets file passed to a publishing script whole, and committed it. Neither is kept, even
+    the program, when the file's name or text looks like secrets. The program itself (argv[0], found on PATH or an
+    interpreter) counts only when it is a script: `#!` text. Everything else is written portably (the project `.`, the home `~`)."""
     import hashlib
     root = os.path.realpath(target)
+    prog = program_arg(target, argv)
     shown, outside = [], []
     for i, a in enumerate(argv):
         full = os.path.realpath(os.path.join(target, a))
@@ -4408,13 +4516,20 @@ def outside_argv(target, argv):
         marker = neutral_path(a, target)
         if not marker.startswith("<plugin:"):
             marker = "<outside:%s>" % os.path.basename(full)
-        rec = {"arg": i, "name": os.path.basename(full), "sha256": hashlib.sha256(raw).hexdigest(), "size": len(raw)}
+        rec = {"arg": i, "name": os.path.basename(full), "role": "program" if i == prog else "argument",
+               "sha256": hashlib.sha256(raw).hexdigest(), "size": len(raw)}
         try:
             text = raw.decode("utf-8")
         except UnicodeDecodeError:
             text = None
         if marker.startswith("<plugin:"):
             rec["content"] = None   # an installed plugin's file: its version names it
+        elif looks_secret_name(full) or (text is not None and looks_secret_text(text)):
+            rec["content"] = None
+            rec["not-kept"] = "looks like secrets"
+        elif i != prog:
+            rec["content"] = None
+            rec["not-kept"] = "an argument, not the program"
         elif text is None or "\0" in text:
             rec["content"] = None
             rec["not-kept"] = "not text"
@@ -4432,10 +4547,20 @@ def outside_argv(target, argv):
     return shown, outside
 
 
+def masked_text(m):
+    """What `did` masked, for a reader."""
+    return "masked in the record (looked like secrets): %s" % ", ".join("%d value(s) in the %s" % (v, "command line" if k == "command" else "output's end") for k, v in sorted(m.items()))
+
+
+def outside_what(o):
+    """Which file outside the project this was, for a reader: the program the command ran, or a file it was given."""
+    return {"program": "the program it ran (%s)", "argument": "a file it was given as an argument (%s)"}.get(o.get("role"), "a file it named (%s)") % o.get("name")
+
+
 def outside_text(o):
     """What the record keeps of a file outside the project, for a reader."""
     return "sha256 %s…, %d bytes, %s" % (o.get("sha256", "")[:12], o.get("size", 0),
-                                         "its content kept in the record" if "content" in o else "content not kept (%s)" % (o.get("not-kept") or "an installed plugin's file"))
+                                         "its content kept in the record" if "content" in o else "content not kept: %s" % (o.get("not-kept") or "an installed plugin's file"))
 
 
 CHATTER = (re.compile(r"^[\s\-=_~*#.·─━═┄┈╌▔▁│┃|+]{3,}$"),   # a rule: ─────, =====, ----
@@ -4451,16 +4576,49 @@ def kept_tail(said, n=6):
 
 
 def short_command(cmd, n=100):
-    """A command for a commit's subject: whole when it fits, else its head and its last word's basename around a `…` —
-    `[:120]` cut "…/scratchpad/empty_r2.py" to "…/scratchpad/empty"."""
+    """A command for a commit's subject: whole when it fits, else cut at argument boundaries — its first word, as many of the
+    others as fit (in order, `…` where some were left out) and its last word, a long path shortened to its basename. Never
+    inside a word: `[:120]` cut "…/scratchpad/empty_r2.py" to "…/scratchpad/empty", and f3beee0's subject ended
+    `'<outsi… --write -> exit 0`, a `<outside:…>` marker cut in half."""
     cmd = " ".join(str(cmd).split())
     if len(cmd) <= n:
         return cmd
-    last = cmd.rsplit(" ", 1)[-1]
-    tail = last.rsplit("/", 1)[-1] if "/" in last else last
-    tail = tail if len(tail) <= n // 2 else tail[-(n // 2):]
-    head = cmd[:max(0, n - len(tail) - 2)].rstrip()
-    return "%s… %s" % (head, tail)
+    try:
+        words = [shlex.quote(w) for w in shlex.split(cmd)]
+    except ValueError:
+        words = cmd.split(" ")
+
+    def short(w):
+        if len(w) <= n // 2:
+            return w
+        bare = w.strip("'\"")
+        base = bare.rstrip("/").rsplit("/", 1)[-1] if "/" in bare else bare
+        base = shlex.quote(base)
+        return base if len(base) <= n // 2 else "…" + base[-(n // 2 - 1):]
+    if len(words) == 1:
+        return short(words[0])
+    first, last = short(words[0]), short(words[-1])
+    budget = n - len(first) - len(last) - 3   # the spaces around a `…`
+    kept = [first]
+    for w in words[1:-1]:
+        if len(w) + 1 > budget:
+            break   # one gap, after as much of the head as fits: what is left out is in the record
+        kept.append(w)
+        budget -= len(w) + 1
+    if len(kept) < len(words) - 1 or last != words[-1]:
+        kept.append("…")
+    return " ".join(kept + [last])
+
+
+def short_join(items, n):
+    """`; `-joined items in at most n characters, whole items only: the rest counted, never cut inside one."""
+    out = []
+    for i, x in enumerate(items):
+        rest = len(items) - i - 1
+        if out and len("; ".join(out + [x])) + (len(" (and %d more)" % rest) if rest else 0) > n:
+            return "; ".join(out) + " (and %d more)" % (len(items) - i)
+        out.append(x)
+    return "; ".join(out)
 
 
 def take_over(target, d, state, task, ts, why, who, extra=None, checked=None):
@@ -5166,7 +5324,8 @@ def cmd_report(args):
                      "text": "`%s` -> exit %s%s, run by chongdae at %s, signed %s%s%s" % (
                          r.get("command"), r.get("exit"), " (it did not run)" if r.get("ran") is False else "", r.get("at"), signer_text(r.get("signer")),
                          ": " + r["why"] if r.get("why") else "", "; approved in %s" % r["approved-in"] if r.get("approved-in") else "; no approval cited")
-                         + "".join("; it ran a file outside the project, %s (%s)" % (o.get("name"), outside_text(o)) for o in r.get("outside") or [])}
+                         + "".join("; %s is outside the project: %s" % (outside_what(o), outside_text(o)) for o in r.get("outside") or [])
+                         + ("; " + masked_text(r["masked"]) if r.get("masked") else "")}
                 if r.get("exit") == 0:
                     f["layer"] = "observation"
                 else:
@@ -5558,7 +5717,8 @@ def task_story(run_d, task, ts, day, run_end):
                                                           " (it did not run)" if r.get("ran") is False else "",
                                                           " — " + r["why"] if r.get("why") else "", "; approved in %s" % r["approved-in"] if r.get("approved-in") else ""))
         out += [pad + "| " + line for line in r.get("tail") or []]
-        out += [pad + "%s is outside the project: %s" % (o.get("name"), outside_text(o)) for o in r.get("outside") or []]
+        out += [pad + "%s is outside the project: %s" % (outside_what(o), outside_text(o)) for o in r.get("outside") or []]
+        out += [pad + masked_text(r["masked"])] if r.get("masked") else []
     if isinstance(ts.get("dropped"), dict):
         dr = ts["dropped"]
         out.append("  dropped at %s by %s: %s" % (when(dr.get("at"), day), signer_text(dr.get("by")), dr.get("why")))
@@ -5990,7 +6150,9 @@ def main(argv=None):
             p.usage = "chongdae did TASK [--why WHY] [--approved-in SOURCE:ID] [--by NAME] [--target DIR] (-- COMMAND [ARG...] | --each FILE)"
             p.description = ("Run one operation outside the repository (a deploy, a secret deleted, a remote database changed) for TASK: the command after `--` "
                              "runs in the project without a shell, and {command, exit, tail, at, why, approved-in, signer} is recorded on the task whatever "
-                             "the exit, printed, and committed. A script outside the project is kept in the record (sha256, its text when small). `--each FILE` "
+                             "the exit, printed, and committed. The program it runs, when it is a script outside the project, is kept in the record (sha256, its text "
+                             "when small); a file given as an argument keeps only its sha256 and size, nothing that looks like secrets is kept, and a "
+                             "secret-looking value in the command or its output is masked. `--each FILE` "
                              "runs one command per line as one judgment (one commit; a non-zero exit stops the rest). `show` prints it; `report` lists it as an "
                              "observation, or as an objection when it exited non-zero.")
             p.add_argument("task", help="the task whose work the operation is")

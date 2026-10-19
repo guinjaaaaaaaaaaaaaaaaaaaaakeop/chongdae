@@ -3215,7 +3215,7 @@ def test_did_keeps_a_script_outside_the_project_a_sensible_subject_a_meaningful_
             assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
             assert run("add", "ops", "--brief", "retire R2", "--target", pj.dir)[0] == 0
             code, out = run("did", "ops", "--why", "empty the bucket", "--target", pj.dir, "--", sys.executable, script)
-            assert code == 0 and "empty_r2.py is outside the project: sha256" in out and "its content kept in the record" in out, out
+            assert code == 0 and "the program it ran (empty_r2.py) is outside the project: sha256" in out and "its content kept in the record" in out, out
             rec = pj.state()["tasks"]["ops"]["did"][0]
             assert rec["command"] == chongdae.shlex.join([sys.executable, "<outside:empty_r2.py>"]) and scratch not in json.dumps(rec), rec
             import hashlib
@@ -3225,8 +3225,8 @@ def test_did_keeps_a_script_outside_the_project_a_sensible_subject_a_meaningful_
             subject = subprocess.run(["git", "log", "-1", "--format=%s"], cwd=pj.dir, capture_output=True, text=True).stdout
             assert "'<outside:empty_r2.py>' -> exit 0" in subject, subject
             f = [x for x in json.loads(run("report", "--target", pj.dir)[1])["findings"] if x["kind"] == "did"][0]
-            assert "it ran a file outside the project, empty_r2.py (sha256" in f["text"], f
-            assert "empty_r2.py is outside the project" in run("show", "--target", pj.dir)[1]
+            assert "the program it ran (empty_r2.py) is outside the project: sha256" in f["text"], f
+            assert "(empty_r2.py) is outside the project" in run("show", "--target", pj.dir)[1]
             # several operations, one judgment: one commit, each its own exit and tail; a failure stops the rest
             each = os.path.join(scratch, "ops.txt")
             write(each, "# R2, then D1\n%s -c \"print('emptied')\"\n\n%s -c \"import sys; print('no such db'); sys.exit(2)\"\n%s -c \"print('never')\"\n"
@@ -3241,6 +3241,79 @@ def test_did_keeps_a_script_outside_the_project_a_sensible_subject_a_meaningful_
             subject = subprocess.run(["git", "log", "-1", "--format=%s"], cwd=pj.dir, capture_output=True, text=True).stdout
             assert subject.startswith(os.path.basename(chongdae.run_dir(pj.dir)) + ": did ops: 2 operation(s) (stopped at 2 of 3)"), subject
             assert run("did", "ops", "--each", each, "--target", pj.dir, "--", "echo")[0] != 0, "a command or a file, not both"
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
+
+
+def test_did_keeps_the_program_not_its_data_and_nothing_that_looks_like_secrets():
+    """guin-site 10-16: `did lexicon-publish -- node <scratch>/publish_lexicons.mjs ./lexicons/… <the PDS's .dev.vars> --write`
+    kept every outside file's text, so the data argument — a secrets file — went into `did[0].outside[1].content` and was
+    committed; the report said "it ran a file outside the project, .dev.vars". Only the program run keeps its text; an argument
+    keeps its sha256 and size; a secret-looking name or text keeps nothing, the program included; a secret-looking value in the
+    command line or the tail is masked; the report tells the program from an argument. And f3beee0's subject ended
+    `'<outsi… --write -> exit 0`: the subject is cut at argument boundaries."""
+    import hashlib
+    assert chongdae.program_arg(".", ["node", "x.mjs", "a.json"]) == 1 and chongdae.program_arg(".", ["npx", "tsx", "x.ts"]) == 2
+    assert chongdae.program_arg(".", ["python3", "-u", "x.py", "d"]) == 2 and chongdae.program_arg(".", ["python3", "-c", "print(1)", "x.py"]) is None
+    assert chongdae.program_arg(".", ["wrangler", "deploy", "x.js"]) is None
+    for name in (".env", ".env.local", ".dev.vars", "server.pem", "my.key", "id_rsa", "id_ed25519.pub", "api_token.txt", "db-password", "Credentials.json"):
+        assert chongdae.looks_secret_name(name), name
+    for name in ("publish.mjs", "data.json", "lexicon.json", "README.md"):
+        assert not chongdae.looks_secret_name(name), name
+    fake_gh = "ghp_" + "A1b2C3d4" * 4
+    assert chongdae.looks_secret_text("PDS_ADMIN_PASSWORD=hunter2hunter2\n") and chongdae.looks_secret_text("x = '%s'" % fake_gh)
+    assert chongdae.looks_secret_text("-----BEGIN RSA PRIVATE KEY-----\nMIIE\n-----END RSA PRIVATE KEY-----\n")
+    assert not chongdae.looks_secret_text("const KEY = process.env.API_KEY\nconsole.log('ok')\n")
+    masked, n = chongdae.mask_secrets("ok\nAPI_TOKEN=abcdef123456 done\nkey sk-%s\n" % ("x" * 30))
+    assert n == 2 and "API_TOKEN=<masked> done" in masked and "abcdef123456" not in masked and "sk-x" not in masked, masked
+    assert chongdae.mask_argv(["curl", "--token", "abcdefgh1234", "SECRET_KEY=zzzzzzzz9", "-v"]) == (["curl", "--token", "<masked>", "SECRET_KEY=<masked>", "-v"], 2)
+    # the subject: never inside a marker or a quoted argument
+    cmd = chongdae.shlex.join(["node", "<outside:publish_lexicons.mjs>"] + ["./lexicons/app/guin/%s.json" % ("n" * 12 + str(i)) for i in range(6)] + ["<outside:.dev.vars>", "--write"])
+    sub = chongdae.short_command(cmd)
+    assert len(sub) <= 100 and sub.startswith("node '<outside:publish_lexicons.mjs>' ") and sub.endswith(" … --write"), sub
+    assert all(w == "…" or w in chongdae.shlex.split(cmd) or w.startswith("'<outside:") and w in cmd for w in sub.split(" ")), sub
+    assert "'<outsi…" not in sub and sub.count("'") % 2 == 0, sub
+    assert chongdae.short_join(["a" * 40] * 5, 100) == "; ".join(["a" * 40] * 2) + " (and 3 more)"
+    with Project() as pj, a_session():
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "base"], cwd=pj.dir)
+        scratch = tempfile.mkdtemp(prefix="chongdae-scratch-")
+        try:
+            prog = os.path.join(scratch, "publish.py")
+            write(prog, "import sys\nprint('published', len(sys.argv) - 1, 'file(s)')\nprint('SESSION_TOKEN' + '=' + 'tok_' + 'abcdef0123456789')\n")
+            data = os.path.join(scratch, "lexicon.json")
+            write(data, '{"id": "app.guin.post"}\n')
+            vars_ = os.path.join(scratch, "pds", ".dev.vars")
+            write(vars_, "PDS_JWT_SECRET=0123456789abcdef0123456789abcdef\nPDS_PORT=2583\n")
+            assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
+            assert run("add", "publish", "--brief", "publish the lexicons", "--target", pj.dir)[0] == 0
+            code, out = run("did", "publish", "--why", "publish", "--target", pj.dir, "--", sys.executable, prog, data, vars_, "--write")
+            assert code == 0, out
+            rec = pj.state()["tasks"]["publish"]["did"][0]
+            p, d, v = rec["outside"]
+            assert (p["role"], p["content"]) == ("program", io.open(prog, encoding="utf-8").read()), p
+            assert d["role"] == "argument" and "content" not in d and d["not-kept"] == "an argument, not the program", d
+            assert d["sha256"] == hashlib.sha256(open(data, "rb").read()).hexdigest() and d["size"] == os.path.getsize(data), d
+            assert v["role"] == "argument" and "content" not in v and v["not-kept"] == "looks like secrets" and v["name"] == ".dev.vars", v
+            # the tail: the value masked, the name kept, said
+            assert "SESSION_TOKEN=<masked>" in rec["tail"] and rec["masked"] == {"tail": 1}, rec
+            committed = subprocess.run(["git", "log", "-p", "-1"], cwd=pj.dir, capture_output=True, text=True).stdout
+            assert "0123456789abcdef0123456789abcdef" not in committed and "tok_abcdef0123456789" not in committed, "a secret reached the commit"
+            assert "the program it ran (publish.py) is outside the project" in out and "a file it was given as an argument (.dev.vars) is outside the project" in out, out
+            assert "content not kept: looks like secrets" in out and "masked in the record (looked like secrets): 1 value(s) in the output's end" in out, out
+            f = [x for x in json.loads(run("report", "--target", pj.dir)[1])["findings"] if x["kind"] == "did"][0]
+            assert "the program it ran (publish.py)" in f["text"] and "a file it was given as an argument (.dev.vars)" in f["text"] and "it ran a file" not in f["text"], f
+            # a program whose own text looks like secrets keeps no content either
+            leaky = os.path.join(scratch, "deploy.py")
+            write(leaky, "API_KEY = 'AKIA" + "ABCDEFGHIJKLMNOP" + "'\nprint('ok')\n")
+            assert run("did", "publish", "--target", pj.dir, "--", sys.executable, leaky)[0] == 0
+            o = pj.state()["tasks"]["publish"]["did"][1]["outside"][0]
+            assert o["role"] == "program" and "content" not in o and o["not-kept"] == "looks like secrets", o
+            # a secret on the command line is masked in the record and the subject
+            assert run("did", "publish", "--target", pj.dir, "--", sys.executable, "-c", "print('ok')", "API_SECRET=s3cr3tvalue99")[0] == 0
+            r3 = pj.state()["tasks"]["publish"]["did"][2]
+            assert "API_SECRET=<masked>" in r3["command"] and "s3cr3tvalue99" not in json.dumps(r3) and r3["masked"] == {"command": 1}, r3
+            log = subprocess.run(["git", "log", "-p", "-3"], cwd=pj.dir, capture_output=True, text=True).stdout
+            assert "s3cr3tvalue99" not in log and "ABCDEFGHIJKLMNOP" not in log, "a secret reached the history"
         finally:
             shutil.rmtree(scratch, ignore_errors=True)
 
