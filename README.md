@@ -216,6 +216,22 @@ said in `run`'s output (`note: scope: …`) with the `adopt` that settles it; a 
 measure too until then. Unscoped tasks with no scoped task open keep the window rule. On guin-site, concurrent sub-agents
 needed `adopt` to split the files each had been told were its own
 
+A scope entry that is a record path — another product's files: `hunsu.json`, `hunsu.lock.json`, `mangsang`, … (the lock's
+`record-paths`) — makes those files the task's work: inside its own scope a record file is counted in `touched`, gets its
+commit lines, and does not leave the task held as changing nothing; outside every task's scope a record stays nobody's, as
+before. `add` says so when a scope names record paths. A no-check task held because what changed is records outside its
+scope is told that, with the `adopt` that gives them to it. guin-site run-20261015-094800-de3e: `plugins-lock`
+(`--scope hunsu.json hunsu.lock.json …`) and `site-build-stale` (`--scope mangsang`) recorded `touched: []`, were held as
+"has changed nothing of its own", became the reviewer's objections, and got no commit lines.
+
+A task with no `--check` whose scope (or, at its finish, whose changed files) falls under a check the project declares —
+hunsu.json `settings: {"chongdae": {"checks-for": {"<path prefix>": "<command>"}}}`, e.g. `{"lexicons/": "python3
+tests/run.py records"}` — is offered it: `add`, a held `run` and the finish print `chongdae add TASK --check "<command>"`.
+`add TASK --check C` on an open session task that has no check, with nothing else given, attaches it (`checks-added` in the
+record; `--why` where the lock declares an implementer, as for `--role session`); the check decides the task from then on.
+chongdae cannot know a project's test layout, so the project says it once. guin-site's `lexicon-descriptions` changed 8
+lexicon JSON files with no check and became a carried objection, though the project runs a test group over `lexicons/`.
+
 **Tests the contract deletes.** A contract that retires code can retire its tests: the task that writes the contract's
 tests deletes them. A build's protected test that is absent, and that the task which wrote the build's tests deleted (it is
 in that writer's `touched` and gone from the tree), is *deleted by the contract*. `add` (or `run`, when the deletion came
@@ -636,7 +652,15 @@ deploy` — gets one line of context: `record it: chongdae did TASK --why "…" 
 run and in a worker session (`AGENT_WORKER=1`), silent on `chongdae.py did` itself. hunsu.json
 `settings.chongdae.ops-patterns` (a list of regular expressions searched in the command) replaces the list; `[]` silences it.
 guin-site run-20261015-054352-a0ec ran `npm run deploy … | grep …; git push 2>&1 | tail -1` — both exits lost — and wrote
-the push into ATPROTO.md as prose.
+the push into ATPROTO.md as prose. An operation that comes after a `chongdae … close` on the same line runs outside any
+run, where no `did` can record it: the line then says `this git push runs after close, outside any run — move it before
+close as did TASK -- git push` (guin-site 10-15: `…run; git commit; close; git push`, told "record it", pushed after the
+close).
+
+Under hunsu's probe (`HUNSU_SURVEY=1`: hunsu runs the SessionStart hook in an empty project to judge what it tells a
+session) the hook prints its standing text — the run-in-progress line, the no-run line and the upstream lines, as
+templates with no live run id, goal, count or branch — and writes nothing, so the judge reads what chongdae can say in any
+state, not the one state an empty project shows.
 
 **What a project does by its own procedure** is not a run's. A site's posts are its author's, written by the project's
 own guide, and the pages built from them follow; a run around each would put the author's writing in the builders'

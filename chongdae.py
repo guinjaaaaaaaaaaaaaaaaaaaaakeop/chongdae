@@ -11,7 +11,9 @@
                                         sub-agent does it — declared hands, recorded as performed_by {provider: subagent, host, model}, not
                                         self-performed. --scope: the files/dirs its hands own — while scoped tasks are open, a changed file is the
                                         open task's whose scope holds it most narrowly, not the first to finish's; a file in two scopes or in none is
-                                        said with the `adopt` that settles it. --tests: what a nitpick task writes, what a task with --check may not
+                                        said with the `adopt` that settles it; a record path in it (hunsu.json, mangsang/…) is the task's work there.
+                                        `add <open id> --check C` attaches a check to an open session task with none (offered when hunsu.json
+                                        settings.chongdae.checks-for declares one for its paths). --tests: what a nitpick task writes, what a task with --check may not
                                         change — `add` says which. A protected test the tests writer deleted (in its `touched`, gone from the tree)
                                         is deleted by the contract: said once, sent as `deleted-tests`, never restored or demanded; a build that
                                         recreates one is refused. --closes in a run started without `--from`: said at `add`, and `run` sends no
@@ -810,6 +812,41 @@ def settings(target):
     return out
 
 
+def checks_for(target, paths):
+    """[(prefix, command)] — the checks hunsu.json `settings.chongdae.checks-for` ({"<path prefix>": "<command>"}) declares for
+    these paths (a task's scope entries or the files it changed): a prefix that holds one of them, or that one of them (a scope
+    directory) holds. guin-site `lexicon-descriptions` changed 8 lexicon JSON files with no `--check` and became a carried
+    objection, though the project runs a test group over `lexicons/`; chongdae cannot know a project's test layout, so the
+    project says it once here."""
+    declared = settings(target).get("checks-for")
+    if not isinstance(declared, dict):
+        return []
+    out = []
+    for prefix, command in sorted(declared.items()):
+        pre = str(prefix).replace("\\", "/")
+        while pre.startswith("./"):
+            pre = pre[2:]
+        if not isinstance(command, str) or not command.strip():
+            continue
+        if any(p == "" or p.startswith(pre) or pre.startswith(p.rstrip("/") + "/") for p in (clean_path(x) for x in paths or [])):
+            out.append((pre, command.strip()))
+    return out
+
+
+def check_offer(target, task, files=()):
+    """The line that gives a task with no check the check its project declares for its scope or its files (checks_for), or
+    None: `chongdae add TASK --check "COMMAND"` attaches it to the open task."""
+    if task.get("checks"):
+        return None
+    found = checks_for(target, list(task.get("scope") or []) + list(files or []))
+    if not found:
+        return None
+    commands = list(dict.fromkeys(c for _, c in found))
+    return ("hunsu.json settings.chongdae.checks-for checks %s with %s, and no check decides %s (done would be your word, and the reviewer "
+            "carries it): `chongdae add %s %s` attaches %s" % (", ".join(sorted({p for p, _ in found})), ", ".join("`%s`" % c for c in commands),
+                                                            task["id"], task["id"], " ".join("--check %s" % shlex.quote(c) for c in commands), "it" if len(commands) == 1 else "them"))
+
+
 def outside_runs(target):
     """Paths the project changes by its own procedure, not in runs (an author's posts, the site built from them):
     hunsu.json `settings.chongdae.outside-runs`, a human declaration read where it is written — not from the lock, so it
@@ -1023,6 +1060,25 @@ def record_paths(target):
     return tuple([RUNS + "/", ".claude/", "hunsu"] + others)
 
 
+def record_scope(target, task):
+    """The entries of a task's own `--scope` that are record paths (`hunsu.json`, `mangsang`, …): a task whose work is another
+    product's records — `hunsu lock`, a mangsang confirm — says so by scoping it, and inside its scope those files are its work.
+    guin-site run-20261015-094800-de3e: `plugins-lock` (`--scope hunsu.json hunsu.lock.json …`) and `site-build-stale`
+    (`--scope mangsang`) recorded `touched: []`, `run` held both as "has changed nothing of its own", the reviewer raised both,
+    and no commit lines were printed. This run's record and the host's settings are never anyone's work."""
+    rp = record_paths(target)
+    out = []
+    for c in (task or {}).get("scope") or []:
+        if c and not (c + "/").startswith((RUNS + "/", ".claude/")) and (c.startswith(rp) or (c + "/").startswith(rp)):
+            out.append(c)
+    return tuple(out)
+
+
+def in_entries(path, entries):
+    """Is `path` one of `entries`, or under one of them?"""
+    return any(path == e or path.startswith(e + "/") for e in entries or ())
+
+
 def status_paths(target):
     """Every path `git status` says differs from HEAD (tracked or untracked), relative to the repository root: both sides of a
     rename or copy (`git mv a b` is a change to a and to b), never quoted (`-z`: a Korean or spaced name is itself). None
@@ -1049,10 +1105,11 @@ def status_paths(target):
     return [p.replace("\\", "/") for p in out]
 
 
-def dirty(target, records_too=False):
+def dirty(target, records_too=False, keep=()):
     """{path: content hash} of every file that differs from HEAD (tracked or untracked) under target, paths relative to target.
     None when there is no git — then nothing can be attributed, and the record says so. The products' records are left out
-    (nobody's work) unless `records_too`: what the reviewer wrote at close is a record, and the close commit wants it."""
+    (nobody's work) unless `records_too`: what the reviewer wrote at close is a record, and the close commit wants it; `keep`,
+    record paths a task's own scope names (record_scope), are kept too."""
     import hashlib, subprocess
     paths = status_paths(target)
     if paths is None:
@@ -1062,7 +1119,7 @@ def dirty(target, records_too=False):
     out = {}
     for path in paths:
         path = path[len(prefix):] if prefix and path.startswith(prefix) else path
-        if path and not path.startswith((RUNS + "/",) if records_too else record_paths(target)) and not re.search(r"(^|/)__pycache__/|\.py[co]$", path):   # records, machine-local state and interpreter leftovers are nobody's work
+        if path and (not path.startswith((RUNS + "/",) if records_too else record_paths(target)) or in_entries(path, keep)) and not re.search(r"(^|/)__pycache__/|\.py[co]$", path):   # records, machine-local state and interpreter leftovers are nobody's work
             full = os.path.join(target, path)
             out[path] = hashlib.sha1(io.open(full, "rb").read()).hexdigest() if os.path.isfile(full) else "gone"
     return out
@@ -1085,7 +1142,7 @@ def file_hash(target, path):
     return hashlib.sha1(io.open(full, "rb").read()).hexdigest() if os.path.isfile(full) else "gone"
 
 
-def committed_since(target, head):
+def committed_since(target, head, keep=()):
     """{path: content hash at `head`} for every file a commit since `head` changed (records and leftovers aside, as in `dirty`):
     work the session committed before `run` measured it. Empty when HEAD has not moved or there is no git."""
     import hashlib, subprocess
@@ -1097,24 +1154,24 @@ def committed_since(target, head):
     out = {}
     for path in done.stdout.split("\0"):
         path = path.replace("\\", "/")
-        if path and not path.startswith(record_paths(target)) and not re.search(r"(^|/)__pycache__/|\.py[co]$", path):
+        if path and (not path.startswith(record_paths(target)) or in_entries(path, keep)) and not re.search(r"(^|/)__pycache__/|\.py[co]$", path):
             then = subprocess.run(["git", "show", "%s:./%s" % (head, path)], cwd=target, capture_output=True)
             out[path] = hashlib.sha1(then.stdout).hexdigest() if then.returncode == 0 else "gone"
     return out
 
 
-def touched_files(target, start=None, head=None):
+def touched_files(target, start=None, head=None, keep=()):
     """What changed since the task started: every file whose content is not what it was then. Without a start snapshot, the
     whole dirty set. A file dirty at start and clean now went back to HEAD — a change like any other, and the one a build
     makes when it takes the committed version of an uncommitted file for the real one (a contract's newest tests).
     `head`, the commit the tree stood on at start: a file a commit since then changed is measured against what it was there,
     so work the session committed before `run` is still this task's (guin-site's drop-nojekyll recorded `touched: []`
     for three committed files, and the report then had nobody to attribute them to)."""
-    now = dirty(target)
+    now = dirty(target, keep=keep)
     if now is None:
         return None
     start = start or {}
-    then = committed_since(target, head)
+    then = committed_since(target, head, keep)
     changed = {p for p, h in now.items() if start.get(p, then.get(p)) != h}
     for p, h in list(start.items()) + [(p, h) for p, h in then.items() if p not in start]:
         if p not in now and file_hash(target, p) != h:
@@ -1129,7 +1186,7 @@ def adopted_files(ts):
 
 def measured(target, ts):
     """What a task changed: its measure from its start snapshot, and the files a judgment gave it (`adopt`). None without git."""
-    found = touched_files(target, ts.get("start"), ts.get("start-head"))
+    found = touched_files(target, ts.get("start"), ts.get("start-head"), record_scope(target, ts.get("def")))   # record files its own scope names are its work
     if found is None:
         return None
     return sorted(set(found) | adopted_files(ts))
@@ -2761,7 +2818,7 @@ def run_pass(args):
             if absent and task.get("checks"):
                 return stop("%s: its protected tests do not exist (%s) — the guard would watch nothing; the task that writes them runs first, "
                             "or fix the paths (`chongdae drop` and `add` again)" % (task["id"], ", ".join(absent)))
-            ts["start"] = dirty(target)   # what the tree already differed in: `touched` is measured from here, not from HEAD
+            ts["start"] = dirty(target, keep=record_scope(target, task))   # what the tree already differed in: `touched` is measured from here, not from HEAD
             ts["start-head"] = head_sha(target)   # and the commit under it: a commit made during the task is still the task's work
             keep_contract_tests(target, d, task)
             save_state(d, state)
@@ -2800,6 +2857,9 @@ def run_pass(args):
         # nothing, and landed in a commit titled "accept decisions on cache-build (delegated)", 12 files
         commit_record(target, os.path.basename(d), "done %s%s" % (task["id"], " — " + cut(task["brief"], 100) if task.get("brief") else ""))
         print("  done %s" % task["id"])
+        offer = check_offer(target, task, ts.get("touched") or []) if hire(ctx["providers"], task)[1] in SESSION_HANDS else None
+        if offer:
+            print("    note: %s was done on your word: %s — next time, before `run`" % (task["id"], offer))
         mine = {f: [task["id"]] for f, tids in uncommitted_work(target, plan, state).items() if task["id"] in tids}
         if mine and not state.get("worktree"):
             # its work is the session's to commit, in the form the log tells from chongdae's own (`close` stops on it otherwise)
@@ -2811,7 +2871,7 @@ def run_pass(args):
         setattr(args, "continuing", True)
         return cmd_run(args)
     if ctx["held"]:
-        ids = [h.split(" ", 1)[0] for h in ctx["held"]]
+        ids = list(dict.fromkeys(h.split(" ", 1)[0].rstrip(":") for h in ctx["held"]))   # a task's offer line is its own, not another task
         one = ids[0] if len(ids) == 1 else "TASK"
         return stop("session agent: %s %s open — no check decides %s, and this `run` did not name %s. Do the work, then `chongdae run`; "
                     "an operation outside the repository first goes through `chongdae did %s --why WHY -- COMMAND`; work that leaves nothing "
@@ -3196,8 +3256,16 @@ def decide_task(ctx, task, ts, who, path):
         # 06:37–06:39. It stays open, the pass goes on, and the call ends saying how to finish it
         if who in SESSION_HANDS and not ts.get("did") and not gate_of(task).get("human") and not own_measure():   # a gated task's done is a person's confirm
             if task["id"] not in ctx["named"]:
-                ctx["held"].append("%s has changed nothing of its own%s and has no `did` record: %s" % (
-                    task["id"], " — %s were the task before it" % ", ".join(sorted(ctx["claimed_now"])) if ctx["claimed_now"] else "", cut(task.get("brief", ""), 200)))
+                # when what changed is records, say that, not "nothing": they count only inside the task's own scope
+                theirs = {f for t2 in all_tasks(plan, state) if t2["id"] != task["id"] for f in list(state["tasks"].get(t2["id"], {}).get("touched") or []) + list(record_scope(target, t2))}
+                recs = [f for f in record_changes(target) if not in_entries(f, theirs) and not f.startswith(".claude/")]
+                why = (" — what changed is records (%s), never a task's work unless its own `--scope` names them: "
+                       "`chongdae adopt %s %s --why WHY` gives them to it —" % (", ".join(recs), task["id"], " ".join(recs))) if recs else ""
+                ctx["held"].append("%s has changed nothing of its own%s%s and has no `did` record: %s" % (
+                    task["id"], " — %s were the task before it" % ", ".join(sorted(ctx["claimed_now"])) if ctx["claimed_now"] else "", why, cut(task.get("brief", ""), 200)))
+                offer = check_offer(target, task)
+                if offer:
+                    ctx["held"].append("%s: %s" % (task["id"], offer))
                 return HELD
             said = "%s: done on the session's word by name (`run %s`), with nothing of its own in the tree and no `did`" % (task["id"], task["id"])
             if said not in ts.setdefault("non-claims", []):
@@ -3277,7 +3345,7 @@ def place_eyes(ctx, task, ts, who, touched):
         built = {k: (ts.get("response") or {}).get(k) for k in ("summary", "verified", "non-claims")} if ts.get("response") else None
         by_provider = ts.get("touched_by_provider")
         extra = {"touched": by_provider if by_provider is not None else touched, "tests": task.get("tests", []), "built": built,
-                 "excluded": {"record-paths": record_changes(target)}}
+                 "excluded": {"record-paths": [p for p in record_changes(target) if p not in (touched or [])]}}
         # how `touched` was attributed, when not by the measure alone: files a judgment gave this task, files another task's
         # finish pinned into its start, files its own word names that were already changed when it was added. A verifier that
         # saw only `touched: []` beside a tree holding the work rejected guin-site's escape-build on every retry
@@ -3613,15 +3681,16 @@ def uncommitted_work(target, plan, state):
     """{file: [task ids]} — the files a finished task of this run counts as its work (`touched`, and anything under its
     `--scope`) that are not committed. A dropped task's window is not work that stands; an open task's is work in flight,
     left open with it."""
-    now = dirty(target) or {}
+    now = dirty(target, records_too=True) or {}   # a record file is work when a task's `touched` or its own record scope says so
     if not now:
         return {}
-    out = {}
+    rp, out = record_paths(target), {}
     for t in all_tasks(plan, state):
         ts = state["tasks"].get(t["id"], {})
         if ts.get("status") not in ("done", "produced"):
             continue
-        mine = set(ts.get("touched") or []) | {f for f in now if scope_depth(f, t.get("scope")) is not None}
+        own = record_scope(target, t)
+        mine = set(ts.get("touched") or []) | {f for f in now if scope_depth(f, t.get("scope")) is not None and (not f.startswith(rp) or in_entries(f, own))}
         for f in sorted(mine):
             if f in now:
                 out.setdefault(f, []).append(t["id"])
@@ -3682,6 +3751,16 @@ def bash_operation(target, command):
         if m:
             return m.group(0)
     return None
+
+
+def after_close(target, command):
+    """Does the operation in this Bash command come after a `chongdae … close` on the same line? Then it runs once the run is
+    closed, outside any run, and `did` can no longer record it. guin-site 10-15: `…run; git commit; close; git push` — the hook
+    said "record it: did …", and the push ran after the run had closed."""
+    command = str(command or "")
+    what = bash_operation(target, command)
+    close = re.search(r"chongdae(?:\.py)?[\"']?\s+(?:--?\S+(?:\s+[^-\s;&|]\S*)?\s+)*close\b", command)
+    return bool(what and close) and command.find(what, close.end()) >= 0
 
 
 def reads_as_operation(task):
@@ -3963,7 +4042,7 @@ def route_dispute(target, d, state, plan, task, disputed, judgment=None):
     wts.pop("reported", None)
     # the amendment is measured from now, with the disputed files as the build protects them: a fix the session already made
     # in the tree (and a judgment then restored, or not yet) counts as the amendment
-    wts["start"], wts["start-head"] = dirty(target) or {}, head_sha(target)
+    wts["start"], wts["start-head"] = dirty(target, keep=record_scope(target, wts.get("def"))) or {}, head_sha(target)
     for f in files:
         kept = work_path(d, os.path.join("contract-tests", task["id"], f))
         if os.path.isfile(kept):
@@ -4155,9 +4234,11 @@ def cmd_add(args):
         if r is not None:
             return r
         plan, state = load(os.path.join(d, "plan.json")), load_state(d)
+    checks = [portable_argv(shlex.split(c)) for c in args.check or []]
+    if args.id in state["tasks"] and checks:
+        return add_checks(args, d, plan, state, checks)
     if args.id in state["tasks"] or any(t.get("id") == args.id for t in plan.get("tasks", [])):
         raise SystemExit("task %s exists" % args.id)
-    checks = [portable_argv(shlex.split(c)) for c in args.check or []]
     # Who does it is the lock's to say, not this session's to assume: a task with checks is a build, and a build goes to the
     # implementer the lock declares; a task that writes the contract's tests goes to the nitpicker. The session does a task
     # itself when nothing is declared for it (a plan section, a model), or when it says so and why — recorded, like a
@@ -4226,7 +4307,7 @@ def cmd_add(args):
         # the record says whose place it took, and who said so
         ts["dispatched"] = {"to": "subagent", "instead-of": due, "by": signer(args), **({"why": args.why} if args.why else {}), **stamp()}
     if hands in SESSION_HANDS:
-        ts["start"] = dirty(args.target)   # the session works between `add` and `run`: what changed is measured from now
+        ts["start"] = dirty(args.target, keep=record_scope(args.target, task))   # the session works between `add` and `run`: what changed is measured from now
         ts["start-head"] = head_sha(args.target)
         keep_contract_tests(args.target, d, task)
     # a provider's task starts when `run` spawns it (`start` is taken then): a build added alongside its test task must not see the test-writer's file as its own change
@@ -4260,6 +4341,14 @@ def cmd_add(args):
         print("  --scope: %s — while scoped tasks are open, a changed file is the open task's whose scope holds it most narrowly, not the first to finish's%s"
               % (", ".join(c or "." for c in task["scope"]), "; note: %s %s the same scope entry — a file there is said at the finish, with the `adopt` that settles it"
                  % (", ".join(same), "has" if len(same) == 1 else "have") if same else ""))
+    offer = check_offer(args.target, task) if hands in SESSION_HANDS else None
+    if offer:
+        print("  note: " + offer)
+    if task.get("scope") and record_scope(args.target, task):
+        recs = record_scope(args.target, task)
+        print("  --scope: %s record path%s %s (another product's files) — that is fine: inside this task's own scope a record file is its work "
+              "(counted in `touched`, its commit lines printed, not held as changing nothing); outside every task's scope a record stays nobody's"
+              % ("names only" if len(recs) == len(task["scope"]) else "names", "" if len(recs) == 1 else "s", ", ".join(recs)))
     if task["tests"]:
         if protects:
             print("  --tests: files %s may not change — %s (the contract decides, not the builder). A task that corrects tests "
@@ -4278,6 +4367,34 @@ def cmd_add(args):
         # under `sync` or `shared` a task travels when it is named: another machine cannot take a task its record has not got
         # (two clones on GitHub, 2026-10-13: `add` left tasks/ uncommitted and the other machine answered "no task T1")
         commit_record(args.target, os.path.basename(d), "add %s — %s" % (args.id, (task.get("brief") or "")[:120]))
+    return 0
+
+
+def add_checks(args, d, plan, state, checks):
+    """`add TASK --check C` on an open session task that has no check: the check is attached, and decides it from now on — the
+    line `add` and `run` offer when the project declares a check for the task's scope (`settings.chongdae.checks-for`). Only
+    the check: a task's brief, scope and tests are what it was added with."""
+    ts = state["tasks"][args.id]
+    task = ts.get("def")
+    other = [o for o in ("brief", "closes", "tests", "scope", "gate", "before", "after", "domain", "requires") if getattr(args, o, None) not in (None, [])]
+    declared = providers(args.target, plan)
+    if not task or ts.get("status") != "todo" or task.get("checks") or other or hire(declared, task)[1] not in SESSION_HANDS:
+        raise SystemExit("task %s exists — `add %s --check C` attaches a check only to an open session task that has none, with nothing else given%s"
+                         % (args.id, args.id, " (given: %s)" % ", ".join("--" + o for o in other) if other else ""))
+    due = hire(declared, {"role": "implementer", "requires": task.get("requires")})[1] is not None and task["role"] == "session"
+    if due and not ts.get("self-performed"):
+        if not args.why:
+            raise SystemExit("add %s --check: the lock declares an implementer for a task a check decides — say why the session does it itself (--why)" % args.id)
+        ts["self-performed"] = {"instead-of": "implementer", "why": args.why, "by": signer(args), **stamp()}
+    task["checks"] = checks
+    ts["non-claims"] = [n for n in ts.get("non-claims") or [] if n != "no check decides this task; done means the agent said so"]
+    if not ts["non-claims"]:
+        ts.pop("non-claims")
+    ts.setdefault("checks-added", []).append({"checks": checks, "by": signer(args), **stamp()})
+    save_state(d, state)
+    print("%s: check attached — %s; `chongdae run` decides it by the check" % (args.id, "; ".join("`%s`" % shlex.join(c) for c in checks)))
+    if remote_mode(args.target):
+        commit_record(args.target, os.path.basename(d), "add %s --check" % args.id)
     return 0
 
 
@@ -5126,7 +5243,7 @@ def cmd_adopt(args):
         files.append(f.rstrip("/"))
     files = sorted(set(files))
     based = (state.get("created") or {}).get("based_on")
-    known = set(dirty(args.target) or {}) | set(committed_since(args.target, based) if based else {})
+    known = set(dirty(args.target, records_too=True) or {}) | set(committed_since(args.target, based) if based else {})
     for t2 in all_tasks(plan, state):
         o = state["tasks"].get(t2["id"], {})
         known |= set(o.get("touched") or []) | set((o.get("start") or {}) if isinstance(o.get("start"), dict) else {})
@@ -6187,7 +6304,7 @@ def main(argv=None):
             p.add_argument("--by", default=None, help="with --role session --why (or --role subagent): who decided (default: the session — its host and model, not git user.name)")
             p.add_argument("--brief", default=None)
             p.add_argument("--closes", nargs="*", default=None)
-            p.add_argument("--check", action="append", default=None, help="a check argv (quoted); repeatable")
+            p.add_argument("--check", action="append", default=None, help="a check argv (quoted); repeatable. On an open session task with no check (and nothing else given): attaches it")
             p.add_argument("--tests", nargs="*", default=None, help="test files. For a nitpick task (or one no --check decides): the tests it writes. For a task with --check: files it may not change — its judgment restores them (`add` says which). A task that corrects a build's tests does not protect them: `chongdae dispute BUILD --tests F --why`")
             p.add_argument("--gate", choices=["human"], default=None)
             p.add_argument("--before", nargs="*", default=None, help="roles to run before the work (their findings must be accepted first): --before quibble")

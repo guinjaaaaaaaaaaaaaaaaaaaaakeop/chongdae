@@ -3318,6 +3318,113 @@ def test_did_keeps_the_program_not_its_data_and_nothing_that_looks_like_secrets(
             shutil.rmtree(scratch, ignore_errors=True)
 
 
+def test_record_files_inside_a_tasks_own_scope_are_its_work():
+    """guin-site run-20261015-094800-de3e: `plugins-lock` (`--scope hunsu.json hunsu.lock.json …`) and `site-build-stale`
+    (`--scope mangsang`) recorded `touched: []` — record paths are nobody's work — so `run` held both ("has changed nothing of
+    its own"), close's reviewer raised both, and no `run-<id>/<task> (session):` commit lines were printed. Inside a task's own
+    scope a record file is its work; outside every scope it stays excluded, and the held message says that is why."""
+    with Project() as pj:
+        subprocess.run(["git", "config", "user.email", "t@t"], cwd=pj.dir, check=True)
+        subprocess.run(["git", "config", "user.name", "t"], cwd=pj.dir, check=True)
+        write(os.path.join(pj.dir, "hunsu.json"), {"plugins": {}})
+        write(os.path.join(pj.dir, "hunsu.lock.json"), {"roles": {}, "record-paths": {"mangsang": ["mangsang/"]}})
+        write(os.path.join(pj.dir, "hunsu-judgments.json"), {"judgments": []})
+        write(os.path.join(pj.dir, "mangsang", "relations.json"), {"relations": []})
+        subprocess.run(["git", "add", "-A"], cwd=pj.dir, check=True)
+        subprocess.run(["git", "commit", "-qm", "base"], cwd=pj.dir, check=True)
+        assert chongdae.record_scope(pj.dir, {"scope": ["hunsu.json", "mangsang", "src", "", chongdae.RUNS]}) == ("hunsu.json", "mangsang")
+        assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
+        code, out = run("add", "plugins-lock", "--brief", "update the plugins and lock", "--scope", "hunsu.json", "--target", pj.dir)
+        assert code == 0 and "--scope: names only record path hunsu.json" in out and "that is fine" in out and "its commit lines printed" in out, out
+        code, out = run("add", "site-build-stale", "--brief", "dispose of the stale relations", "--scope", "mangsang", "--target", pj.dir)
+        assert code == 0 and "names only record path mangsang" in out, out
+        write(os.path.join(pj.dir, "hunsu.json"), {"plugins": {"mangsang": {}}})
+        write(os.path.join(pj.dir, "mangsang", "relations.json"), {"relations": [{"id": "r1"}]})
+        code, out = run("run", "--target", pj.dir)
+        assert code == 0 and "has changed nothing of its own" not in out, out
+        st = pj.state()["tasks"]
+        assert st["plugins-lock"]["status"] == "done" and st["plugins-lock"]["touched"] == ["hunsu.json"], st["plugins-lock"]
+        assert st["site-build-stale"]["status"] == "done" and st["site-build-stale"]["touched"] == ["mangsang/relations.json"], st["site-build-stale"]
+        rid = os.path.basename(chongdae.run_dir(pj.dir))
+        assert "git add -- hunsu.json" in out and "%s/plugins-lock (session): update the plugins and lock" % rid in out, out
+        assert "git add -- mangsang/relations.json" in out and "%s/site-build-stale (session)" % rid in out, out
+        # outside a task's scope a record stays excluded, and the held message names that as the reason
+        assert run("add", "judge", "--brief", "record the judgment", "--target", pj.dir)[0] == 0
+        write(os.path.join(pj.dir, "hunsu-judgments.json"), {"judgments": [{"id": "j1"}]})
+        code, out = run("run", "--target", pj.dir)
+        assert code == chongdae.DECISION and "judge has changed nothing of its own — what changed is records (hunsu-judgments.json)" in out, out
+        assert "`chongdae adopt judge hunsu-judgments.json --why WHY`" in out and pj.state()["tasks"]["judge"]["status"] == "todo", out
+        assert run("adopt", "judge", "hunsu-judgments.json", "--why", "the judgment is this task's", "--target", pj.dir)[0] == 0
+        code, out = run("run", "--target", pj.dir)
+        assert code == 0 and pj.state()["tasks"]["judge"]["touched"] == ["hunsu-judgments.json"] and "git add -- hunsu-judgments.json" in out, out
+
+
+def test_a_task_with_no_check_is_offered_the_check_its_project_declares_for_its_scope():
+    """guin-site `lexicon-descriptions` changed 8 lexicon JSON files with no `--check` and became a carried objection, though the
+    project runs a test group over `lexicons/`. hunsu.json `settings.chongdae.checks-for` ({"<path prefix>": "<command>"}) says
+    which check covers which paths; `add`, a held `run` and a finish with no check offer the exact line, and `add TASK --check C`
+    attaches it to the open task."""
+    with Project() as pj:
+        subprocess.run(["git", "config", "user.email", "t@t"], cwd=pj.dir, check=True)
+        subprocess.run(["git", "config", "user.name", "t"], cwd=pj.dir, check=True)
+        write(os.path.join(pj.dir, "check_lex.py"), "import json, glob\n[json.load(open(f)) for f in glob.glob('lexicons/*.json')]\n")
+        cmd = "%s check_lex.py" % chongdae.shlex.quote(sys.executable)
+        write(os.path.join(pj.dir, "hunsu.json"), {"settings": {"chongdae": {"checks-for": {"lexicons/": cmd, "src/": "make test"}}}})
+        write(os.path.join(pj.dir, "lexicons", "a.json"), {"id": "a"})
+        subprocess.run(["git", "add", "-A"], cwd=pj.dir, check=True)
+        subprocess.run(["git", "commit", "-qm", "base"], cwd=pj.dir, check=True)
+        assert chongdae.checks_for(pj.dir, ["lexicons/a.json"]) == [("lexicons/", cmd)] and chongdae.checks_for(pj.dir, ["docs"]) == []
+        assert chongdae.checks_for(pj.dir, ["."]) == [("lexicons/", cmd), ("src/", "make test")]   # a scope that holds a prefix
+        assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
+        offer = "`chongdae add lexicon-descriptions --check %s` attaches it" % chongdae.shlex.quote(cmd)
+        code, out = run("add", "lexicon-descriptions", "--brief", "describe every lexicon", "--scope", "lexicons", "--target", pj.dir)
+        assert code == 0 and "note: hunsu.json settings.chongdae.checks-for checks lexicons/ with `%s`" % cmd in out and offer in out, out
+        code, out = run("run", "--target", pj.dir)   # nothing changed yet: held, and the offer said again
+        assert code == chongdae.DECISION and "lexicon-descriptions: hunsu.json settings.chongdae.checks-for" in out and offer in out, out
+        assert "decision: session agent: lexicon-descriptions stays open" in out, out
+        assert run("add", "lexicon-descriptions", "--check", cmd, "--brief", "other", "--target", pj.dir)[0] != 0, "only the check is attached"
+        code, out = run("add", "lexicon-descriptions", "--check", cmd, "--target", pj.dir)
+        assert code == 0 and "check attached" in out, out
+        ts = pj.state()["tasks"]["lexicon-descriptions"]
+        assert ts["def"]["checks"] == [chongdae.portable_argv(chongdae.shlex.split(cmd))] and "no check decides this task; done means the agent said so" not in ts.get("non-claims", []), ts
+        write(os.path.join(pj.dir, "lexicons", "a.json"), {"id": "a", "description": "an a"})
+        code, out = run("run", "--target", pj.dir)
+        assert code == 0 and pj.state()["tasks"]["lexicon-descriptions"]["status"] == "done" and "was done on your word" not in out, out
+        # a task with no scope and no check: its finish says what would have decided it
+        assert run("add", "notes", "--brief", "a note", "--target", pj.dir)[0] == 0
+        write(os.path.join(pj.dir, "lexicons", "b.json"), {"id": "b"})
+        code, out = run("run", "--target", pj.dir)
+        assert code == 0 and "note: notes was done on your word: hunsu.json settings.chongdae.checks-for checks lexicons/" in out, out
+        assert run("add", "notes", "--check", cmd, "--target", pj.dir)[0] != 0, "a done task takes no check"
+
+
+def test_session_start_under_hunsus_probe_says_its_standing_text_not_one_state():
+    """hunsu's judge runs each SessionStart hook in an empty project with HUNSU_SURVEY=1: chongdae's showed only its "no run in
+    progress" line, and in the project itself its line carried the run's id. Under the probe it says every line it can say,
+    as templates — no live id, goal, count or branch — the same in any state, and writes nothing."""
+    texts = []
+    with Project() as pj:
+        _git(pj.dir, "commit", "-q", "--allow-empty", "-m", "base")
+        for step in ("empty", "running"):
+            if step == "running":
+                assert run("init", "--session", "--goal", "the live goal", "--target", pj.dir)[0] == 0
+                assert run("add", "live-task", "--brief", "b", "--target", pj.dir)[0] == 0
+            code, out = hook("session_start.py", {"cwd": pj.dir, "session_id": "probe1", "transcript_path": "/x/probe1.jsonl"}, HUNSU_SURVEY="1")
+            assert code == 0, out
+            texts.append(json.loads(out)["hookSpecificOutput"]["additionalContext"])
+        assert texts[0] == texts[1], texts
+        t = texts[0]
+        for said in ("run <run-id> in progress", "<N> task(s) open", "no run in progress", "init --session", "<branch>: no upstream",
+                     "commits not on <remote>/<branch>", "has not been fetched yet", "AGENT_WORKER"):
+            assert said in t, (said, t)
+        for live in (os.path.basename(chongdae.run_dir(pj.dir)), "the live goal", "live-task", HERE, os.path.expanduser("~")):
+            assert live not in t, (live, t)
+        assert not os.path.exists(os.path.join(pj.dir, chongdae.SESSIONS, "probe1.json")), "the probe wrote nothing"
+        # and the hook's live line is the template filled
+        live = json.loads(hook("session_start.py", {"cwd": pj.dir})[1])["hookSpecificOutput"]["additionalContext"]
+        assert "in progress (session: 'the live goal') — 1 task(s) open: live-task. Writes go through this run" in live, live
+
+
 def test_done_is_committed_when_it_is_made():
     """guin-site run-20261015-054352-a0ec: five tasks became done in `run` calls that committed nothing; their results landed
     in a commit titled "accept decisions on cache-build (delegated)", 12 files. Done is a judgment, notarized when made."""
@@ -3483,6 +3590,14 @@ def test_close_and_report_name_an_operation_with_no_did_and_a_bash_operation_get
         assert hook("pre_bash.py", payload("git status && ls")) == (0, "")
         assert hook("pre_bash.py", payload('python3 "/x/chongdae.py" did ops --why w -- git push')) == (0, ""), "did itself is the record"
         assert hook("pre_bash.py", payload("git push"), AGENT_WORKER="1") == (0, ""), "a worker session: silent"
+        # guin-site 10-15: `…run; git commit; close; git push` — told "record it", the push ran after the run had closed
+        line = 'python3 "/x/chongdae.py" run --target .; git commit -qm w -- a.py; python3 "/x/chongdae.py" close --target .; git push'
+        ctx = json.loads(hook("pre_bash.py", payload(line))[1])["hookSpecificOutput"]["additionalContext"]
+        assert "this `git push` runs after `close`, outside any run — move it before close as" in ctx and "did TASK" in ctx and "-- git push`" in ctx, ctx
+        assert chongdae.after_close(pj.dir, 'python3 chongdae.py --target . close && git push') and not chongdae.after_close(pj.dir, 'git push; python3 chongdae.py close')
+        assert not chongdae.after_close(pj.dir, 'python3 chongdae.py run --target .; git push') and not chongdae.after_close(pj.dir, 'python3 chongdae.py close')
+        ctx = json.loads(hook("pre_bash.py", payload('git push; python3 "/x/chongdae.py" close'))[1])["hookSpecificOutput"]["additionalContext"]
+        assert "record it:" in ctx and "after `close`" not in ctx, ctx
         write(os.path.join(pj.dir, "hunsu.json"), {"settings": {"chongdae": {"ops-patterns": [r"\bmake\s+release\b"]}}})
         assert hook("pre_bash.py", payload("git push")) == (0, "") and "make release" in hook("pre_bash.py", payload("make release"))[1]
         hooks = json.load(open(os.path.join(HERE, "hooks", "hooks.json"), encoding="utf-8"))["hooks"]["PreToolUse"]
