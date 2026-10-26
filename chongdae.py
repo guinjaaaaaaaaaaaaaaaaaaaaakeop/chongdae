@@ -195,7 +195,8 @@ def save(path, data):
 LOCAL = "local"
 
 
-PRIVATE_KEYS = ("session", "transcript", "kept-locally", "start", "start-head",   # the host session behind an author line; the snapshot a task measures from, and the commit it stood on
+PRIVATE_KEYS = ("session", "transcript", "kept-locally", "start", "start-head", "start-heads",   # the host session behind an author line; the snapshot a task measures from, and the commit(s) it stood on
+                "added-in",                                         # the session that added a session task: a run two sessions share tells each its own
                 "commands", "read",                                 # a worker's command lines and what it read: the record keeps the summary (`trace`)
                 "reported", "rebaseline",                           # flags the engine keeps between two `run` calls
                 "checked-tree", "checks-tree",                      # the tree a `--checked` command, or the task's own checks, ran on: what changed after is measured from it
@@ -319,6 +320,20 @@ def non_claims(state, unseen=False):
     for text, tids in by_text.items():
         out.append("%s: %s" % (tids[0], text) if len(tids) == 1 else "%s — %d task(s): %s" % (text, len(tids), ", ".join(tids)))
     return out
+
+
+LOCK_STANDING = ("no `reviewer` role in the lock",)   # a non-claim about the lock, not the run: the same at every close until the lock changes
+
+
+def said_last_run(target, d, state):
+    """The lock's standing non-claims this run shares with the run that ended before it: kept in the record, not printed at
+    the close again — "no `reviewer` role in the lock" closed each of a day's ten runs (sagoforce, 10-26); `hunsu check` says it."""
+    mine = [n for n in state.get("non-claims", []) if n.startswith(LOCK_STANDING)]
+    if not mine:
+        return set()
+    ended = sorted((st for st in (load_state(r) for r in all_runs(target) if r != d) if st.get("status") == "complete"),
+                   key=lambda st: str(st["ended"].get("at") if isinstance(st.get("ended"), dict) else st.get("ended") or ""))   # by when it ended: two runs opened in one second sort by their suffix
+    return set(mine) & set(ended[-1].get("non-claims", [])) if ended else set()
 
 
 def all_runs(target):
@@ -615,8 +630,15 @@ def trace_of(transcript, target, since=None, project_only=False):
     roots |= {"~" + r[len(home):] for r in list(roots) if home and r.startswith(home + os.sep)}   # `cd ~/src/app` names it too
     def about_project(text, cwd):
         # a session works on many things; its trace for one project keeps what touched that project
-        return not project_only or any(r in str(text) for r in roots) or (cwd and os.path.realpath(cwd) in roots)
-    for line in io.open(transcript, encoding="utf-8", errors="replace"):
+        # a shell left in a directory below the project (`cd engine`, a nested repository) is still in it: sagoforce 10-26
+        # counted those commands "outside this project"
+        here = os.path.realpath(cwd) if cwd else None
+        return not project_only or any(r in str(text) for r in roots) or bool(here and any(here == r or here.startswith(r + os.sep) for r in roots))
+    # Claude Code keeps a session's sub-agents beside it, `<session>/subagents/agent-<id>.jsonl`, each line as the session's:
+    # their edits are the session's hands too (sagoforce 10-26: eight fix batches' edits were in no trace)
+    stem = transcript[:-len(".jsonl")] if transcript.endswith(".jsonl") else None
+    sub = sorted(glob.glob(os.path.join(glob.escape(stem), "subagents", "agent-*.jsonl"))) if stem else []
+    for line in (line for path in [transcript] + sub for line in io.open(path, encoding="utf-8", errors="replace")):
         try:
             d = json.loads(line) if line.strip() else None
         except ValueError:
@@ -1095,7 +1117,7 @@ def status_paths(target):
     while i < len(parts):
         entry = parts[i]
         i += 1
-        if len(entry) < 4:
+        if len(entry) < 4 or entry.endswith("/"):   # a directory is a repository of its own (`?? engine/`): nested_repos counts it
             continue
         out.append(entry[3:])
         if entry[0] in "RC" or entry[1] in "RC":   # the next field is where it came from
@@ -1103,6 +1125,45 @@ def status_paths(target):
                 out.append(parts[i])
             i += 1
     return [p.replace("\\", "/") for p in out]
+
+
+def nested_repos(target):
+    """The repositories inside the project that its own git does not hold: a directory with its own `.git` that the project's
+    status names as one untracked or ignored entry (`?? engine/`, `!! engine/`). A workspace of sibling repositories keeps
+    them so — sagoforce, 10-26: six, all in `.gitignore`; 43 of 47 tasks recorded `touched: []`, the verifier accepted 24
+    empty packets (one a 33-file change), and `adopt` refused a committed file as nothing anyone changed. A submodule is the
+    project's own (its gitlink is tracked). Paths relative to target, `/` separators.
+    ponytail: a repository below an ignored directory that is not one (`vendor/x/.git`) is not found."""
+    import subprocess
+    try:
+        done = subprocess.run(["git", "status", "--porcelain", "-z", "--ignored=matching", "--untracked-files=normal", "--", "."],
+                              cwd=target, capture_output=True, text=True, encoding="utf-8", errors="surrogateescape")
+    except OSError:
+        return []
+    if done.returncode:
+        return []
+    prefix = subprocess.run(["git", "rev-parse", "--show-prefix"], cwd=target, capture_output=True, text=True, encoding="utf-8").stdout.strip().replace("\\", "/")
+    out = []
+    for entry in done.stdout.split("\0"):
+        if entry[:3] in ("?? ", "!! ") and entry.endswith("/"):
+            path = entry[3:].rstrip("/").replace("\\", "/")
+            path = path[len(prefix):] if prefix and path.startswith(prefix) else path
+            if path and not path.startswith(RUNS + "/") and os.path.exists(os.path.join(target, path, ".git")):
+                out.append(path)
+    return sorted(out)
+
+
+def nested_heads(target):
+    """{nested repository: the commit it stands on} — what a task's work in each is measured from, beside `start-head`."""
+    return {n: h for n in nested_repos(target) for h in [head_sha(os.path.join(target, n))] if h}
+
+
+def repo_of(target, path, nested=None):
+    """(the nested repository holding `path`, the path inside it) — ("", path) when the project's own git holds it."""
+    for n in sorted(nested_repos(target) if nested is None else nested, key=len, reverse=True):
+        if path.startswith(n + "/"):
+            return n, path[len(n) + 1:]
+    return "", path
 
 
 def dirty(target, records_too=False, keep=()):
@@ -1116,12 +1177,20 @@ def dirty(target, records_too=False, keep=()):
         return None
     # porcelain paths are relative to the repository root; the record is relative to the target (a project can live in a subdirectory)
     prefix = subprocess.run(["git", "rev-parse", "--show-prefix"], cwd=target, capture_output=True, text=True, encoding="utf-8").stdout.strip().replace("\\", "/")
+    skip = (RUNS + "/",) if records_too else record_paths(target)
     out = {}
-    for path in paths:
-        path = path[len(prefix):] if prefix and path.startswith(prefix) else path
-        if path and (not path.startswith((RUNS + "/",) if records_too else record_paths(target)) or in_entries(path, keep)) and not re.search(r"(^|/)__pycache__/|\.py[co]$", path):   # records, machine-local state and interpreter leftovers are nobody's work
+
+    def take(path, inner):
+        # records, machine-local state and interpreter leftovers are nobody's work — inside a nested repository by its own path
+        if path and (not inner.startswith(skip) or in_entries(path, keep)) and not re.search(r"(^|/)__pycache__/|\.py[co]$", path):
             full = os.path.join(target, path)
             out[path] = hashlib.sha1(io.open(full, "rb").read()).hexdigest() if os.path.isfile(full) else "gone"
+    for path in paths:
+        path = path[len(prefix):] if prefix and path.startswith(prefix) else path
+        take(path, path)
+    for n in nested_repos(target):
+        for path in status_paths(os.path.join(target, n)) or []:
+            take(n + "/" + path, path)
     return out
 
 
@@ -1142,25 +1211,29 @@ def file_hash(target, path):
     return hashlib.sha1(io.open(full, "rb").read()).hexdigest() if os.path.isfile(full) else "gone"
 
 
-def committed_since(target, head, keep=()):
+def committed_since(target, head, keep=(), heads=None):
     """{path: content hash at `head`} for every file a commit since `head` changed (records and leftovers aside, as in `dirty`):
-    work the session committed before `run` measured it. Empty when HEAD has not moved or there is no git."""
+    work the session committed before `run` measured it. Empty when HEAD has not moved or there is no git. `heads`, each nested
+    repository's commit then (nested_heads): a commit in one since is the work too, its paths prefixed by the repository's."""
     import hashlib, subprocess
-    if not head or head == head_sha(target):
-        return {}
-    done = subprocess.run(["git", "diff", "--name-only", "-z", "--no-renames", "--relative", head, "HEAD", "--", "."], cwd=target, capture_output=True, text=True, encoding="utf-8", errors="surrogateescape")
-    if done.returncode:
-        return {}
     out = {}
-    for path in done.stdout.split("\0"):
-        path = path.replace("\\", "/")
-        if path and (not path.startswith(record_paths(target)) or in_entries(path, keep)) and not re.search(r"(^|/)__pycache__/|\.py[co]$", path):
-            then = subprocess.run(["git", "show", "%s:./%s" % (head, path)], cwd=target, capture_output=True)
-            out[path] = hashlib.sha1(then.stdout).hexdigest() if then.returncode == 0 else "gone"
+    for n, h in [("", head)] + sorted((heads or {}).items()):
+        cwd = os.path.join(target, n) if n else target
+        if not h or not os.path.isdir(cwd) or h == head_sha(cwd):
+            continue
+        done = subprocess.run(["git", "diff", "--name-only", "-z", "--no-renames", "--relative", h, "HEAD", "--", "."], cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="surrogateescape")
+        if done.returncode:
+            continue
+        for inner in done.stdout.split("\0"):
+            inner = inner.replace("\\", "/")
+            path = n + "/" + inner if n else inner
+            if inner and (not inner.startswith(record_paths(target)) or in_entries(path, keep)) and not re.search(r"(^|/)__pycache__/|\.py[co]$", path):
+                then = subprocess.run(["git", "show", "%s:./%s" % (h, inner)], cwd=cwd, capture_output=True)
+                out[path] = hashlib.sha1(then.stdout).hexdigest() if then.returncode == 0 else "gone"
     return out
 
 
-def touched_files(target, start=None, head=None, keep=()):
+def touched_files(target, start=None, head=None, keep=(), heads=None):
     """What changed since the task started: every file whose content is not what it was then. Without a start snapshot, the
     whole dirty set. A file dirty at start and clean now went back to HEAD — a change like any other, and the one a build
     makes when it takes the committed version of an uncommitted file for the real one (a contract's newest tests).
@@ -1171,7 +1244,7 @@ def touched_files(target, start=None, head=None, keep=()):
     if now is None:
         return None
     start = start or {}
-    then = committed_since(target, head, keep)
+    then = committed_since(target, head, keep, heads)
     changed = {p for p, h in now.items() if start.get(p, then.get(p)) != h}
     for p, h in list(start.items()) + [(p, h) for p, h in then.items() if p not in start]:
         if p not in now and file_hash(target, p) != h:
@@ -1186,7 +1259,7 @@ def adopted_files(ts):
 
 def measured(target, ts):
     """What a task changed: its measure from its start snapshot, and the files a judgment gave it (`adopt`). None without git."""
-    found = touched_files(target, ts.get("start"), ts.get("start-head"), record_scope(target, ts.get("def")))   # record files its own scope names are its work
+    found = touched_files(target, ts.get("start"), ts.get("start-head"), record_scope(target, ts.get("def")), ts.get("start-heads"))   # record files its own scope names are its work
     if found is None:
         return None
     return sorted(set(found) | adopted_files(ts))
@@ -1936,12 +2009,17 @@ def scopes_overlap(a, b):
     return a == b or not a or not b or a.startswith(b + "/") or b.startswith(a + "/")
 
 
+def this_session():
+    """The host's id for this session (CHONGDAE_SESSION, else the host's own), or None."""
+    return os.environ.get("CHONGDAE_SESSION") or os.environ.get("CLAUDE_CODE_SESSION_ID") or os.environ.get("CODEX_THREAD_ID") or None
+
+
 def lease_holder(target, by=None):
     """This session as a holder: the machine (CHONGDAE_MACHINE, else the host name), the host's session id (CHONGDAE_SESSION,
     else the host's own), and the agent signing. Two holders are the same when machine and session are."""
     import socket
     h = {"machine": os.environ.get("CHONGDAE_MACHINE") or socket.gethostname() or "unknown",
-         "session": os.environ.get("CHONGDAE_SESSION") or os.environ.get("CLAUDE_CODE_SESSION_ID") or os.environ.get("CODEX_THREAD_ID") or "-",
+         "session": this_session() or "-",
          "agent": agent_signer(target)["agent"]}
     if by:
         h["by"] = by
@@ -2765,7 +2843,7 @@ def run_pass(args):
         return 0
     ctx = {"args": args, "target": target, "d": d, "plan": plan, "state": state, "providers": providers(target, plan),
            "me": me(target), "claimed_now": set(), "waited": False,   # claimed_now: files the tasks completed in this call recorded as theirs
-           "named": set(getattr(args, "tasks", None) or []), "held": []}   # named: `run TASK…` — the session's word for those; held: open tasks with nothing of their own
+           "named": set(getattr(args, "tasks", None) or []), "held": [], "theirs": []}   # named: `run TASK…` — the session's word for those; held: open tasks with nothing of their own
     unknown = sorted(ctx["named"] - set(state["tasks"]))
     if unknown:
         raise SystemExit("run: no task %s in %s" % (", ".join(unknown), os.path.basename(d)))
@@ -2820,6 +2898,7 @@ def run_pass(args):
                             "or fix the paths (`chongdae drop` and `add` again)" % (task["id"], ", ".join(absent)))
             ts["start"] = dirty(target, keep=record_scope(target, task))   # what the tree already differed in: `touched` is measured from here, not from HEAD
             ts["start-head"] = head_sha(target)   # and the commit under it: a commit made during the task is still the task's work
+            ts["start-heads"] = nested_heads(target)   # and each nested repository's
             keep_contract_tests(target, d, task)
             save_state(d, state)
         if ts["status"] == "todo":
@@ -2863,13 +2942,15 @@ def run_pass(args):
         mine = {f: [task["id"]] for f, tids in uncommitted_work(target, plan, state).items() if task["id"] in tids}
         if mine and not state.get("worktree"):
             # its work is the session's to commit, in the form the log tells from chongdae's own (`close` stops on it otherwise)
-            for line in work_commit_lines(os.path.basename(d), plan, state, mine):
+            for line in work_commit_lines(os.path.basename(d), plan, state, mine, target):
                 print("    " + line)
     if ctx["waited"] and not any(state["tasks"][t["id"]].get("rebaseline") and state["tasks"][t["id"]]["status"] == "todo"
                                  and amending_tasks(plan, state, t, state["tasks"][t["id"]]["rebaseline"]) for t in all_tasks(plan, state)):
         # a build passed over while its tests were amended by a task later in the order: the amendment is done now
         setattr(args, "continuing", True)
         return cmd_run(args)
+    if ctx["theirs"]:
+        print("  open, added by another session of this run — theirs to finish, not this call's: %s" % ", ".join(ctx["theirs"]))
     if ctx["held"]:
         ids = list(dict.fromkeys(h.split(" ", 1)[0].rstrip(":") for h in ctx["held"]))   # a task's offer line is its own, not another task
         one = ids[0] if len(ids) == 1 else "TASK"
@@ -2907,7 +2988,7 @@ def run_hands(ctx, task, ts, who):
         now = touched_files(target, before)
         prior = set(ts.get("touched_by_provider") or [])
         if prior and isinstance(ts.get("start"), dict):
-            now = sorted(set(now or []) | (prior & set(touched_files(target, ts["start"], ts.get("start-head")) or [])))
+            now = sorted(set(now or []) | (prior & set(touched_files(target, ts["start"], ts.get("start-head"), heads=ts.get("start-heads")) or [])))
         ts["touched_by_provider"] = now
         ts["performed_by"] = against_run(with_trace(performer(who, argv=who if isinstance(who, list) else [who], response=response, target=target), response, d, target), state)   # the un-resolved argv: portable, names host/model without machine paths
         key = hire(ctx["providers"], task)[0]
@@ -3255,6 +3336,12 @@ def decide_task(ctx, task, ts, who, path):
         # cache-comment also made cache-ops done (06:36:15, touched [], no did) — its deploy, push and Done line came at
         # 06:37–06:39. It stays open, the pass goes on, and the call ends saying how to finish it
         if who in SESSION_HANDS and not ts.get("did") and not gate_of(task).get("human") and not own_measure():   # a gated task's done is a person's confirm
+            other = ts.get("added-in")
+            if task["id"] not in ctx["named"] and other and this_session() and other != this_session():
+                # another session's task in a run two sessions share: theirs to finish, not this one's to be told to do
+                # (sagoforce 10-26: a second session's `run publish-worker` was told "ko-audit, img-audit stay open … Do the work")
+                ctx["theirs"].append(task["id"])
+                return HELD
             if task["id"] not in ctx["named"]:
                 # when what changed is records, say that, not "nothing": they count only inside the task's own scope
                 theirs = {f for t2 in all_tasks(plan, state) if t2["id"] != task["id"] for f in list(state["tasks"].get(t2["id"], {}).get("touched") or []) + list(record_scope(target, t2))}
@@ -3355,6 +3442,10 @@ def place_eyes(ctx, task, ts, who, touched):
             extra["attribution"] = attribution
         if by_provider is not None:
             extra["touched_since"] = sorted(set(touched) - set(by_provider))   # changed after the builder answered: a person's plan edits, say — not the builder's
+        if ts.get("start-head") or ts.get("start-heads"):
+            # the commits the work is measured from, the project's (".") and each nested repository's: a diff from there holds
+            # work committed during the task, which `git diff HEAD` shows as nothing (sagoforce 10-26: every task committed)
+            extra["since"] = {**({".": ts["start-head"]} if ts.get("start-head") else {}), **(ts.get("start-heads") or {})}
         writers = test_writers(plan, state, task)
         said = {w: [n[len("(provider) "):] for n in state["tasks"][w].get("non-claims", []) if str(n).startswith("(provider) ")] for w in writers}
         if any(said.values()):
@@ -3580,7 +3671,8 @@ def end_of_pass(ctx):
     wrote = place_reviewer(target, d, state, plan)
     save_state(d, state)
     commit_record(args.target, os.path.basename(d), "complete — %s" % plan.get("goal", ""), also=wrote)
-    print("run %s complete. non-claims: %s" % (os.path.basename(d), non_claims(state) or "none"))
+    said = said_last_run(target, d, state)
+    print("run %s complete. non-claims: %s" % (os.path.basename(d), [n for n in non_claims(state) if n not in said] or "none"))
     return 0
 
 
@@ -3697,21 +3789,25 @@ def uncommitted_work(target, plan, state):
     return out
 
 
-def work_commit_lines(run_name, plan, state, loose):
+def work_commit_lines(run_name, plan, state, loose, target=None):
     """The commands that commit a run's work, a commit per task: `git add -- FILE…`, then `git commit -m "<run>/<task>
     (session): <brief>" -- FILE…` (only those paths, whatever else is staged). The session's commits of a task's work read
     `run-<id>/<task> (session): …`; chongdae's own record commits keep `run-<id>: …`. guin-site 10-15: with no form given, the
     agent copied the engine's `run-<id>:` (737db95, bf90cdf) or made up `run:` (33b5bda), and `git log` could not tell the
-    engine's commits from the agent's."""
+    engine's commits from the agent's. A file in a nested repository is committed there (`git -C engine …`, its own path):
+    sagoforce 10-26, with no lines printed, a subject named a run that did not exist."""
     briefs = {t["id"]: t.get("brief") or "" for t in all_tasks(plan, state)}
+    nested = nested_repos(target) if target else []
     groups = {}
     for f in sorted(loose):
-        groups.setdefault(tuple(loose[f]), []).append(f)
+        repo, inner = repo_of(target, f, nested) if nested else ("", f)
+        groups.setdefault((tuple(loose[f]), repo), []).append(inner)
     out = []
-    for tids, files in groups.items():
+    for (tids, repo), files in groups.items():
         paths = " ".join(shlex.quote(f) for f in files)
+        git = "git -C %s" % shlex.quote(repo) if repo else "git"
         subject = "%s/%s (session): %s" % (run_name, "+".join(tids), cut(briefs.get(tids[0]) or "the work of " + ", ".join(tids), 72))
-        out += ["git add -- %s" % paths, "git commit -m %s -- %s" % (shlex.quote(subject), paths)]
+        out += ["%s add -- %s" % (git, paths), "%s commit -m %s -- %s" % (git, shlex.quote(subject), paths)]
     return out
 
 
@@ -3737,19 +3833,48 @@ def ops_patterns(target):
     return [str(p) for p in declared] if isinstance(declared, list) else OPS_PATTERNS
 
 
+# the engine on a command line: by its name, or by the variable a session keeps it in (`C=…/chongdae.py; python3 $C did …`) —
+# sagoforce 10-26: `python3 $C did publish-root -- git push -u origin main` was told "record it", and four pushes after
+# `$C close` on the same line were told the same instead of "after close"
+_ENGINE_ON_LINE = r"(?:\S*chongdae(?:\.py)?|\$\{?\w+\}?)"
+
+
+def command_segments(command):
+    """A Bash line cut into its commands (at `;`, `&&`, `||`, `|` and newlines), quotes respected: an argument holding a `;`
+    is not a command boundary."""
+    out = []
+    for line in str(command or "").split("\n"):
+        try:
+            lx = shlex.shlex(line, posix=True, punctuation_chars=";&|")
+            lx.whitespace_split = True
+            toks = list(lx)
+        except ValueError:
+            out.append(line)
+            continue
+        cur = []
+        for tok in toks:
+            if tok and set(tok) <= set(";&|"):
+                out.append(" ".join(cur))
+                cur = []
+            else:
+                cur.append(tok)
+        out.append(" ".join(cur))
+    return [s for s in out if s.strip()]
+
+
 def bash_operation(target, command):
     """The part of a Bash command that reads as an operation outside the repository, or None. `chongdae.py did …` itself
-    is the record, not something to record."""
-    command = str(command or "")
-    if re.search(r"chongdae\.py[\"']?\s+did\b", command):
-        return None
-    for p in ops_patterns(target):
-        try:
-            m = re.search(p, command)
-        except re.error:
-            continue   # a pattern that does not compile matches nothing: a hook never fails a command over its own settings
-        if m:
-            return m.group(0)
+    is the record, not something to record — the operation it runs is its argument."""
+    for seg in command_segments(command):
+        if re.search(r"(?:^|\s)%s\s+did\b" % _ENGINE_ON_LINE, seg):
+            continue
+        for p in ops_patterns(target):
+            try:
+                m = re.search(p, seg)
+            except re.error:
+                continue   # a pattern that does not compile matches nothing: a hook never fails a command over its own settings
+            if m:
+                return m.group(0)
     return None
 
 
@@ -3757,10 +3882,13 @@ def after_close(target, command):
     """Does the operation in this Bash command come after a `chongdae … close` on the same line? Then it runs once the run is
     closed, outside any run, and `did` can no longer record it. guin-site 10-15: `…run; git commit; close; git push` — the hook
     said "record it: did …", and the push ran after the run had closed."""
-    command = str(command or "")
-    what = bash_operation(target, command)
-    close = re.search(r"chongdae(?:\.py)?[\"']?\s+(?:--?\S+(?:\s+[^-\s;&|]\S*)?\s+)*close\b", command)
-    return bool(what and close) and command.find(what, close.end()) >= 0
+    closed = False
+    for seg in command_segments(command):
+        if closed and bash_operation(target, seg):
+            return True
+        if re.search(r"(?:^|\s)%s\s+(?:--?\S+(?:\s+[^-\s]\S*)?\s+)*close\b" % _ENGINE_ON_LINE, seg):
+            closed = True
+    return False
 
 
 def reads_as_operation(task):
@@ -3996,7 +4124,7 @@ def rebaseline(target, d, task, ts, plan, state):
     writer = tests_writer(plan, state, task, files)
     wts = state["tasks"].get(writer["id"], {}) if writer else {}
     if wts.get("amending") is not None and wts.get("start") is not None:
-        amended = touched_files(target, wts["start"], wts.get("start-head")) or []
+        amended = touched_files(target, wts["start"], wts.get("start-head"), heads=wts.get("start-heads")) or []
         files = sorted(set(files) | (set(amended) & set(task.get("tests") or [])))
     for f in files:
         ts.setdefault("start", {})[f] = now.get(f) or file_hash(target, f)
@@ -4043,6 +4171,7 @@ def route_dispute(target, d, state, plan, task, disputed, judgment=None):
     # the amendment is measured from now, with the disputed files as the build protects them: a fix the session already made
     # in the tree (and a judgment then restored, or not yet) counts as the amendment
     wts["start"], wts["start-head"] = dirty(target, keep=record_scope(target, wts.get("def"))) or {}, head_sha(target)
+    wts["start-heads"] = nested_heads(target)
     for f in files:
         kept = work_path(d, os.path.join("contract-tests", task["id"], f))
         if os.path.isfile(kept):
@@ -4119,7 +4248,19 @@ def cmd_init(args):
     target = args.target
     if run_dir(target) and load_state(run_dir(target)).get("status") == "running" and not (
             getattr(args, "parent", None) and os.path.basename(run_dir(target)) == str(args.parent).partition("/")[0]):
-        raise SystemExit("a run is already in progress: %s — finish it or remove it" % run_dir(target))
+        # sagoforce 10-26: another live session's run; told "finish it or remove it", the session did an audit of 41 sub-agents
+        # and a production read with no run at all. A run holds many sessions' tasks — the way in is `add`, not a second run
+        import time
+        d = run_dir(target)
+        try:
+            idle = int((time.time() - os.path.getmtime(os.path.join(d, "state.json"))) // 60)
+        except OSError:
+            idle = None
+        raise SystemExit("a run is already in progress: %s (%s; last written %s) — add this work to it as its own task "
+                         "(`chongdae add TASK --brief … --scope PATH…`: a run holds any session's tasks, the scopes keep them apart), "
+                         "or wait for its `close`; remove it only if nobody works in it any more"
+                         % (d, cut(load(os.path.join(d, "plan.json")).get("goal") or "-", 80),
+                            "%d min ago" % idle if idle is not None else "at an unknown time"))
     parent = parent_link(args) if getattr(args, "parent", None) else None   # a child of the running run may start beside it
     # Run ids are unique across machines (date + random), so runs made on different branches merge as distinct directories.
     # UTC, so the id's lexical order approximates creation order regardless of timezone — an approximation for humans only;
@@ -4164,7 +4305,7 @@ def cmd_init(args):
                 "providers": {"questions": "session", "plan": "session"}}   # the plan says who provides; chongdae assumes nothing
     save(os.path.join(d, "plan.json"), plan)
     state = {"status": "running", "tasks": {t["id"]: {"status": "todo"} for t in plan["tasks"]}, "non-claims": list(plan.get("non-claims", []))}
-    state["created"] = {**stamp(), "based_on": head_sha(target)}   # the commit this run starts from: its place in history is ancestry, not its id's timestamp
+    state["created"] = {**stamp(), "based_on": head_sha(target), **({"nested": nested_heads(target)} if nested_repos(target) else {})}   # the commit this run starts from: its place in history is ancestry, not its id's timestamp
     locked = locked_versions(target)
     if locked:
         state["environment"] = {"locked": locked}   # the lock every call in this run ran under, once; a task says `locked` only when it differs
@@ -4302,25 +4443,33 @@ def cmd_add(args):
         ts["self-performed"] = own
     if gone:
         ts["deleted-tests"] = gone   # said here, once: `run` says only a deletion made after this
-    if task["role"] == "subagent" and due and hire(declared, {"role": due, "requires": args.requires})[1] != "subagent":
+    instead = due if task["role"] == "subagent" and due and hire(declared, {"role": due, "requires": args.requires})[1] != "subagent" else None
+    if task["role"] == "subagent" and (instead or args.why):
         # the session's sub-agent stands where the lock declared someone else: declared hands, not the session's own — but
-        # the record says whose place it took, and who said so
-        ts["dispatched"] = {"to": "subagent", "instead-of": due, "by": signer(args), **({"why": args.why} if args.why else {}), **stamp()}
+        # the record says whose place it took, and who said so. Its `--why` is kept with no role due too: sagoforce 10-26,
+        # eight fix batches said why they went to sub-agents in parallel, and the record kept none of it
+        ts["dispatched"] = {"to": "subagent", **({"instead-of": instead} if instead else {}), "by": signer(args), **({"why": args.why} if args.why else {}), **stamp()}
     if hands in SESSION_HANDS:
         ts["start"] = dirty(args.target, keep=record_scope(args.target, task))   # the session works between `add` and `run`: what changed is measured from now
         ts["start-head"] = head_sha(args.target)
+        ts["start-heads"] = nested_heads(args.target)
         keep_contract_tests(args.target, d, task)
     # a provider's task starts when `run` spawns it (`start` is taken then): a build added alongside its test task must not see the test-writer's file as its own change
     if not task["checks"]:
         ts["non-claims"] = ["no check decides this task; done means the agent said so"]
+    if hands in SESSION_HANDS and this_session():
+        ts["added-in"] = this_session()   # a run two sessions share: whose task this is (kept on this machine, like `session`)
     state["tasks"][args.id] = ts
     save_state(d, state)
     if hands == "subagent":
         print("added %s to %s — the session's sub-agent does it (%s)%s. Dispatch it, then `chongdae run` decides it from the tree."
               % (args.id, os.path.basename(d), "as asked" if task["role"] == "subagent" else "the lock's %s" % hire(declared, task)[0],
-                 " — instead of the lock's %s: recorded" % ts["dispatched"]["instead-of"] if ts.get("dispatched") else ""))
+                 " — instead of the lock's %s: recorded" % ts["dispatched"]["instead-of"] if (ts.get("dispatched") or {}).get("instead-of") else ""))
     elif hands == "session":
-        print("added %s to %s%s%s. Work, then `chongdae run`." % (args.id, os.path.basename(d), " (no checks — done will be a claim, recorded as such)" if not task["checks"] else "",
+        # a day's repair run added every task with no check, and the lock's implementer was never sent one (sagoforce, 10-26)
+        builder = not task["checks"] and args.role is None and hire(declared, {"role": "implementer", "requires": args.requires})[1] is not None
+        print("added %s to %s%s%s. Work, then `chongdae run`." % (args.id, os.path.basename(d), " (no checks — done will be a claim, recorded as such%s)"
+                                                                  % ("; the lock's implementer takes a task a check decides: `--check C` sends it this one" if builder else "") if not task["checks"] else "",
                                                                   " — the session does it itself, instead of the lock's %s: recorded" % own["instead-of"] if own else ""))
     else:
         key = hire(declared, task)[0]
@@ -4990,7 +5139,7 @@ def cmd_close(args):
                     "`%s/<task> (session): …` — `%s: …` is chongdae's own record commits), then `chongdae close`; "
                     "or `chongdae close --anyway --why WHY` closes with it uncommitted (recorded)"
                     % ("; ".join("%s (%s)" % (f, ", ".join(loose[f])) for f in files), os.path.basename(d), os.path.basename(d)),
-                    *work_commit_lines(os.path.basename(d), plan, state, loose))
+                    *work_commit_lines(os.path.basename(d), plan, state, loose, args.target))
     # a task that reads as an operation and has no `did`: the operation ran as plain Bash (its exit unread) or not at all
     ops = unrecorded_operations(plan, state)
     if ops and not anyway:
@@ -5033,8 +5182,9 @@ def cmd_close(args):
     save_state(d, state)
     commit_record(args.target, os.path.basename(d), "close — %s (%d done, %d open)" % (plan.get("goal", ""), sum(ts["status"] == "done" for ts in state["tasks"].values()), len(open_)), also=wrote)
     dropped = [tid for tid, ts in state["tasks"].items() if ts["status"] == "dropped"]
+    said = said_last_run(args.target, d, state)
     print("closed %s: %d task(s) done, %d open (%s)%s. non-claims: %s" % (os.path.basename(d), sum(ts["status"] == "done" for ts in state["tasks"].values()), len(open_), ", ".join(open_) or "-",
-                                                                 ", %d dropped (%s)" % (len(dropped), ", ".join(dropped)) if dropped else "", non_claims(state) or "none"))
+                                                                 ", %d dropped (%s)" % (len(dropped), ", ".join(dropped)) if dropped else "", [n for n in non_claims(state) if n not in said] or "none"))
     line = None if wt else upstream_line(args.target)
     if line:
         print("  " + line)   # read from the last fetch: closing is when unpushed work is still in mind
@@ -5243,7 +5393,7 @@ def cmd_adopt(args):
         files.append(f.rstrip("/"))
     files = sorted(set(files))
     based = (state.get("created") or {}).get("based_on")
-    known = set(dirty(args.target, records_too=True) or {}) | set(committed_since(args.target, based) if based else {})
+    known = set(dirty(args.target, records_too=True) or {}) | set(committed_since(args.target, based, heads=(state.get("created") or {}).get("nested")) if based else {})
     for t2 in all_tasks(plan, state):
         o = state["tasks"].get(t2["id"], {})
         known |= set(o.get("touched") or []) | set((o.get("start") or {}) if isinstance(o.get("start"), dict) else {})
@@ -5742,7 +5892,7 @@ def task_story(run_d, task, ts, day, run_end):
         out.append("  self-performed: the session instead of the lock's %s — by %s at %s: %s" % (own.get("instead-of"), signer_text(own.get("by")), when(own.get("at"), day), own.get("why")))
     if isinstance(ts.get("dispatched"), dict):
         dp = ts["dispatched"]
-        out.append("  the session's sub-agent instead of the lock's %s — by %s at %s%s" % (dp.get("instead-of"), signer_text(dp.get("by")), when(dp.get("at"), day), ": " + dp["why"] if dp.get("why") else ""))
+        out.append("  the session's sub-agent%s — by %s at %s%s" % (" instead of the lock's %s" % dp["instead-of"] if dp.get("instead-of") else "", signer_text(dp.get("by")), when(dp.get("at"), day), ": " + dp["why"] if dp.get("why") else ""))
     if isinstance(ts.get("taken"), dict):
         tk = ts["taken"]
         out.append("  taken from %s by %s at %s: %s" % (tk.get("from"), signer_text(tk.get("by")), when(tk.get("at"), day), tk.get("why")))

@@ -224,6 +224,18 @@ scope is told that, with the `adopt` that gives them to it. guin-site run-202610
 (`--scope hunsu.json hunsu.lock.json …`) and `site-build-stale` (`--scope mangsang`) recorded `touched: []`, were held as
 "has changed nothing of its own", became the reviewer's objections, and got no commit lines.
 
+A repository inside the project that its own git does not hold — a directory with its own `.git` that the project's status
+names as one untracked or ignored entry, as a workspace of sibling repositories keeps them — is measured like the project:
+a task's start keeps each one's commit (`start-heads`, beside `start-head`), its changes and its commits since are the
+task's `touched` by their path from the project (`engine/src/gate.py`), its commit lines run there (`git -C engine add -- …`),
+`adopt` finds them, and the verify request names the commits the work started from (`since`) so the eyes diff from there.
+sagoforce 10-26, six repositories in the workspace's `.gitignore`: 43 of 47 tasks recorded `touched: []`, the verifier
+accepted 24 empty packets (one over a 33-file change), no commit lines were printed and `adopt` refused a file committed in
+one. A submodule is the project's own (its gitlink is tracked); a shell left in a directory below the project is still in
+it for the task's trace. The trace reads the session's sub-agents too — Claude Code keeps each beside the session's
+transcript (`<session>/subagents/agent-<id>.jsonl`) — so their edits are in the task's `changed`: the same day's eight
+fix batches, done by sub-agents, were in no trace.
+
 A task with no `--check` whose scope (or, at its finish, whose changed files) falls under a check the project declares —
 hunsu.json `settings: {"chongdae": {"checks-for": {"<path prefix>": "<command>"}}}`, e.g. `{"lexicons/": "python3
 tests/run.py records"}` — is offered it: `add`, a held `run` and the finish print `chongdae add TASK --check "<command>"`.
@@ -231,6 +243,8 @@ tests/run.py records"}` — is offered it: `add`, a held `run` and the finish pr
 record; `--why` where the lock declares an implementer, as for `--role session`); the check decides the task from then on.
 chongdae cannot know a project's test layout, so the project says it once. guin-site's `lexicon-descriptions` changed 8
 lexicon JSON files with no check and became a carried objection, though the project runs a test group over `lexicons/`.
+Where the lock declares an implementer, a task added with no check is told the implementer takes a task a check decides
+(`--check C` sends it this one): sagoforce's repair run added every task with none, and hacheong was never sent one.
 
 **Tests the contract deletes.** A contract that retires code can retire its tests: the task that writes the contract's
 tests deletes them. A build's protected test that is absent, and that the task which wrote the build's tests deleted (it is
@@ -478,7 +492,10 @@ plan run complete); 2 (`DECISION`) — stopped for the session agent or a human,
 4 (`WAITING`) — still working: the call's budget is spent while a provider or chongdae's own checks run, the line starts with
 `still working:`, and `run` again resumes the same work. A call takes at most about four minutes (`CHONGDAE_WAIT`, below). `run TASK…` names
 session tasks whose work leaves nothing in the tree: naming one is the session's word that it is done (said as a non-claim);
-unnamed, a task with no check, no change of its own and no `did` stays open (above). Under a lease it advances
+unnamed, a task with no check, no change of its own and no `did` stays open (above) — the session that added it is told so;
+in a run two sessions share (a second `init` is told to add its work to the running run), another session's open task is
+said as theirs, not as this call's to do (sagoforce 10-26: a second session's `run publish-worker` was told "ko-audit,
+img-audit stay open … Do the work" over the first session's running audits). Under a lease it advances
 only the tasks this session holds (taking a ready unheld one when it holds fewer than `lease-max`) and renews a hold
 where it saw progress; under `remote: "shared"` it fetches and takes the remote's record first
 
@@ -581,7 +598,8 @@ Committed: no (`.chongdae/.gitignore`, one line, written by chongdae).
 **the work**, apart from the record: each request as sent and each response as written (`<tag>.request.json`,
 `<tag>.response.json`, an attempt's under its number), the worker's whole session (`<tag>.response.transcript.jsonl`,
 megabytes, this machine's paths), the pending pid and the provider's log while a call is out, and
-`local/tasks/<id>.json` — this machine's overlay of a task: the host session behind each author line, the `start`
+`local/tasks/<id>.json` — this machine's overlay of a task: the host session behind each author line and the one that
+added it (`added-in`), the `start`
 snapshot a task measures from, the command lines behind each `trace`, the flags the engine keeps between two `run`
 calls. The engine reads it back here; nobody else can open a session or needs a snapshot once `touched` is written.
 Files an earlier version kept beside the record (`*.trace.json`, `*.request.json`, …) stay where they are; an ignored
@@ -649,7 +667,9 @@ them. A task claimed by someone else (`claim`) is not this machine's to advance.
 progress; one that reads as an operation outside the repository — `git push`, `npm run deploy`, `npm publish`, `wrangler
 deploy`/`publish`/`… delete`, `terraform apply`, `kubectl apply`, `gh release create`, `fly`/`vercel`/`netlify`/`firebase
 deploy` — gets one line of context: `record it: chongdae did TASK --why "…" -- <command>`. Never a refusal, silent with no
-run and in a worker session (`AGENT_WORKER=1`), silent on `chongdae.py did` itself. hunsu.json
+run and in a worker session (`AGENT_WORKER=1`), silent on `chongdae.py did` itself — the engine named or kept in a variable
+(`python3 $C did …`), the line read command by command with its quotes (sagoforce 10-26: a push given to `$C did` was told
+"record it", and pushes after `$C close` were not told they ran after close). hunsu.json
 `settings.chongdae.ops-patterns` (a list of regular expressions searched in the command) replaces the list; `[]` silences it.
 guin-site run-20261015-054352-a0ec ran `npm run deploy … | grep …; git push 2>&1 | tail -1` — both exits lost — and wrote
 the push into ATPROTO.md as prose. An operation that comes after a `chongdae … close` on the same line runs outside any
@@ -772,7 +792,9 @@ went 22 runs without one). When a run ends — a session run's `close`, a plan r
 lock's `reviewer` role in the project (a command, like `coherence`: `"reviewer": ["python3",
 "{plugin:dwitbuk}/dwitbuk.py", "review", "--target", "."]` in hunsu.json `roles`). Whatever it wrote there is part of
 the closing record and goes into the close commit with it; what it said last is kept in state.json `reviewed`. No
-`reviewer` in the lock: a non-claim on the run. A reviewer that fails: a non-claim too — the run still ends. The
+`reviewer` in the lock: a non-claim on the run, printed at its close only when the run that ended before it did not
+carry it — it is the lock's, the same until the lock changes (a day's ten closes said it ten times), and `hunsu check`
+says it once. A reviewer that fails: a non-claim too — the run still ends. The
 reviewer places no person's stop; what its findings need from a person is the reviewer's own business (dwitbuk says so at the
 next session start). At a session run's `close` it runs before the close is final, and an open objection the tree can answer
 stops the close for the session (above, `/chongdae:close`).

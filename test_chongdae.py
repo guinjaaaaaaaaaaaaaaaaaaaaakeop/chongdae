@@ -906,6 +906,50 @@ def test_a_disputed_contract_test_goes_back_to_its_writer_and_the_build_goes_out
         assert open(os.path.join(pj.dir, "test_a.py")).read() == "# amended\n"
 
 
+def test_a_task_with_no_check_is_told_the_locks_implementer_takes_only_a_checked_one():
+    """sagoforce 10-26: a repair run's tasks were all added with no check, and the lock's implementer never got one — the
+    add said "done will be a claim" and nothing about who else could have built it."""
+    with Project() as pj:
+        write(os.path.join(pj.dir, "hunsu.lock.json"), {"roles": {"implementer": [sys.executable, "-c", "pass", "{request}", "{response}"]}})
+        assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
+        code, out = run("add", "fix", "--brief", "b", "--target", pj.dir)
+        assert code == 0 and "the lock's implementer takes a task a check decides: `--check C` sends it this one" in out, out
+        code, out = run("add", "push", "--brief", "b", "--role", "session", "--why", "an operation", "--target", pj.dir)
+        assert code == 0 and "implementer takes" not in out, out   # the session said it is its own: nothing to offer
+    with Project() as pj:
+        assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
+        code, out = run("add", "fix", "--brief", "b", "--target", pj.dir)
+        assert code == 0 and "(no checks — done will be a claim, recorded as such)" in out, out   # no implementer: nobody to offer
+
+
+def test_another_sessions_open_task_in_a_shared_run_is_theirs_not_this_calls_to_do():
+    """sagoforce 10-26: a second session added publish-worker to the run the first one had open; its `run publish-worker`
+    was told "ko-audit, img-audit stay open … Do the work" — the first session's audits, still running there."""
+    old = os.environ.get("CHONGDAE_SESSION")
+    try:
+        with Project() as pj:
+            os.environ["CHONGDAE_SESSION"] = "s1"
+            assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
+            assert run("add", "audit", "--brief", "b", "--target", pj.dir)[0] == 0
+            os.environ["CHONGDAE_SESSION"] = "s2"
+            assert run("add", "worker", "--brief", "b", "--scope", "worker", "--target", pj.dir)[0] == 0
+            write(os.path.join(pj.dir, "worker", "publish.mjs"), "x\n")
+            code, out = run("run", "worker", "--target", pj.dir)
+            assert code == 0 and "done worker" in out and "Do the work" not in out, out
+            assert "open, added by another session of this run — theirs to finish, not this call's: audit" in out, out
+            assert pj.state()["tasks"]["audit"]["status"] != "done"
+            rec = json.load(open(os.path.join(chongdae.run_dir(pj.dir), "tasks", "audit.json"), encoding="utf-8"))
+            assert "added-in" not in rec and "s1" not in json.dumps(rec), rec   # a session id is this machine's, not the record's
+            os.environ["CHONGDAE_SESSION"] = "s1"   # its own session is still told, as before
+            code, out = run("run", "--target", pj.dir)
+            assert "audit stays open" in out and "theirs to finish" not in out, out
+    finally:
+        if old is None:
+            os.environ.pop("CHONGDAE_SESSION", None)
+        else:
+            os.environ["CHONGDAE_SESSION"] = old
+
+
 def test_a_dispute_in_a_report_the_validator_refused_still_goes_to_the_tests_writer():
     """guin-site write-bsky-build, 2026-10-10: three answers each disputed the same three tests, and each named its check
     as `cd <project> && …`; the validator refused the report (`failed`, checks-ran), chongdae resent the build for its
@@ -1145,11 +1189,15 @@ def test_a_session_tasks_done_carries_what_the_session_did_in_its_window():
                 {"type": "tool_use", "id": "t3", "name": "Bash", "input": {"command": "grep secret notes.txt"}}]}}
             with open(tr, "a", encoding="utf-8") as fh:
                 fh.write(json.dumps(after) + "\n" + json.dumps(other) + "\n")
+            # a sub-agent the session dispatched keeps its own transcript beside the session's: its edits are the session's hands too
+            sub = {"type": "assistant", "timestamp": "2999-01-01T00:00:02Z", "isSidechain": True, "agentId": "a1", "cwd": pj.dir, "message": {"model": "m", "content": [
+                {"type": "tool_use", "id": "t4", "name": "Edit", "input": {"file_path": os.path.join(pj.dir, "src", "a.py")}}]}}
+            write(os.path.join(pj.dir, "sess-1", "subagents", "agent-a1.jsonl"), json.dumps(sub) + "\n")
             assert run("run", "--target", pj.dir)[0] == 0
             rd = chongdae.run_dir(pj.dir)
             rec = json.load(open(os.path.join(rd, "tasks", "T1.json"), encoding="utf-8"))
             trace = rec["performed_by"]["trace"]
-            assert trace["commands-run"] == 1 and "commands" not in trace and trace["changed"] == ["write ./NOTES.md"], trace   # lines stay local
+            assert trace["commands-run"] == 1 and "commands" not in trace and trace["changed"] == ["write ./NOTES.md", "edit ./src/a.py"], trace   # lines stay local
             assert "session" not in rec["performed_by"] and rec["performed_by"]["model"] == "m", rec   # the session is this machine's (local/)
             assert "secret" not in json.dumps(rec) and trace["elsewhere"].startswith("1 command"), trace
             assert not any(n.endswith(".trace.json") for n in os.listdir(rd)), os.listdir(rd)   # no trace files beside the record
@@ -1745,7 +1793,13 @@ def test_the_runner_places_the_reviewer_when_a_run_ends():
     with Project() as pj:
         # no reviewer declared: the run closes, and the record says nobody reviewed it
         assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
-        assert run("close", "--target", pj.dir)[0] == 0
+        code, out = run("close", "--target", pj.dir)
+        assert code == 0 and "no `reviewer` role" in out, out
+        assert any("no `reviewer` role" in n for n in pj.state()["non-claims"]), pj.state()["non-claims"]
+        # the next run's close records it again and says it no more: it is the lock's, unchanged (`hunsu check` says it once)
+        assert run("init", "--session", "--goal", "g2", "--target", pj.dir)[0] == 0
+        code, out = run("close", "--target", pj.dir)
+        assert code == 0 and "no `reviewer` role" not in out and "non-claims: none" in out, out
         assert any("no `reviewer` role" in n for n in pj.state()["non-claims"]), pj.state()["non-claims"]
     with Project() as pj:
         # a plan run's `complete` places it too, and a reviewer that fails is a non-claim, not a stop
@@ -3596,6 +3650,11 @@ def test_close_and_report_name_an_operation_with_no_did_and_a_bash_operation_get
         assert "this `git push` runs after `close`, outside any run — move it before close as" in ctx and "did TASK" in ctx and "-- git push`" in ctx, ctx
         assert chongdae.after_close(pj.dir, 'python3 chongdae.py --target . close && git push') and not chongdae.after_close(pj.dir, 'git push; python3 chongdae.py close')
         assert not chongdae.after_close(pj.dir, 'python3 chongdae.py run --target .; git push') and not chongdae.after_close(pj.dir, 'python3 chongdae.py close')
+        # sagoforce 10-26: the engine kept in a variable — `did` with a push as its argument was told "record it", and a push
+        # after `$C close` was told the same instead of "after close"; a `;` inside a quoted --why is not a command boundary
+        assert hook("pre_bash.py", payload('C=/x/chongdae.py && python3 $C did ops --why "a; b" -- git push -u origin main')) == (0, "")
+        assert chongdae.after_close(pj.dir, 'python3 $C run ops && python3 $C close 2>&1 | tail -3; git push -q origin main')
+        assert not chongdae.after_close(pj.dir, 'git push && python3 "$C" close')
         ctx = json.loads(hook("pre_bash.py", payload('git push; python3 "/x/chongdae.py" close'))[1])["hookSpecificOutput"]["additionalContext"]
         assert "record it:" in ctx and "after `close`" not in ctx, ctx
         write(os.path.join(pj.dir, "hunsu.json"), {"settings": {"chongdae": {"ops-patterns": [r"\bmake\s+release\b"]}}})
@@ -3655,6 +3714,69 @@ def test_close_prints_the_commit_of_each_tasks_work_in_the_sessions_own_form():
         assert "other.txt" in _git(pj.dir, "diff", "--cached", "--name-only").stdout, "only the task's files were committed"
         _git(pj.dir, "commit", "-qm", "other")
         code, out = run("close", "--target", pj.dir)
+        assert code == 0, out
+
+
+def test_a_second_init_is_told_to_add_its_work_to_the_running_run():
+    """sagoforce 10-26: another session's run was in progress; `init` said "finish it or remove it", and the session did its
+    audit — 41 sub-agents, a production read — with no run at all. A run holds any session's tasks: the way in is `add`."""
+    with Project() as pj:
+        _git(pj.dir, "commit", "-q", "--allow-empty", "-m", "base")
+        assert run("init", "--session", "--goal", "the speed work", "--target", pj.dir)[0] == 0
+        code, out = run("init", "--session", "--goal", "an audit", "--target", pj.dir)
+        assert code != 0 and "the speed work" in out and "add this work to it" in out and "min ago" in out, out
+        assert "finish it or remove it" not in out, out
+
+
+def test_a_sub_agent_tasks_why_is_kept_with_no_role_due():
+    """sagoforce 10-26: eight fix batches went to sub-agents `--role subagent --why "…"`; with no lock role due, nothing kept why."""
+    with Project() as pj:
+        _git(pj.dir, "commit", "-q", "--allow-empty", "-m", "base")
+        assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
+        assert run("add", "F0", "--role", "subagent", "--brief", "b", "--why", "the batches touch no common file", "--target", pj.dir)[0] == 0
+        dp = pj.state()["tasks"]["F0"]["dispatched"]
+        assert dp["why"] == "the batches touch no common file" and "instead-of" not in dp, dp
+
+
+def test_work_in_a_nested_repository_is_the_tasks_and_is_committed_there():
+    """sagoforce 10-26: a workspace keeps six repositories inside it, all in its `.gitignore`; chongdae measured the workspace's
+    own git only, so 43 of 47 tasks recorded `touched: []`, the verifier was sent empty packets (24 accepts, one over a 33-file
+    change), no commit lines were printed and `adopt` refused a file committed there as nothing anyone changed. A nested
+    repository's changes — uncommitted or committed since the task started — are the task's, by their path from the project;
+    the printed commit runs in that repository."""
+    with Project() as pj:
+        write(os.path.join(pj.dir, ".gitignore"), "/engine/\n")
+        _git(pj.dir, "add", "-A")
+        _git(pj.dir, "commit", "-qm", "base")
+        eng = os.path.join(pj.dir, "engine")
+        os.makedirs(eng)
+        _git(eng, "init", "-q")
+        for f in ("a.py", "b.py"):
+            write(os.path.join(eng, f), "x = 0\n")
+        _git(eng, "add", "-A")
+        _git(eng, "commit", "-qm", "engine base")
+        assert chongdae.nested_repos(pj.dir) == ["engine"]
+        assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
+        rid = os.path.basename(chongdae.run_dir(pj.dir))
+        assert run("add", "fix", "--brief", "the fix", "--target", pj.dir)[0] == 0
+        write(os.path.join(eng, "a.py"), "x = 1\n")
+        _git(eng, "commit", "-qam", "committed during the task")
+        write(os.path.join(eng, "b.py"), "x = 2\n")
+        assert run("run", "fix", "--target", pj.dir)[0] == 0
+        assert pj.state()["tasks"]["fix"]["touched"] == ["engine/a.py", "engine/b.py"], pj.state()["tasks"]["fix"]
+        code, out = run("close", "--target", pj.dir)
+        lines = [l.strip() for l in out.splitlines()]
+        assert code == chongdae.DECISION and "git -C engine add -- b.py" in lines, out
+        assert "git -C engine commit -m '%s/fix (session): the fix' -- b.py" % rid in lines, out
+        _git(eng, "commit", "-qam", "b")
+        assert run("close", "--target", pj.dir)[0] == 0
+        # a file committed in the nested repository before its task was added is adopted as work, not refused
+        assert run("init", "--session", "--goal", "g2", "--target", pj.dir)[0] == 0
+        write(os.path.join(eng, "c.py"), "x = 3\n")
+        _git(eng, "add", "-A")
+        _git(eng, "commit", "-qm", "c")
+        assert run("add", "late", "--brief", "c", "--target", pj.dir)[0] == 0
+        code, out = run("adopt", "late", "engine/c.py", "--why", "written before its task was added", "--target", pj.dir)
         assert code == 0, out
 
 
