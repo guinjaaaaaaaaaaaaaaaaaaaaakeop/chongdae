@@ -1,5 +1,5 @@
 ---
-description: What this record says a reviewer should see, as dwitbuk/findings@1 — outside-run, unattributed, delegated, self-performed, session-judged (judgments the session signed as itself), subagent, did (an operation outside the repository — an objection when it exited non-zero), operation-unrecorded (a done task that reads as one, with no `did`), verifier-non-claim (an accept without reading the tree, say), non-claims
+description: What this record says a reviewer should see, as dwitbuk/findings@1 — outside-run, unattributed, delegated, self-performed, session-judged (judgments the session signed as itself), subagent, did (an operation outside the repository — an objection when it exited non-zero), operation-mention (a word in a done task with no `did`, not evidence of execution), verifier-non-claim (an accept without reading the tree, say), non-claims
 argument-hint: [--since REV]
 ---
 !`python3 "${CLAUDE_PLUGIN_ROOT}/chongdae.py" report $ARGUMENTS`

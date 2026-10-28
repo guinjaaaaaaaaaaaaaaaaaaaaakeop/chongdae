@@ -41,7 +41,8 @@
   take  <id> --why WHY [--by NAME] [--checked CMD].. [--checked-red CMD]..   the session finishes a task its hired hands could not (the
                                         work is in the tree): self-performed, decided like any session task. --checked: a command chongdae runs now,
                                         its pass recorded as evidence it saw; --checked-red: a tests task's expected red run (non-zero recorded as
-                                        red as expected, zero as passed before the build). `retry` takes both too
+                                        red as expected, zero as passed before the build). `retry` takes both too. An open task owned by another
+                                        session can be handed over with a reason; live checks, providers and unanswered native dispatches prevent a take
   did   <id> [--why WHY] [--approved-in source:ID] [--by NAME] (-- COMMAND... | --each FILE)   an operation outside the repository (deploy,
                                         secret deletion, remote database change): one command, run without a shell; recorded on the task as `did`
                                         {command, exit, tail, at, why, approved-in, signer} whatever the exit, printed, committed. A script outside
@@ -74,7 +75,8 @@
                                         when nothing is on record; `--brief` alone the map — runs, this week's, the last closed
                                         `show --after ISO --hands PATH...` (jokbo's `hands` read): one JSON object, path -> the hired task
                                         whose provider changed it (out now, or answered since ISO); `{}` otherwise, never an error
-  run   [--target DIR]                  advance one step. Exit 2 = stopped for the session agent or a human; the last line says what to do.
+  run   [TASK..] [--target DIR]         advance only the selected tasks, or ready tasks when none are named. Host sub-agent tasks must be
+                                        named after their answers arrive. Exit 2 = stopped for the session agent or a human; the last line says what to do.
                                         One call takes at most about CHONGDAE_WAIT seconds (default 240) — chongdae's own checks (a tracked process
                                         of their own), the verifier and every provider count — then says `still working: …` (exit 4) and the next
                                         `run` resumes where it stopped: well under a host's 10-minute tool limit
@@ -170,10 +172,11 @@ def merge_plan(target, base):
 # ---------------------------------------------------------------- the record and the work: what a run writes, and where
 
 def load(path):
-    if not os.path.exists(path):
-        return {}
-    with io.open(path, encoding="utf-8") as fh:
-        return json.load(fh)
+    try:
+        with io.open(path, encoding="utf-8") as fh:
+            return json.load(fh)
+    except FileNotFoundError:
+        return {}   # a completed transaction can retire an overlay between a reader's directory listing and open
 
 
 def save(path, data):
@@ -181,9 +184,18 @@ def save(path, data):
         # every record says which chongdae wrote it — a version, and `+g<sha>[-dirty]` when a working source did
         data = {"artifact-type": data["artifact-type"], "written_by": engine(), **{k: v for k, v in data.items() if k not in ("artifact-type", "written_by")}}
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with io.open(path, "w", encoding="utf-8", newline="\n") as fh:
-        json.dump(data, fh, ensure_ascii=False, indent=2)
-        fh.write("\n")
+    # Hooks and readers remain available while a command writes. Publish a whole JSON document at once;
+    # truncating the live file let another session read half a record. A unique temp also keeps workers apart.
+    import tempfile
+    fd, pending = tempfile.mkstemp(prefix=".chongdae-write-", dir=os.path.dirname(path))
+    try:
+        with io.open(fd, "w", encoding="utf-8", newline="\n") as fh:
+            json.dump(data, fh, ensure_ascii=False, indent=2)
+            fh.write("\n")
+        os.replace(pending, path)
+    finally:
+        if os.path.exists(pending):
+            os.remove(pending)
 
 
 # A run's directory is two things, apart: the record — what a judgment wrote, committed, read by anyone — and the work —
@@ -200,7 +212,9 @@ PRIVATE_KEYS = ("session", "transcript", "kept-locally", "start", "start-head", 
                 "commands", "read",                                 # a worker's command lines and what it read: the record keeps the summary (`trace`)
                 "reported", "rebaseline",                           # flags the engine keeps between two `run` calls
                 "checked-tree", "checks-tree",                      # the tree a `--checked` command, or the task's own checks, ran on: what changed after is measured from it
-                "lease-held", "lease-work")                         # what this session holds under a lease, and the progress mark it last renewed at
+                "checks-source", "review-source", "after-source",   # complete source snapshots: an edit committed meanwhile is still a changed input
+                "completion-acks",                                 # launch tokens whose completed outcomes are durably applied to this task
+                "lease-held", "lease-work", "lease-established")    # local lease ownership/progress, including that an explicit hold superseded added-in
 
 def split_private(o):
     """(public, private): the record without PRIVATE_KEYS at any depth, and a mirror holding only them."""
@@ -240,16 +254,54 @@ def merge_private(pub, priv):
 def load_state(d):
     """The run's state: status from state.json, tasks from tasks/<id>.json (older runs kept tasks inside state.json — read as is),
     each merged with its machine-local part (local/tasks/<id>.json) when this machine has one."""
-    state = load(os.path.join(d, "state.json"))
-    tasks = state.get("tasks") or {}
-    folder = os.path.join(d, "tasks")
-    if os.path.isdir(folder):
-        for name in sorted(os.listdir(folder)):
+    journal = os.path.join(d, LOCAL, "state-transaction.json")
+    while True:
+        before = load(journal)
+        changes = before.get("files", {}) if before.get("phase") == "prepared" else {}
+
+        def read(name):
+            return json.loads(json.dumps(changes[name] or {})) if name in changes else load(os.path.join(d, name))
+
+        state = read("state.json")
+        tasks = state.get("tasks") or {}
+        folder = os.path.join(d, "tasks")
+        names = set(os.listdir(folder)) if os.path.isdir(folder) else set()
+        names.update(p[len("tasks/"):] for p in changes if p.startswith("tasks/"))
+        for name in sorted(names):
             if name.endswith(".json"):
-                tasks[name[:-5]] = merge_private(load(os.path.join(folder, name)), load(os.path.join(d, LOCAL, "tasks", name)))
-    state["tasks"] = tasks
-    state.setdefault("non-claims", [])
-    return state
+                tasks[name[:-5]] = merge_private(read("tasks/" + name), read(LOCAL + "/tasks/" + name))
+        state["tasks"] = tasks
+        state.setdefault("non-claims", [])
+        # Readers never repair or lock. A prepared transaction is already a complete view; retry if a writer
+        # published or finished another generation while we read the files outside that transaction.
+        if before == load(journal):
+            return state
+
+
+def recover_state(d):
+    """Finish a published state transaction before another mutation or record commit. Called under the command lock.
+
+    The local journal contains private overlays as well as public files and never enters git. Replaying exact file
+    values is idempotent; the committed marker stays as a generation fence for concurrent read-only commands.
+    """
+    path = os.path.join(d, LOCAL, "state-transaction.json")
+    txn = load(path)
+    if txn.get("phase") != "prepared":
+        return
+    for name, data in txn["files"].items():
+        dest = os.path.join(d, name)
+        if data is None:
+            if os.path.exists(dest):
+                os.remove(dest)
+        else:
+            save_changed(dest, data)
+    save(path, {"id": txn["id"], "phase": "committed"})
+
+
+def recover_project_states(target):
+    for d in all_runs(target):
+        recover_state(d)
+        cleanup_completion_acks(d, load_state(d))
 
 
 def save_state(d, state):
@@ -258,15 +310,33 @@ def save_state(d, state):
     those keys. state.json keeps only the run's own fields. A file is written only when what it says changed: rewriting
     every task file stamped the running version on records it did not touch — guin-site d281c8a, a `did` on one task,
     changed `written_by` 1.19.0 -> 1.20.0 in six done and dropped tasks nobody had judged again."""
+    import uuid
+    recover_state(d)
+    prepare_completion_acks(d, state)
+    files = {}
+
+    def changed(name, data):
+        path = os.path.join(d, name)
+        if data is None:
+            if os.path.exists(path):
+                files[name] = None
+            return
+        old = load(path)
+        normalized = json.loads(json.dumps(data, ensure_ascii=False))
+        if not old or {k: v for k, v in old.items() if k != "written_by"} != {k: v for k, v in normalized.items() if k != "written_by"}:
+            if str(normalized.get("artifact-type", "")).startswith("chongdae/"):
+                normalized["written_by"] = engine()
+            files[name] = normalized
+
     for tid, ts in state.get("tasks", {}).items():
         pub, priv = split_private({k: v for k, v in ts.items() if k not in ("artifact-type", "written_by")})
-        save_changed(os.path.join(d, "tasks", tid + ".json"), {"artifact-type": "chongdae/task@1", **pub})
-        local = os.path.join(d, LOCAL, "tasks", tid + ".json")
-        if priv:
-            save_changed(local, priv)
-        elif os.path.exists(local):
-            os.remove(local)
-    save_changed(os.path.join(d, "state.json"), {"artifact-type": "chongdae/run@1", **{k: v for k, v in state.items() if k != "tasks"}})
+        changed("tasks/" + tid + ".json", {"artifact-type": "chongdae/task@1", **pub})
+        changed(LOCAL + "/tasks/" + tid + ".json", priv or None)
+    changed("state.json", {"artifact-type": "chongdae/run@1", **{k: v for k, v in state.items() if k != "tasks"}})
+    if files:
+        save(os.path.join(d, LOCAL, "state-transaction.json"), {"id": uuid.uuid4().hex, "phase": "prepared", "files": files})
+        recover_state(d)
+    cleanup_completion_acks(d, state)
 
 
 def save_changed(path, data):
@@ -533,7 +603,10 @@ RECORD_IGNORE = [LOCAL + "/", "sessions/",
 def ensure_record_ignore(target):
     """`.chongdae/.gitignore` lists what stays local. Written by chongdae, for chongdae's own files only."""
     path = os.path.join(target, RUNS, ".gitignore")
-    have = io.open(path, encoding="utf-8").read().split("\n") if os.path.exists(path) else []
+    have = []
+    if os.path.exists(path):
+        with io.open(path, encoding="utf-8") as fh:
+            have = fh.read().split("\n")
     missing = [p for p in RECORD_IGNORE if p not in have]
     if missing:
         os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -553,6 +626,8 @@ def commit_record(target, run_name, message, also=()):
     disk is still the record; `close` and the reviewer see uncommitted records as what they are."""
     import subprocess
 
+    recover_state(os.path.join(target, RUNS, run_name))
+
     def git(*a):
         return subprocess.run(["git", *a], cwd=target, capture_output=True, text=True, encoding="utf-8", errors="replace")
 
@@ -571,24 +646,38 @@ def commit_record(target, run_name, message, also=()):
     gitdir = git("rev-parse", "--absolute-git-dir").stdout.strip()
     if not gitdir:
         return None
-    env = dict(os.environ, GIT_INDEX_FILE=os.path.join(gitdir, "chongdae-record-index"))
+    # Two independent projects can share one git directory (subdirectories of a repository). Their command locks
+    # intentionally differ, so their scratch indices must differ too; one read-tree must never erase the other's index.
+    import tempfile
+    fd, index_path = tempfile.mkstemp(prefix="chongdae-record-", dir=gitdir)
+    os.close(fd)
+    os.remove(index_path)   # git expects an absent index or a valid one, not mkstemp's empty file
+    env = dict(os.environ, GIT_INDEX_FILE=index_path)
     scratch = lambda *a: subprocess.run(["git", *a], cwd=target, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env)
-    has_head = git("rev-parse", "--verify", "-q", "HEAD").returncode == 0
+    base = git("rev-parse", "--verify", "-q", "HEAD").stdout.strip()
+    has_head = bool(base)
     also = [p for p in also if os.path.exists(os.path.join(target, p))]
     try:
-        scratch("read-tree", "HEAD") if has_head else scratch("read-tree", "--empty")
+        if (scratch("read-tree", base) if has_head else scratch("read-tree", "--empty")).returncode:
+            return None
         if scratch("add", "--", rel, RUNS + "/.gitignore", *also).returncode:
             return None
         stale = [t for t in scratch("ls-files", "-ci", "--exclude-standard", "--", rel).stdout.split("\n") if t.strip()]
         if stale:
             scratch("rm", "--cached", "--quiet", "--", *stale)
-        if has_head and scratch("diff-index", "--cached", "--quiet", "HEAD", "--").returncode == 0:
+        if has_head and scratch("diff-index", "--cached", "--quiet", base, "--").returncode == 0:
             return None   # nothing of this run changed -> nothing to notarize
-        tree = scratch("write-tree").stdout.strip()
-        made = git("commit-tree", tree, *(["-p", "HEAD"] if has_head else []), "-m", "%s: %s" % (run_name, message))
+        wrote = scratch("write-tree")
+        if wrote.returncode or not wrote.stdout.strip():
+            return None
+        tree = wrote.stdout.strip()
+        made = git("commit-tree", tree, *(["-p", base] if has_head else []), "-m", "%s: %s" % (run_name, message))
         if made.returncode or not made.stdout.strip():
             return None
-        if git("update-ref", "HEAD", made.stdout.strip()).returncode:
+        # Other agents may commit source directly while a check runs. The command lock protects our record,
+        # not their git calls: never replace a newer HEAD with a tree built from an older commit.
+        if git("update-ref", "HEAD", made.stdout.strip(), base if has_head else "0" * len(made.stdout.strip())).returncode:
+            print("  (record written, not committed: HEAD changed during its commit; a later record commit will include it)")
             return None
     finally:
         try:
@@ -1194,6 +1283,57 @@ def dirty(target, records_too=False, keep=()):
     return out
 
 
+def source_tree(target, keep=()):
+    """Content and executable bits of git-visible source, including nested repositories.
+
+    A dirty-file snapshot alone cannot witness a review: a committed edit leaves it
+    empty again. Record commits must not invalidate a review either. Read the files,
+    not HEAD, and exclude records except the task's explicitly scoped record work.
+    Scopes name ownership, not dependencies: changes anywhere in this source tree
+    invalidate a check/review that was already in flight.
+    """
+    import hashlib, stat, subprocess
+    out, skip, repositories, seen = {}, record_paths(target), [""], set()
+    for repo in repositories:
+        if repo in seen:
+            continue
+        seen.add(repo)
+        cwd = os.path.join(target, repo) if repo else target
+        done = subprocess.run(["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z", "--", "."],
+                              cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="surrogateescape")
+        if done.returncode:
+            return None
+        for inner in set(done.stdout.split("\0")) - {""}:
+            inner = inner.replace("\\", "/")
+            path = repo + "/" + inner if repo else inner
+            if inner.startswith((RUNS + "/", ".claude/")) or ((inner.startswith(skip) and not in_entries(path, keep))) \
+                    or re.search(r"(^|/)__pycache__/|\.py[co]$", path):
+                continue
+            full = os.path.join(target, path)
+            try:
+                info = os.lstat(full)
+                if stat.S_ISLNK(info.st_mode):
+                    out[path] = "link:" + os.readlink(full)
+                elif stat.S_ISREG(info.st_mode):
+                    with open(full, "rb") as fh:
+                        digest = hashlib.sha256()
+                        for block in iter(lambda: fh.read(1024 * 1024), b""):
+                            digest.update(block)
+                    out[path] = "%s:%s" % (int(bool(info.st_mode & 0o111)), digest.hexdigest())
+                elif stat.S_ISDIR(info.st_mode) and os.path.exists(os.path.join(full, ".git")):
+                    # A tracked submodule is a gitlink in this repository's
+                    # index. HEAD alone misses edits inside its working tree;
+                    # recurse into it, including further nested submodules.
+                    out[path] = "repository"
+                    repositories.append(path.rstrip("/"))
+                else:
+                    out[path] = "directory"
+            except FileNotFoundError:
+                out[path] = "gone"
+        repositories.extend((repo + "/" if repo else "") + name for name in nested_repos(cwd))
+    return out
+
+
 def record_changes(target):
     """Files under the record paths that differ from HEAD now — the environment (hunsu's manifest, lock, judgments) and the
     products' records (`mangsang/`, `reviews/`), this run's own directory aside. They are never in `touched` (nobody's work by
@@ -1464,12 +1604,15 @@ def checks_worker(target, job):
     """`chongdae.py _checks TARGET JOB`: the task's checks, run by chongdae in a process of their own, so a `run` call can hand
     back while they run (budget_checks). Writes {failed, ran, tree} beside the job — `tree`, the tree they left."""
     spec = load(job)
+    source_before = source_tree(target, spec.get("keep") or ())
     failed, ran = check_runs(target, spec.get("checks") or [])
-    save(job[:-len(".json")] + ".result.json", {"failed": failed, "ran": ran, "tree": dirty(target) or {}})
+    save(job[:-len(".json")] + ".result.json", {"failed": failed, "ran": ran, "tree": dirty(target) or {},
+                                               "launch-token": os.environ.get("CHONGDAE_LAUNCH_TOKEN"),
+                                               "source-before": source_before, "source": source_tree(target, spec.get("keep") or ())})
     return 0
 
 
-def budget_checks(target, d, task, again=True):
+def budget_checks(target, d, task, again=True, result_source=None):
     """(code, failed, ran): the task's checks, run inside the `run` call's budget. They run as a process of their own, tracked
     like a provider (<task>.checks.pending.json): past the budget the call hands back (code WAITING) and the next `run` waits
     for the same process — never killed mid-way, never started twice — and reads what it found. A result is the tree's only
@@ -1479,6 +1622,7 @@ def budget_checks(target, d, task, again=True):
     import time
     base = work_path(d, task["id"] + ".checks")
     job, res_path, pend_path = base + ".json", base + ".result.json", base + ".pending.json"
+    cleanup_completion_acks(d, load_state(d))
     pending = load(pend_path)
     checks = task.get("checks") or []
     if pending and pending.get("checks") != checks:
@@ -1489,44 +1633,52 @@ def budget_checks(target, d, task, again=True):
             except (OSError, ValueError, AttributeError):
                 pass
         pending = {}
-    if pending and not os.path.exists(res_path) and not pid_alive(pending.get("pid")):
+    if pending and not completed_payload(pending, "checks") and not os.path.exists(res_path) and not pending_alive(pend_path, pending):
         pending = {}   # it died without a result: run them again
     if not pending:
         if os.path.exists(res_path):
             os.remove(res_path)
         os.makedirs(os.path.dirname(job), exist_ok=True)
-        save(job, {"checks": checks})
-        log = io.open(base + ".log", "w", encoding="utf-8")
-        proc = subprocess.Popen([sys.executable, os.path.abspath(__file__), "_checks", os.path.abspath(target), job], cwd=target,
-                                stdout=log, stderr=log, stdin=subprocess.DEVNULL, start_new_session=True)
-        log.close()
-        pending = {"pid": proc.pid, "checks": checks, "since": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
-        save(pend_path, pending)
+        save(job, {"checks": checks, "keep": record_scope(target, task)})
+        pending = launch_pending(pend_path, [sys.executable, os.path.abspath(__file__), "_checks", os.path.abspath(target), job],
+                                 target, base + ".log", checks=checks)
+    else:
+        resume_launch(pend_path, pending)   # recover an intent whose caller died before/just after Popen
     global _CALL_DEADLINE
     if _CALL_DEADLINE is None:
         _CALL_DEADLINE = time.time() + WAIT_BUDGET
     nap = 0.05
-    while pid_alive(pending.get("pid")):
+    while pending_alive(pend_path, pending):
         if time.time() > _CALL_DEADLINE:
             return WAITING, {"status": "waiting", "pid": pending.get("pid"), "since": pending.get("since"), "log": base + ".log", "checks": True}, None
         time.sleep(nap)
         nap = min(nap * 2, 1.0)
-    result = {}
-    for _ in range(3):
-        try:
-            result = load(res_path)
-            break
-        except ValueError:
-            time.sleep(0.2)
-    for p in (pend_path, res_path):
-        if os.path.exists(p):
-            os.remove(p)
+    result = completed_payload(pending, "checks")
+    if result is None:
+        result = {}
+        for _ in range(3):
+            try:
+                result = load(res_path)
+                break
+            except ValueError:
+                time.sleep(0.2)
+        if (pending.get("launch") or {}).get("token") and result.get("launch-token") != pending["launch"]["token"]:
+            result = {}   # an old worker's result cannot answer this launch
     if not result:
+        retire_check_completion(pend_path, res_path)
         return None, ["%s: chongdae's run of the checks left no result (see %s)" % (task["id"], base + ".log")], []
-    if again and result.get("tree") != (dirty(target) or {}):
-        # the tree moved after the checks finished (between two calls, say): what they said is not this tree's — once; a
-        # tree that moves on its own after every run is taken as the checks saw it
-        return budget_checks(target, d, task, again=False)
+    now = source_tree(target, record_scope(target, task))
+    if "source" not in result or result.get("source-before") != result.get("source") or result.get("source") != now:
+        # Writers may change and commit while a check runs. Never stamp the new
+        # tree with an old pass. Retry once, then yield the work back if it moves
+        # again; no unbounded loop and no claim that a changing tree passed.
+        retire_check_completion(pend_path, res_path)
+        if again:
+            return budget_checks(target, d, task, again=False, result_source=result_source)
+        return None, ["%s: source changed while its checks ran; wait for the writers, then `chongdae run %s` again" % (task["id"], task["id"])], result.get("ran") or []
+    if result_source is not None:
+        result_source["source"] = result.get("source")
+    retain_completion(d, task["id"], pend_path, pending, "checks", result)
     return None, result.get("failed") or [], result.get("ran") or []
 
 
@@ -1792,6 +1944,8 @@ def pid_alive(pid):
         pid = int(pid)
     except (ValueError, TypeError):
         return False
+    if pid <= 0:
+        return False   # zero/negative ids mean process groups to kill/waitpid, never a worker
     try:
         done, _ = os.waitpid(pid, os.WNOHANG)   # our child: (0, 0) while running, (pid, status) once it exited
         if done == pid:
@@ -1803,6 +1957,136 @@ def pid_alive(pid):
         return True
     except OSError:
         return False
+
+
+_COMPLETION_ACK_QUEUE = {}
+
+
+def completion_token(pending):
+    return (pending.get("launch") or {}).get("token") or pending.get("completion-token")
+
+
+def completed_payload(pending, kind):
+    """A completed outcome belongs to one launch, even while its caller has not saved the task yet."""
+    completed = pending.get("completed") or {}
+    if completed.get("kind") == kind and completed.get("token") and completed["token"] == completion_token(pending):
+        return completed.get("payload")
+    return None
+
+
+def retain_completion(d, tid, path, pending, kind, payload, code=0):
+    """Keep the ended worker's answer until the task transaction acknowledges applying it.
+
+    A crash before that transaction replays this payload. A crash after it only
+    leaves cleanup to repeat; neither boundary launches the completed worker again.
+    """
+    import uuid
+    if not completion_token(pending):
+        pending["completion-token"] = uuid.uuid4().hex   # legacy/native dispatches have no launcher token
+    token = completion_token(pending)
+    completed = {"token": token, "kind": kind, "payload": payload, "code": code}
+    if pending.get("completed") != completed:
+        pending["completed"] = completed
+        save(path, pending)
+    key = os.path.realpath(d)
+    _COMPLETION_ACK_QUEUE.setdefault(key, {})[os.path.basename(path)] = (tid, token)
+
+
+def prepare_completion_acks(d, state):
+    """Called before save_state writes its transaction: the outcome and its acknowledgement commit together."""
+    for name, (tid, token) in _COMPLETION_ACK_QUEUE.get(os.path.realpath(d), {}).items():
+        ts = state.get("tasks", {}).get(tid)
+        if ts is not None:
+            ts.setdefault("completion-acks", {})[name] = token
+
+
+def cleanup_completion_acks(d, state):
+    """Only a durable task acknowledgement authorizes deleting its completed launch record."""
+    queued = _COMPLETION_ACK_QUEUE.get(os.path.realpath(d), {})
+    for tid, ts in state.get("tasks", {}).items():
+        for name, token in ts.get("completion-acks", {}).items():
+            if os.path.basename(name) != name or not name.endswith(".pending.json"):
+                continue
+            path = work_path(d, name)
+            pending = load(path)
+            completed = pending.get("completed") or {}
+            if completed.get("token") == token and completion_token(pending) == token:
+                if completed.get("kind") == "checks":
+                    result = path[:-len(".pending.json")] + ".result.json"
+                    if os.path.exists(result):
+                        os.remove(result)
+                if os.path.exists(path):
+                    os.remove(path)
+            if queued.get(name) == (tid, token):
+                queued.pop(name, None)
+    if not queued:
+        _COMPLETION_ACK_QUEUE.pop(os.path.realpath(d), None)
+
+
+def retire_check_completion(pending, result):
+    """A missing or stale check result is explicitly discarded, never acknowledged as a pass."""
+    for path in (result, pending):
+        if os.path.exists(path):
+            os.remove(path)
+
+
+def launch_pending(path, argv, target, log_path, **metadata):
+    """Publish intent before creating a process. A launcher registers its own pid before exec, so a dying caller cannot
+    leave an undiscoverable provider. Recovery repeats the same launch token, never the provider command directly."""
+    import time
+    import uuid
+    pending = {**metadata, "argv": argv, "since": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+               "launch": {"token": uuid.uuid4().hex, "cwd": os.path.abspath(target), "log": os.path.abspath(log_path)}, "launch-state": "launching"}
+    save(path, pending)
+    resume_launch(path, pending)
+    return pending
+
+
+def resume_launch(path, pending):
+    """An intent may survive before Popen or while its launcher starts. Several recovery launchers are harmless: the
+    per-intent OS lock and registered token allow only one to exec. There is no post-Popen parent bookkeeping window."""
+    import subprocess
+    launch = pending.get("launch") or {}
+    if pending.get("launch-state") != "launching" or not launch.get("token"):
+        return
+    with io.open(launch["log"], "a", encoding="utf-8") as log:
+        subprocess.Popen([sys.executable, os.path.abspath(__file__), "_launch", os.path.abspath(path), launch["token"]],
+                         cwd=launch["cwd"], stdout=log, stderr=log, stdin=subprocess.DEVNULL, start_new_session=True)
+
+
+def pending_alive(path, pending):
+    """Refresh child registration while waiting; a launching intent without a pid is pending, never pid 0."""
+    if pending.get("launch"):
+        current = load(path)
+        if (current.get("launch") or {}).get("token") == pending["launch"].get("token"):
+            pending.update(current)
+        if (pending.get("completed") or {}).get("token") == completion_token(pending):
+            return False
+        if pending.get("launch-state") == "launching":
+            return True
+    return pid_alive(pending.get("pid"))
+
+
+def launch_worker(path, token):
+    """Internal launcher: claim one durable intent, register this pid, then replace this process with its worker."""
+    with CommandLock(None, path=path + ".launch.lock") as lock:
+        if not lock.acquired:
+            return 0   # another launcher/worker holds this intent
+        pending = load(path)
+        if (pending.get("launch") or {}).get("token") != token or pending.get("launch-state") != "launching":
+            return 0   # consumed, superseded, or already registered, even if that worker has since finished
+        pending.update({"pid": os.getpid(), "launch-state": "running"})
+        save(path, pending)   # same pid will execute the worker; never spawn the worker before its identity is durable
+        os.set_inheritable(lock.file.fileno(), True)
+        try:
+            os.chdir(pending["launch"]["cwd"])
+            worker_env = dict(os.environ, CHONGDAE_LAUNCH_TOKEN=token)
+            os.execvpe(pending["argv"][0], pending["argv"], worker_env)
+        except OSError as err:
+            pending.update({"launch-state": "failed", "launch-error": str(err)})
+            save(path, pending)
+            print("worker could not start: %s" % err, file=sys.stderr)
+            return 1
 
 
 REQUIRES = ("network", "loopback")   # what a task may require of the sandbox its hands run in
@@ -1819,8 +2103,8 @@ def spawn(target, run, task, provider, plan, attempts=(), stage="build", extra=N
     The request carries the contract: the task, the plan sections it closes, the checks that will decide it. Nothing else —
     the provider is a fresh process and must not need this session's context.
 
-    The provider is detached (its own session, output to <tag>.provider.log) and its pid recorded in <tag>.pending.json
-    BEFORE this call waits on it. A session that backgrounds `run` and exits kills `run` — but not the provider; the next
+    The launch intent is recorded before creating a process; its launcher records its own pid before exec. The provider
+    is detached (its own session, output to <tag>.provider.log). A session that exits kills `run` — but not the provider; the next
     `chongdae run` finds the pending record and resumes waiting (or consumes the response that landed meanwhile) instead
     of paying for the work twice. Returns (returncode, response, start_snapshot).
     """
@@ -1832,12 +2116,18 @@ def spawn(target, run, task, provider, plan, attempts=(), stage="build", extra=N
     pend_path = work_path(run, tag + ".pending.json")
     log_path = work_path(run, tag + ".provider.log")
     os.makedirs(os.path.join(run, LOCAL), exist_ok=True)
+    cleanup_completion_acks(run, load_state(run))
     pending = load(pend_path)
-    proc = None
+    completed = completed_payload(pending, "provider")
+    if completed is not None:
+        retain_completion(run, task["id"], pend_path, pending, "provider", completed, pending["completed"]["code"])
+        return pending["completed"]["code"], completed, pending.get("start")
     native = native_argv(target, provider)
     if native and os.path.exists(res_path):   # the session wrote the subagent's answer: consume it like any provider's
         pending = pending or {"start": dirty(target)}
-    elif not (pending and (os.path.exists(res_path) or pid_alive(pending.get("pid")))):
+    elif not pending:
+        # A registered worker that ended without a response is still a consumed launch. Resume records no-response;
+        # it must not repeat the worker's effects merely because the caller died before retaining that outcome.
         sections = contract_sections(target, plan, task)[0]
         reader = stage == "build" and task.get("role") in CONTRACT_READERS
         req = {"artifact-type": "chongdae/request@1", "stage": task["role"] if reader else stage, "run": os.path.basename(run), "task": task["id"],
@@ -1881,10 +2171,9 @@ def spawn(target, run, task, provider, plan, attempts=(), stage="build", extra=N
         argv = resolve_argv(target, [a.replace("{request}", req_path).replace("{response}", res_path) for a in (provider if isinstance(provider, list) else provider.split())])
         if argv and argv[0] in ("python", "python3") and not shutil.which(argv[0]):
             argv[0] = next((c for c in ("python3", "python") if shutil.which(c)), None) or sys.executable   # a plan written on one OS names the runtime the other lacks
-        log = io.open(log_path, "w", encoding="utf-8")
-        proc = subprocess.Popen(argv, cwd=target, stdout=log, stderr=log, start_new_session=True)
-        pending = {"pid": proc.pid, "argv": argv, "start": dirty(target), "since": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
-        save(pend_path, pending)
+        pending = launch_pending(pend_path, argv, target, log_path, start=dirty(target))
+    else:
+        resume_launch(pend_path, pending)   # the same durable intent, even if a previous caller died before registration
     # wait for the provider to END, not for its file to appear: a worker may write the response path more than once (a host's
     # raw last message first, its own whole answer after), and half an answer is not an answer
     if native and not os.path.exists(res_path):   # asked again before the session answered: the same instruction
@@ -1893,14 +2182,14 @@ def spawn(target, run, task, provider, plan, attempts=(), stage="build", extra=N
     if _CALL_DEADLINE is None:
         _CALL_DEADLINE = time.time() + WAIT_BUDGET
     deadline = _CALL_DEADLINE
-    while (proc.poll() is None if proc is not None else pid_alive(pending.get("pid"))):
+    while pending_alive(pend_path, pending):
         if time.time() > deadline:
             # still working: hand back to the session instead of outliving its tool call. The provider is detached and its pending
             # record stands; the next `run` resumes waiting for the same work. A session that backgrounds `run` to wait longer
             # ends up orphaning the provider — this is the loop that replaces that.
             since = pending.get("since") or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            return WAITING, {"status": "waiting", "pid": pending.get("pid") or proc.pid, "since": since, "log": log_path}, pending.get("start")
-        time.sleep(2)   # our own child must be poll()ed — a finished child we never reap stays a zombie, and a zombie still answers kill(pid, 0)
+            return WAITING, {"status": "waiting", "pid": pending.get("pid") or "launching", "since": since, "log": log_path}, pending.get("start")
+        time.sleep(2)   # pending_alive reaps our ended child as it refreshes the durable registration
     response = {}
     for _ in range(3):   # the provider may still be flushing the file when its pid vanishes
         try:
@@ -1915,8 +2204,7 @@ def spawn(target, run, task, provider, plan, attempts=(), stage="build", extra=N
         tail = io.open(log_path, encoding="utf-8", errors="replace").read()[-600:] if os.path.exists(log_path) else ""
         response = {"status": "no-response", "summary": tail}
     start = pending.get("start")
-    if os.path.exists(pend_path):
-        os.remove(pend_path)
+    retain_completion(run, task["id"], pend_path, pending, "provider", response, code)
     return code, response, start
 
 
@@ -1926,7 +2214,7 @@ def waiting_text(what, d):
                 "`chongdae run` again keeps waiting for the same run and reads what it found; do not background `run`"
                 % (what, d.get("pid"), d.get("since"), d.get("log")))
     return ("%s: the provider is still working (pid %s, since %s; its output so far: %s) — `chongdae run` again keeps waiting for the same work; "
-            "do not background `run` and do not end the session — the provider is this session's child and dies with it"
+            "keep `run` in the foreground and resume its pending record after an interruption"
             % (what, d.get("pid"), d.get("since"), d.get("log")))
 
 
@@ -2012,6 +2300,80 @@ def scopes_overlap(a, b):
 def this_session():
     """The host's id for this session (CHONGDAE_SESSION, else the host's own), or None."""
     return os.environ.get("CHONGDAE_SESSION") or os.environ.get("CLAUDE_CODE_SESSION_ID") or os.environ.get("CODEX_THREAD_ID") or None
+
+
+def other_session(ts):
+    """A known local owner differs from this session, including a caller whose identity is unknown.
+    Old records without an owner remain usable; an absent caller id is never authority over a known owner's work."""
+    return bool(ts.get("added-in") and ts["added-in"] != this_session())
+
+
+def local_owner_blocks(target, d, tid, ts, leases=None):
+    """Keep added-in authoritative until an actual lease has superseded it. Merely configuring a lease backend
+    cannot let the next run claim another session's task. An explicit hold, including one later released/lapsed,
+    establishes lease authority; its normal lifecycle decides who can proceed. A known owner requires caller identity."""
+    if not other_session(ts):
+        return False
+    if not this_session() or not leases:
+        return True
+    established = ts.get("lease-established") or ts.get("lease-held") or ts.get("lease") or ts.get("gen")
+    return not (established or leases.current(task_key(os.path.basename(d), tid)))
+
+
+def mutation_owner_refusal(target, d, tid, ts):
+    """The authority to advance a task also applies to judgments and edits of its record. A signature (`--by`) is
+    evidence of who decided, never an ownership transfer. Only take/claim have their explicit transfer rules."""
+    leases = lease_backend(target)
+    try:
+        cur = leases.current(task_key(os.path.basename(d), tid)) if leases else None
+        if cur and not same_holder(cur.get("holder"), lease_holder(target)):
+            return "%s is held by another session — claim it after release or expiry, or explicitly `claim --break %s --why WHY`; nothing changed" % (tid, tid)
+        if other_session(ts) and not (this_session() and cur and same_holder(cur.get("holder"), lease_holder(target))):
+            return "%s belongs to another session (or this call has no session identity) — its owner must act, or use `chongdae take %s --why WHY` for an idle task's handover (including interrupted operation recovery); nothing changed" % (tid, tid)
+        if not leases and ts.get("claimed_by") and claim_owner(ts["claimed_by"]) != me(target):
+            return "%s is claimed by %s — its owner must release it before this command can change it; nothing changed" % (tid, signer_text(ts["claimed_by"]))
+    except LeaseError as err:
+        return "the lease store cannot be reached (%s) — ownership of %s cannot be established; nothing changed" % (err, tid)
+    return None
+
+
+def task_mutation_guard(args):
+    """Preflight task-changing commands before checks, operations, response rotation, or state writes."""
+    if args.cmd not in ("retry", "accept", "confirm", "unstage", "adopt", "did", "dispute", "drop", "add", "take", "claim"):
+        return None
+    if args.cmd == "add" and not args.check:
+        return None
+    d = run_dir(args.target)
+    if not d:
+        return None   # the command retains its own missing-run/task diagnostics
+    state = load_state(d)
+    tid = args.id if args.cmd == "add" else args.task
+    ts = state.get("tasks", {}).get(tid)
+    if not ts:
+        return None
+    refused = mutation_owner_refusal(args.target, d, tid, ts) if args.cmd not in ("take", "claim") else None
+    if refused:
+        return refused
+    pending_operation = operation_pending(d, tid)
+    release_idle_claim = (args.cmd == "claim" and (args.release or args.by == "") and pending_operation
+                          and not pid_alive(pending_operation.get("operation-pid")) and not task_in_flight(d, tid))
+    if args.cmd not in ("did", "take") and pending_operation and not release_idle_claim:
+        return "%s has an unresolved did operation — resume or reconcile it with `chongdae did` before changing this task; nothing changed" % tid
+    return None
+
+
+def task_in_flight(d, tid):
+    """Work a task still has running, including a host-native dispatch awaiting its answer. Match the request's task,
+    not a filename prefix: tasks `a` and `a.b` must not hold each other. Completed subprocesses can be resumed elsewhere."""
+    active = []
+    for path in glob.glob(work_path(d, "*.pending.json")):
+        tag = os.path.basename(path)[:-len(".pending.json")]
+        if tag != tid + ".checks" and load(work_path(d, tag + ".request.json")).get("task") != tid:
+            continue
+        pending = load(path)
+        if pending_alive(path, pending) or (pending.get("native") and not os.path.exists(work_path(d, tag + ".response.json"))):
+            active.append(tag)
+    return sorted(active)
 
 
 def lease_holder(target, by=None):
@@ -2403,6 +2765,7 @@ def take_task(leases, run_name, task, ts, holder, over=None, why=None):
             leases.release(key, lease["gen"])
         return {"ok": False, "lease": conflict, "conflict": "scope"}
     ts["lease-held"] = {"gen": lease["gen"], "holder": holder, "scopes": [[s["key"], s["gen"]] for s in got]}
+    ts["lease-established"] = True   # an explicit/actual lease supersedes the local added-in hint even after release
     return {"ok": True, "lease": lease, "had": r.get("had")}
 
 
@@ -2843,22 +3206,55 @@ def run_pass(args):
         return 0
     ctx = {"args": args, "target": target, "d": d, "plan": plan, "state": state, "providers": providers(target, plan),
            "me": me(target), "claimed_now": set(), "waited": False,   # claimed_now: files the tasks completed in this call recorded as theirs
-           "named": set(getattr(args, "tasks", None) or []), "held": [], "theirs": []}   # named: `run TASK…` — the session's word for those; held: open tasks with nothing of their own
+           "named": set(getattr(args, "tasks", None) or []), "held": [], "theirs": [], "blocked": [], "subagents": []}
     unknown = sorted(ctx["named"] - set(state["tasks"]))
     if unknown:
         raise SystemExit("run: no task %s in %s" % (", ".join(unknown), os.path.basename(d)))
     for task in all_tasks(plan, state):
         ts = state["tasks"][task["id"]]
         if ts["status"] in ("done", "skipped", "dropped"):
+            if operation_pending(d, task["id"]):
+                ctx["blocked"].append("%s has an interrupted operation — `chongdae did %s` must recover its result before this run can finish" % (task["id"], task["id"]))
             continue
-        if any(state["tasks"][n]["status"] != "done" for n in task.get("needs", [])):
+        # A task list selects work; it is not permission to finish every other task whose tree happens to have moved.
+        # Keep ownership ahead of checks/providers too: another session's partial work is not ours to judge complete.
+        try:
+            owned_elsewhere = local_owner_blocks(target, d, task["id"], ts, _LEASE_CALL["leases"] if _LEASE_CALL else None)
+        except LeaseError as err:
+            return stop("the lease store cannot be reached (%s) — ownership cannot be established; nothing advanced" % err)
+        if owned_elsewhere:
+            ctx["theirs"].append(task["id"])
+            if task["id"] in ctx["named"]:
+                ctx["blocked"].append("%s belongs to another session — `chongdae take %s --why WHY` records an explicit handover" % (task["id"], task["id"]))
+            continue
+        if ctx["named"] and task["id"] not in ctx["named"]:
+            continue
+        pending_operation = operation_pending(d, task["id"])
+        if pending_operation:
+            ctx["blocked"].append("%s has interrupted operation %s — `chongdae did %s` recovers observed results without repeating commands; reconcile any unknown outcome before advancing" %
+                                  (task["id"], pending_operation["id"], task["id"]))
+            continue
+        needs = [n for n in task.get("needs", []) if state["tasks"][n]["status"] != "done"]
+        if needs:
+            if task["id"] in ctx["named"]:
+                ctx["blocked"].append("%s waits for %s — finish its dependencies first; this call does not select them automatically" % (task["id"], ", ".join(needs)))
             continue
         if ts.get("claimed_by") and claim_owner(ts["claimed_by"]) != ctx["me"]:
             print("  %s is claimed by %s — not this machine's to advance" % (task["id"], signer_text(ts["claimed_by"])))
+            if task["id"] in ctx["named"]:
+                ctx["blocked"].append("%s is claimed by another owner" % task["id"])
+            continue
+        who = "session" if ts.get("taken") else hire(ctx["providers"], task)[1]
+        if who == "subagent" and ts["status"] == "todo" and task["id"] not in ctx["named"]:
+            # The host's Agent call runs independently. Files and even green checks may be only its partial work;
+            # only its parent can say its answer has arrived and select it for verification/completion.
+            ctx["subagents"].append(task["id"])
             continue
         if _LEASE_CALL and not state.get("parent"):   # a child run's tasks are this session's by the hold on its parent's task
             code = lease_step(ctx, task, ts)
             if code == "skip":
+                if task["id"] in ctx["named"]:
+                    ctx["blocked"].append("%s could not acquire its lease — no selected work was taken from another holder" % task["id"])
                 continue
             if code is not None:
                 return code
@@ -2873,7 +3269,6 @@ def run_pass(args):
             rebaseline(target, d, task, ts, plan, state)
             save_state(d, state)
         # a task the session took over (`take`) is the session's from then on, whoever the lock hired for its role
-        who = "session" if ts.get("taken") else hire(ctx["providers"], task)[1]
         if who is None:
             if task.get("optional"):
                 ts["status"] = "skipped"
@@ -2918,6 +3313,10 @@ def run_pass(args):
                 continue
             if code is not None:
                 return code
+        if ts["status"] == "produced":
+            code = produced_freshness(ctx, task, ts)
+            if code is not None:
+                return code
         if ts["status"] == "produced" and gate_of(task).get("human"):
             return stop("human: review %s (%s) — then `chongdae confirm %s --by <name>` or `--delegated \"<why the human handed this off>\"`"
                         % (task.get("produces", "task %s (checks passed: %s)" % (task["id"], "; ".join(" ".join(c) for c in task.get("checks", [])))), path or task.get("closes", ""), task["id"]))
@@ -2951,6 +3350,11 @@ def run_pass(args):
         return cmd_run(args)
     if ctx["theirs"]:
         print("  open, added by another session of this run — theirs to finish, not this call's: %s" % ", ".join(ctx["theirs"]))
+    if ctx["blocked"]:
+        return stop("selected tasks stay open", *ctx["blocked"])
+    if ctx["subagents"]:
+        return stop("session agent: wait for the sub-agent's answer, then select its task with `chongdae run TASK`; "
+                    "partial edits do not finish a sub-agent's task", "open sub-agent tasks: %s" % ", ".join(ctx["subagents"]))
     if ctx["held"]:
         ids = list(dict.fromkeys(h.split(" ", 1)[0].rstrip(":") for h in ctx["held"]))   # a task's offer line is its own, not another task
         one = ids[0] if len(ids) == 1 else "TASK"
@@ -3249,17 +3653,20 @@ def own_checks(ctx, task, ts):
     commands = [shlex.join(str(a) for a in c) for c in task.get("checks") or []]
     passed = ts.get("checks-passed")
     if (isinstance(passed, dict) and [r.get("command") for r in passed.get("ran") or []] == commands
-            and isinstance(ts.get("checks-tree"), dict) and ts["checks-tree"] == (dirty(target) or {})):
+            and "checks-source" in ts and ts["checks-source"] == source_tree(target, record_scope(target, task))):
         return None, []
-    code, failed, ran = budget_checks(target, d, task)
+    witness = {}
+    code, failed, ran = budget_checks(target, d, task, result_source=witness)
     if code is not None:
         return waiting_stop("%s (its checks)" % task["id"], failed), None
     if failed:
         ts.pop("checks-passed", None)
         ts.pop("checks-tree", None)
+        ts.pop("checks-source", None)
     else:
         ts["checks-passed"] = {"ran": ran, **stamp()}
         ts["checks-tree"] = dirty(target) or {}
+        ts["checks-source"] = witness.get("source")
     save_state(d, state)
     return None, failed
 
@@ -3336,12 +3743,6 @@ def decide_task(ctx, task, ts, who, path):
         # cache-comment also made cache-ops done (06:36:15, touched [], no did) — its deploy, push and Done line came at
         # 06:37–06:39. It stays open, the pass goes on, and the call ends saying how to finish it
         if who in SESSION_HANDS and not ts.get("did") and not gate_of(task).get("human") and not own_measure():   # a gated task's done is a person's confirm
-            other = ts.get("added-in")
-            if task["id"] not in ctx["named"] and other and this_session() and other != this_session():
-                # another session's task in a run two sessions share: theirs to finish, not this one's to be told to do
-                # (sagoforce 10-26: a second session's `run publish-worker` was told "ko-audit, img-audit stay open … Do the work")
-                ctx["theirs"].append(task["id"])
-                return HELD
             if task["id"] not in ctx["named"]:
                 # when what changed is records, say that, not "nothing": they count only inside the task's own scope
                 theirs = {f for t2 in all_tasks(plan, state) if t2["id"] != task["id"] for f in list(state["tasks"].get(t2["id"], {}).get("touched") or []) + list(record_scope(target, t2))}
@@ -3366,9 +3767,15 @@ def decide_task(ctx, task, ts, who, path):
     # People hired after the work: they see the result (touched files, the builder's report) and answer with findings for
     # the record — not a verdict; the gate stands as declared, and the reviewer's report carries what they found.
     built = {k: (ts.get("response") or {}).get(k) for k in ("summary", "verified", "non-claims")} if ts.get("response") else None
+    if "after-source" not in ts:
+        ts["after-source"] = source_tree(target, record_scope(target, task))
+        save_state(d, state)
     code = run_stage(target, d, task, ts, state, plan, prov, "after", {"touched": own_measure() or [], "tests": task.get("tests", []), "built": built})
     if code is not None:
         return code
+    current = source_tree(target, record_scope(target, task))
+    if any(ts[key] != current for key in ("checks-source", "review-source", "after-source") if key in ts):
+        return invalidate_review(ctx, task, ts, current, reason="source changed before the after stage finished")
     ts["status"] = "produced"
     ts["checks"] = task.get("checks", [])
     ts["touched"] = own_measure()   # what this task changed: the reviewer joins runs to files with it
@@ -3422,12 +3829,81 @@ def decide_task(ctx, task, ts, who, path):
     return None
 
 
+def produced_freshness(ctx, task, ts):
+    """A confirmation judges the produced, checked artifact, not later edits."""
+    if not task.get("checks") and not ts.get("review"):
+        return None
+    current = source_tree(ctx["target"], record_scope(ctx["target"], task))
+    missing = (task.get("checks") and "checks-source" not in ts) or (ts.get("review") and "review-source" not in ts)
+    if not missing and all(ts[key] == current for key in ("checks-source", "review-source", "after-source") if key in ts):
+        return None
+    ts["status"] = "todo"
+    ts.pop("confirmed", None)
+    ts.pop("done", None)
+    return invalidate_review(ctx, task, ts, current, reason="source changed after this task was produced",
+                             result=DECISION)
+
+
+def invalidate_review(ctx, task, ts, current, verdict=None, reason="source changed while the verifier was reviewing it", result=WAITING):
+    """A verdict on older input is not a verdict on the current source. Yield once.
+
+    Called only after the pending reviewer ended (or for an already kept review),
+    so its old response can safely be retired before the next call asks fresh eyes.
+    """
+    before = ts.get("review-source", ts.get("checks-source", ts.get("after-source")))
+    changed = sorted(p for p in set(before or {}) | set(current or {}) if (before or {}).get(p) != (current or {}).get(p))
+    invalidated = {"why": reason, "changed": changed, "verdict": (verdict or ts.get("review") or {}).get("verdict"), **stamp()}
+    ts.setdefault("invalidated-reviews", []).append(invalidated)
+    tag = stage_tag(task["id"], "verify", ts.get("attempts", []))
+    for suffix in (".response.json", ".pending.json"):
+        path = work_path(ctx["d"], tag + suffix)
+        if os.path.exists(path):
+            os.remove(path)
+    waiting_after = False
+    for role in stage_roles(ctx["plan"], task, "after"):
+        tag = stage_tag(task["id"], role, ts.get("attempts", []))
+        pending_path = work_path(ctx["d"], tag + ".pending.json")
+        response_path = work_path(ctx["d"], tag + ".response.json")
+        pending = load(pending_path)
+        if pending and (pending_alive(pending_path, pending) or (pending.get("native") and not os.path.exists(response_path))):
+            # A previous call yielded while this observer worked. Drain its
+            # answer normally; after-source still witnesses its older input.
+            waiting_after = True
+            continue
+        rec = (ts.get("stages") or {}).get(role)
+        if rec and rec.get("when") == "after":
+            invalidated.setdefault("after", {})[role] = ts["stages"].pop(role)
+        for path in (pending_path, response_path):
+            if os.path.exists(path):
+                os.remove(path)
+    if not waiting_after:
+        ts.pop("after-source", None)
+    for key in ("review", "review-source", "reviewed_tree", "verdict-given", "verified_by", "overruled", "checks-passed", "checks-tree", "checks-source"):
+        ts.pop(key, None)
+    save_state(ctx["d"], ctx["state"])
+    print("%s %s: source changed while its checks or reviewers were deciding it (%s); the old result does not complete this task. "
+          "Wait for the writers, then `chongdae run %s` reruns the checks and asks fresh eyes%s." %
+          ("decision: session agent:" if result == DECISION else "still working:", task["id"],
+           ", ".join(changed[:8]) or "unwitnessed input", task["id"],
+           "; confirm the newly produced result afterward" if result == DECISION else ""))
+    return result
+
+
 def place_eyes(ctx, task, ts, who, touched):
     """Independent eyes before the gate: not the hands, and their verdict goes here, not back to the builder. A reject goes
     back to the hands on its own (twice) — unless the hands are the session reading the stop."""
     args, target, d, state, plan, prov = ctx["args"], ctx["target"], ctx["d"], ctx["state"], ctx["plan"], ctx["providers"]
     if not prov.get("verifier"):
         return None
+    current = source_tree(target, record_scope(target, task))
+    if ts.get("review") and ("review-source" not in ts or ts["review-source"] != current):
+        return invalidate_review(ctx, task, ts, current)
+    if not ts.get("review") and "review-source" not in ts and "checks-source" in ts and ts["checks-source"] != current:
+        for key in ("checks-passed", "checks-tree", "checks-source"):
+            ts.pop(key, None)
+        save_state(d, state)
+        print("still working: %s: source changed after its checks passed; `chongdae run %s` reruns them before asking the verifier." % (task["id"], task["id"]))
+        return WAITING
     if not ts.get("review"):
         built = {k: (ts.get("response") or {}).get(k) for k in ("summary", "verified", "non-claims")} if ts.get("response") else None
         by_provider = ts.get("touched_by_provider")
@@ -3469,11 +3945,21 @@ def place_eyes(ctx, task, ts, who, touched):
         code = empty_contract_stop(target, plan, task, "the verifier")
         if code is not None:
             return code
+        if "review-source" not in ts:
+            tag = stage_tag(task["id"], "verify", ts.get("attempts", []))
+            old = any(os.path.exists(work_path(d, tag + suffix)) for suffix in (".pending.json", ".response.json"))
+            # Older pending requests have no witnessed input. Consume their
+            # process normally, but require a fresh review before completing.
+            ts["review-source"] = {"": "unwitnessed"} if old else current
+            save_state(d, state)
         code, review, _ = spawn(target, d, task, prov["verifier"], plan, ts.get("attempts", []), stage="verify", extra=extra)
         if code == DISPATCH:
             return stop(dispatch_text(task["id"] + " (verify)", review))
         if code == WAITING:
             return waiting_stop(task["id"] + " (verify)", review)
+        current = source_tree(target, record_scope(target, task))
+        if ts.get("review-source") != current:
+            return invalidate_review(ctx, task, ts, current, review)
         ts["review"] = review
         ts["verdict-given"] = stamp()   # when the eyes answered: the verification's end, for `show`
         ts["reviewed_tree"] = dirty(target)   # the tree this verdict was about: the next round is measured from here
@@ -3664,6 +4150,9 @@ def end_of_pass(ctx):
         print("session run %s: %d task(s), %d open (%s) — `chongdae add` for the next piece, `chongdae close` at the end" % (os.path.basename(d), len(state["tasks"]), len(open_), ", ".join(open_) or "-"))
         return 0
     if any(state["tasks"][t["id"]]["status"] not in ("done", "skipped", "dropped") for t in all_tasks(plan, state)):
+        if ctx["named"]:
+            print("selected tasks advanced; run %s still has open tasks: %s" % (os.path.basename(d), ", ".join(open_tasks(plan, state))))
+            return 0
         return stop("nothing this machine can advance — the open tasks are claimed elsewhere (or blocked on them); pull and `chongdae run` again")
     state["status"] = "complete"
     state["ended"] = stamp()   # when the run ended: `show` gives its duration from `created` to here
@@ -3811,7 +4300,9 @@ def work_commit_lines(run_name, plan, state, loose, target=None):
     return out
 
 
-# What reads as an operation outside the repository in a task's brief or role — a small list, kept small on purpose: the
+# What mentions an operation outside the repository in a task's brief or role — a report hint only, never evidence of
+# execution or missing work. sagoforce 10-27: `check-publish-ready`, `deploy.yml` and “미배포” described edits, yet six
+# tasks stopped close as operations with no `did`. Wording cannot establish what ran. Keep the list small: the
 # English verbs (not their participles: "the deployed version" is not one), and the Korean nouns not used as a modifier
 # ("배포 버전", "배포한 템플릿", "삭제된 글"). guin-site run-20261015-054352-a0ec: cache-ops ("npm run deploy와 push, 배포 뒤
 # …") was done with no `did`; the deploy ran as plain Bash piped through grep, the push as `git push | tail -1`, and the
@@ -3892,23 +4383,12 @@ def after_close(target, command):
 
 
 def reads_as_operation(task):
-    """The word in a task's brief or role that reads as an operation outside the repository, or None. A task its checks
-    decide is a build, whatever its brief says about deploys."""
+    """A lexical hint for the report, not a claim that an operation was intended or ran. A task its checks decide is a
+    build, whatever its brief says about deploys."""
     if task.get("checks"):
         return None
     m = OPS_WORDS.search("%s %s" % (task.get("brief") or "", task.get("role") or ""))
     return m.group(0) if m else None
-
-
-def unrecorded_operations(plan, state):
-    """[(task id, word)] — the done tasks of this run that read as an operation and have no `did` record."""
-    out = []
-    for t in all_tasks(plan, state):
-        ts = state["tasks"].get(t["id"], {})
-        word = reads_as_operation(t) if ts.get("status") == "done" and not ts.get("did") else None
-        if word:
-            out.append((t["id"], word))
-    return out
 
 
 # the kinds of a reviewer's charge the tree can answer now, by the session, before the run closes: a question the model
@@ -4005,7 +4485,7 @@ def resend(target, d, state, task_id, retried, message=None, checked=None):
     # the attempt keeps its verdict and its times — and what a verifier read of it (`seen-non-claims`), what chongdae ran
     # on it (`checked`, `checks-passed`) and which findings it overruled: a later attempt's report hid a non-claim no verifier
     # accepted for that attempt, and its verifier got old evidence
-    for key in ("review", "rejected", "reviewed_tree", "answered", "verdict-given", "seen-non-claims", "checked", "checks-passed", "checks-tree", "overruled"):
+    for key in ("review", "review-source", "after-source", "rejected", "reviewed_tree", "answered", "verdict-given", "seen-non-claims", "checked", "checks-passed", "checks-tree", "checks-source", "overruled"):
         if key in ts:
             attempt[key] = ts.pop(key)
     if "stages" in ts:
@@ -4144,6 +4624,13 @@ def route_dispute(target, d, state, plan, task, disputed, judgment=None):
         return None
     writer = tests_writer(plan, state, task, files)
     bts = state["tasks"][task["id"]]
+    if writer:
+        refused = mutation_owner_refusal(target, d, writer["id"], state["tasks"][writer["id"]])
+        if refused:
+            if judgment is not None:
+                raise SystemExit(refused)
+            print("  tests dispute cannot reopen its writer: " + refused)
+            return None
     if judgment is None:
         routed = sum(1 for a in bts.get("attempts", []) if str((a.get("retried") or {}).get("auto", "")).startswith("tests disputed"))
         if not writer or routed >= AUTO_RESENDS:
@@ -4157,7 +4644,13 @@ def route_dispute(target, d, state, plan, task, disputed, judgment=None):
     wts = state["tasks"][writer["id"]]
     if not made:
         attempt = {**(wts.pop("response", None) or {"status": "session"}), "reopened": {**reopened, **stamp()}, "disputed-tests": disputed,
-                   **{k: wts.pop(k) for k in ("answered", "done", "touched", "seen-non-claims", "checked") if k in wts}}
+                   **{k: wts.pop(k) for k in ("answered", "done", "touched", "seen-non-claims", "checked", "review",
+                       "review-source", "after-source", "reviewed_tree", "verdict-given", "checks-passed", "checks-tree", "checks-source") if k in wts}}
+        # The amendment is new work: result witnesses and after observers belong to the old attempt.
+        after = {role: rec for role, rec in wts.get("stages", {}).items() if rec.get("when") == "after"}
+        if after:
+            attempt["stages"] = after
+            wts["stages"] = {role: rec for role, rec in wts["stages"].items() if role not in after}
         wts.setdefault("attempts", []).append(attempt)
         n = len(wts["attempts"])
         for kind in ("response", "request", "pending", "response.transcript"):
@@ -4199,7 +4692,8 @@ def dispute_tests_task(target, d, state, plan, task, files, disputed):
             "closes": list(task.get("closes") or []), "needs": [], "checks": [], "tests": files, "gate": None,
             **({"domain": task["domain"]} if task.get("domain") else {})}
     state["tasks"][tid] = {"status": "todo", "def": tdef, "seq": 1 + max([t.get("seq", 0) for t in state["tasks"].values()] or [0]),
-                           "added": now_utc(), "non-claims": ["no check decides this task; done means the agent said so"]}
+                           "added": now_utc(), **({"added-in": this_session()} if this_session() else {}),
+                           "non-claims": ["no check decides this task; done means the agent said so"]}
     return tdef
 
 
@@ -4457,8 +4951,8 @@ def cmd_add(args):
     # a provider's task starts when `run` spawns it (`start` is taken then): a build added alongside its test task must not see the test-writer's file as its own change
     if not task["checks"]:
         ts["non-claims"] = ["no check decides this task; done means the agent said so"]
-    if hands in SESSION_HANDS and this_session():
-        ts["added-in"] = this_session()   # a run two sessions share: whose task this is (kept on this machine, like `session`)
+    if this_session():
+        ts["added-in"] = this_session()   # whose task this is, including hired hands that may still be out after this call
     state["tasks"][args.id] = ts
     save_state(d, state)
     if hands == "subagent":
@@ -4524,6 +5018,9 @@ def add_checks(args, d, plan, state, checks):
     line `add` and `run` offer when the project declares a check for the task's scope (`settings.chongdae.checks-for`). Only
     the check: a task's brief, scope and tests are what it was added with."""
     ts = state["tasks"][args.id]
+    refused = mutation_owner_refusal(args.target, d, args.id, ts)
+    if refused:
+        raise SystemExit(refused)   # add may have refreshed the shared record after the command preflight
     task = ts.get("def")
     other = [o for o in ("brief", "closes", "tests", "scope", "gate", "before", "after", "domain", "requires") if getattr(args, o, None) not in (None, [])]
     declared = providers(args.target, plan)
@@ -4547,6 +5044,47 @@ def add_checks(args, d, plan, state, checks):
     return 0
 
 
+def take_operation_recovery(args, d, state, task, ts, journal):
+    """An abandoned operation needs a new owner to inspect its effects. Transfer only that ownership: do not run
+    checks, rotate responses, reopen a done task, clear the journal, or infer the interrupted operation's outcome."""
+    if args.checked or args.checked_red:
+        raise SystemExit("take: interrupted operation recovery transfers ownership only — omit --checked and --checked-red; nothing executed")
+    if not this_session():
+        raise SystemExit("take: this call has no session identity — identify this session before taking interrupted operation recovery; no ownership changed")
+    if pid_alive(journal.get("operation-pid")):
+        return stop("session agent: %s's operation %s still has a running process — wait for it to stop before taking recovery; no ownership changed" % (args.task, journal["id"]))
+    active = task_in_flight(d, args.task)
+    if active:
+        return stop("session agent: %s still has work in flight (%s) — wait for its answer before taking operation recovery; no ownership changed" % (args.task, ", ".join(active)))
+    leases = lease_backend(args.target)
+    try:
+        cur = leases.current(task_key(os.path.basename(d), args.task)) if leases else None
+        holder = lease_holder(args.target)
+        foreign_lease = cur and not same_holder(cur.get("holder"), holder)
+        foreign_claim = not leases and ts.get("claimed_by") and claim_owner(ts["claimed_by"]) != me(args.target)
+        # Plan tasks need not carry added-in: the actual lease/claim still identifies a different owner.
+        if not (other_session(ts) or foreign_lease or foreign_claim):
+            return stop("session agent: this session already owns %s's interrupted operation — resume or reconcile it with `chongdae did`; no ownership changed" % args.task)
+        if foreign_lease:
+            if not lapsed(cur):
+                return stop("session agent: %s is held by another session — wait for its lease to expire before taking interrupted operation recovery; no ownership changed" % args.task)
+            # Expiry permits a new hold, not silent use of the previous holder's generation.
+            result = take_task(leases, os.path.basename(d), task, ts, holder)
+            if not result["ok"]:
+                return stop("session agent: %s's hold changed or its scope is held elsewhere — retry taking recovery after the holder finishes; no ownership changed" % args.task)
+        if foreign_claim:
+            return stop("session agent: %s is claimed by %s — its owner must release the claim before recovery can be handed over; no ownership changed" % (args.task, signer_text(ts["claimed_by"])))
+    except LeaseError as err:
+        return stop("session agent: the lease store cannot be reached (%s) — no recovery ownership changed" % err)
+    ts["added-in"] = this_session()
+    ts.setdefault("handoffs", []).append({"why": args.why, "by": signer(args), "purpose": "operation-recovery", "operation": journal["id"], **stamp()})
+    save_state(d, state)
+    commit_record(args.target, os.path.basename(d), "take %s for interrupted operation recovery: %s" % (args.task, args.why))
+    print("took %s for interrupted operation recovery only — its task status and unknown outcome stay unchanged; inspect the external effects, "
+          "then `chongdae did %s --reconcile %s --why WHY`. Nothing executed." % (args.task, args.task, journal["id"]))
+    return 0
+
+
 def cmd_take(args):
     """The session finishes a task its hired hands could not: the work is in the tree (a sandbox stopped the worker, a guard
     judged the tree the session was also writing), and `drop` would record it as not done — three of guin-site's drops were
@@ -4554,19 +5092,49 @@ def cmd_take(args):
     attempt stays in `attempts`; `run` then decides it like any session task — its checks, the verifier, the gate."""
     d = run_dir(args.target)
     plan, state = (load(os.path.join(d, "plan.json")), load_state(d)) if d else ({}, {})
-    if plan.get("kind") != "session" or state.get("status") != "running":
+    if state.get("status") != "running":
         raise SystemExit("no session run in progress — `take` is for a session run's own tasks")
     ts = state["tasks"].get(args.task)
     if not ts:
         raise SystemExit("no task %s" % args.task)
+    journal = operation_pending(d, args.task)
+    if journal:
+        task = next((t for t in all_tasks(plan, state) if t.get("id") == args.task), {"id": args.task})
+        return take_operation_recovery(args, d, state, task, ts, journal)
+    if plan.get("kind") != "session":
+        raise SystemExit("no session run in progress — `take` is for a session run's own tasks")
     if ts["status"] != "todo":
         raise SystemExit("%s is %s — only an open task can be taken" % (args.task, ts["status"]))
     task = ts["def"]
     hands = providers(args.target, plan).get(task["role"])
-    if ts.get("taken") or hands == "session" or task["role"] == "session":
+    handover = other_session(ts)
+    if handover and not this_session():
+        raise SystemExit("take: this call has no session identity — set CHONGDAE_SESSION (or the host's session id) before taking another session's task; no ownership changed")
+    if (ts.get("taken") or hands == "session" or task["role"] == "session") and not handover:
         raise SystemExit("%s is already the session's" % args.task)
+    active = task_in_flight(d, args.task)
+    if active:
+        raise SystemExit("%s still has work in flight (%s) — wait for its answer before taking it; no ownership changed" % (args.task, ", ".join(active)))
+    leases = lease_backend(args.target)
+    if leases:
+        try:
+            cur = leases.current(task_key(os.path.basename(d), args.task))
+        except LeaseError as err:
+            raise SystemExit("take: the lease store cannot be reached (%s) — no ownership changed" % err)
+        if cur and not lapsed(cur) and not same_holder(cur.get("holder"), lease_holder(args.target)):
+            raise SystemExit("%s is held by another session — `claim --break %s --why WHY` is required before taking it" % (args.task, args.task))
     who = signer(args)
     checked = run_checked(args.target, args.checked, args.checked_red) if (args.checked or args.checked_red) else None   # before anything is recorded: a failing one refuses the take
+    if handover:
+        ts["added-in"] = this_session()
+        ts.setdefault("handoffs", []).append({"why": args.why, "by": who, **stamp()})
+        if ts.get("taken") or hands in SESSION_HANDS or task["role"] in SESSION_HANDS:
+            if checked:
+                ts["checked"] = checked
+            save_state(d, state)
+            commit_record(args.target, os.path.basename(d), "take %s from another session: %s" % (args.task, args.why))
+            print("took %s from another session — its hands and evidence stay the same; `chongdae run %s` advances it" % (args.task, args.task))
+            return 0
     msg = take_over(args.target, d, state, task, ts, args.why, who, checked=checked)
     print(msg)
     if checked:
@@ -4576,6 +5144,110 @@ def cmd_take(args):
         print("  evidence chongdae saw: `take %s --why WHY --checked \"COMMAND\"` runs a command now and records its pass; "
               "`--checked-red \"COMMAND\"` records a tests task's expected red run (a pass is recorded as passed before the build)" % args.task)
     return 0
+
+
+def operation_pending(d, tid):
+    """The interrupted operation journal for this task; it is never permission to replay the command."""
+    return load(work_path(d, tid + ".did.pending.json")) if d else {}
+
+
+def operation_merge(d, state, tid, journal):
+    """Publish completed items exactly once, including after a crash during the state transaction."""
+    records = state["tasks"][tid].setdefault("did", [])
+    offset = journal["record-start"]
+    for item in journal["items"]:
+        rec = item.get("result")
+        if rec is None:
+            break
+        if len(records) > offset:
+            if records[offset] != rec:
+                raise SystemExit("did recovery: the task's operation history changed at item %d; nothing was replayed" % (offset + 1))
+        else:
+            if len(records) != offset:
+                raise SystemExit("did recovery: the task's earlier operation history is missing; nothing was replayed")
+            records.append(rec)
+        offset += 1
+    save_state(d, state)
+
+
+def operation_argv(target, argv, journal_path, journal):
+    """The operation may have effects even when its caller dies. Register its pid where possible, and leave the
+    pre-execution intent unresolved on interruption; never infer 'not run' from an absent result."""
+    import subprocess
+    command = resolve_argv(target, list(argv))
+    if command and command[0] in ("python", "python3") and not shutil.which(command[0]):
+        command[0] = next((x for x in ("python3", "python") if shutil.which(x)), None) or sys.executable
+    timeout = float(os.environ.get("CHONGDAE_CHECK_TIMEOUT") or 1800)
+    try:
+        proc = subprocess.Popen(command, cwd=target, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True, encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL, start_new_session=True)
+    except OSError as err:
+        return 127, str(err), False
+    journal["operation-pid"] = proc.pid
+    save(journal_path, journal)
+    try:
+        out, err = proc.communicate(timeout=timeout)
+        return proc.returncode, out + err, True
+    except subprocess.TimeoutExpired:
+        if os.name == "nt":
+            proc.kill()
+        else:
+            import signal
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        try:
+            out, err = proc.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            # A descendant may have deliberately escaped the process group while retaining the pipes.
+            # Keep the unknown intent, rather than hang or publish a settled result for a still-active operation.
+            raise SystemExit("did: the timed-out operation still has open output pipes; its outcome stays unknown. Inspect and stop surviving processes before reconciliation")
+        return 124, out + err + "\ntimed out after %ds; external effects may already have occurred" % timeout, True
+
+
+def recover_operation(args, d, state, journal):
+    """Restore observed results without executing anything. An unknown effect needs a reasoned reconciliation,
+    not a fabricated successful exit or an automatic retry; items never started are left unexecuted."""
+    path = work_path(d, args.task + ".did.pending.json")
+    reconcile = getattr(args, "reconcile", None)
+    if reconcile:
+        if reconcile != journal["id"]:
+            raise SystemExit("did: pending operation is %s, not %s; nothing executed" % (journal["id"], reconcile))
+        if not args.why or not args.why.strip():
+            raise SystemExit("did --reconcile needs --why: what external state you checked and why it is safe to proceed")
+        if args.command or args.each or args.approved_in:
+            raise SystemExit("did --reconcile records a judgment only; give no command, --each, or --approved-in")
+    operation_merge(d, state, args.task, journal)
+    unknown = [i for i, item in enumerate(journal["items"]) if item.get("status") == "started" and "result" not in item]
+    if unknown:
+        if pid_alive(journal.get("operation-pid")):
+            return stop("session agent: operation %s still has a running process (pid %s); wait for it to stop and inspect its external effects. Nothing was repeated."
+                        % (journal["id"], journal["operation-pid"]))
+        if not reconcile:
+            return stop("session agent: operation %s was interrupted; item %d has no observed outcome. Earlier results were recovered; nothing was repeated. "
+                        "Inspect the external state and stop any surviving operation before `chongdae did %s --reconcile %s --why WHY`. "
+                        "Reconciliation executes nothing; only then deliberately issue any remaining command."
+                        % (journal["id"], unknown[0] + 1, args.task, journal["id"]))
+        why = mask_secrets(args.why)[0]
+        for i in unknown:
+            intent = journal["items"][i]["intent"]
+            journal["items"][i]["result"] = {**intent, "exit": None, "tail": [], "outcome": "unknown",
+                "why": (intent.get("why", "") + "; interrupted outcome unknown; reconciliation: " + why).lstrip("; "),
+                "reconciled": {"why": why, "by": signer(args), **stamp()}}
+        journal["status"] = "reconciled"
+        save(path, journal)
+        operation_merge(d, state, args.task, journal)
+    never_started = [i + 1 for i, item in enumerate(journal["items"]) if item.get("status") == "planned"]
+    commit_record(args.target, os.path.basename(d), "did %s: recover %s%s" % (args.task, journal["id"], " (outcome unknown, reconciled)" if unknown else ""))
+    journal["status"] = "reconciled" if reconcile else "recovered"
+    save(work_path(d, args.task + ".did." + journal["id"] + ".json"), journal)
+    os.remove(path)
+    print("recovered operation %s for %s; no command executed%s" % (journal["id"], args.task,
+          "; items never started: " + ", ".join(map(str, never_started)) if never_started else ""))
+    if unknown:
+        print("  its actual exit remains unknown; the reconciliation is the session's judgment, not an observed successful execution")
+    return 0 if reconcile else DECISION   # supplied commands were not executed; a caller must not mistake recovery for their success
 
 
 def cmd_did(args):
@@ -4594,6 +5266,11 @@ def cmd_did(args):
         raise SystemExit("no task %s — `chongdae add %s --brief ...` first: an operation is some task's work" % (args.task, args.task))
     if ts.get("status") in ("dropped", "skipped"):
         raise SystemExit("%s is %s — an operation is recorded on a task that is being done or was done" % (args.task, ts["status"]))
+    pending = operation_pending(d, args.task)
+    if pending:
+        return recover_operation(args, d, state, pending)
+    if getattr(args, "reconcile", None):
+        raise SystemExit("did: this task has no interrupted operation to reconcile; nothing executed")
     usage = "`chongdae did %s [--why WHY] [--approved-in source:ID] -- COMMAND ARG...` (or `--each FILE`, one command per line)" % args.task
     if args.each and args.command:
         raise SystemExit("did: a command after `--` or `--each FILE`, not both — " + usage)
@@ -4612,30 +5289,43 @@ def cmd_did(args):
         raise SystemExit("did: no command — " + usage)
     if args.approved_in is not None and not re.match(r"^[\w.-]+:\S+$", args.approved_in):
         raise SystemExit("--approved-in %r: where the person agreed, as source:ID (a mangsang source, `source:at-63`) or KIND:REF" % args.approved_in)
+    import uuid
+    journal_path = work_path(d, args.task + ".did.pending.json")
+    journal = {"id": "O-" + uuid.uuid4().hex[:16], "task": args.task, "record-start": len(ts.get("did") or []),
+               "status": "pending", "items": [{"status": "planned"} for _ in commands], **stamp()}
+    save(journal_path, journal)   # even a crash before the first item cannot cause the invocation to be silently replayed
     recs, first_bad = [], None
     for i, argv in enumerate(commands, 1):
         shown, outside = outside_argv(args.target, argv)
-        code, said, ran = run_argv(args.target, argv)
         # what the record keeps of the command line and of what it answered, a secret's value masked (guin-site 10-16: a
         # secrets file's text went into a committed record; a value on the command line or echoed back would go the same way)
         shown, in_command = mask_argv(shown)
-        said, in_tail = mask_secrets(said)
-        rec = {"command": shlex.join(shown), "exit": code, "tail": portable(kept_tail(said), args.target), **stamp(),
+        intent = {"command": shlex.join(shown), **stamp(),
                **({"why": args.why} if args.why else {}), **({"approved-in": args.approved_in} if args.approved_in else {}), "signer": signer(args)}
         if outside:
-            rec["outside"] = outside   # a script outside the project: the record keeps what it was, not a path on this machine
+            intent["outside"] = outside   # a script outside the project: the record keeps what it was, not a path on this machine
+        if len(commands) > 1:
+            intent["batch"] = {"of": len(commands), "n": i}
+        journal["items"][i - 1] = {"status": "started", "intent": intent}
+        journal.pop("operation-pid", None)
+        save(journal_path, journal)   # before effects; an absent result means unknown, not permission to retry
+        code, said, ran = operation_argv(args.target, argv, journal_path, journal)
+        said, in_tail = mask_secrets(said)
+        rec = {**intent, "exit": code, "tail": portable(kept_tail(said), args.target), **stamp()}
         if in_command or in_tail:
             rec["masked"] = {k: v for k, v in (("command", in_command), ("tail", in_tail)) if v}
-        if len(commands) > 1:
-            rec["batch"] = {"of": len(commands), "n": i}
         if not ran:
-            rec["ran"] = False   # a missing command or a timeout: nothing answered
+            rec["ran"] = False   # the process could not be started
         recs.append(rec)
+        journal["items"][i - 1]["result"] = rec
+        journal["items"][i - 1]["status"] = "finished"
+        save(journal_path, journal)   # each batch result is durable before the next operation can start
+        operation_merge(d, state, args.task, journal)
         if code:
             first_bad = i
             break   # one judgment, in order: what comes after a failure is not run on a state nobody has looked at
-    ts.setdefault("did", []).extend(recs)
-    save_state(d, state)
+    journal["status"] = "finished"
+    save(journal_path, journal)
     bad = [r for r in recs if r["exit"]]
     subject = (short_command(recs[0]["command"]) + " -> exit %d" % recs[0]["exit"] if len(commands) == 1
                else "%d operation(s)%s: %s" % (len(recs), " (stopped at %d of %d)" % (first_bad, len(commands)) if first_bad else "",
@@ -4655,6 +5345,8 @@ def cmd_did(args):
         print("  not run (an earlier command exited non-zero): %s" % "; ".join(shlex.join(mask_argv(outside_argv(args.target, c)[0])[0]) for c in commands[first_bad:]))
     if bad:
         print("  a non-zero exit stays in the record: `report` lists it as an objection until a reviewer disposes of it")
+    save(work_path(d, args.task + ".did." + journal["id"] + ".json"), journal)
+    os.remove(journal_path)
     return 1 if bad else 0
 
 
@@ -4926,16 +5618,45 @@ def cmd_drop(args):
         raise SystemExit("no task %s" % args.task)
     if ts["status"] in ("done", "skipped", "dropped"):
         raise SystemExit("%s is %s — nothing to drop" % (args.task, ts["status"]))
+    leases = lease_backend(args.target)
+    if leases:
+        try:
+            held = leases.current(task_key(os.path.basename(d), args.task))
+        except LeaseError as err:
+            raise SystemExit("drop: the lease store cannot be reached (%s) — nothing dropped" % err)
+        if held and not lapsed(held) and not same_holder(held.get("holder"), lease_holder(args.target)):
+            raise SystemExit("%s is held by another session — wait for release or explicitly `claim --break %s --why WHY` before taking or dropping it" % (args.task, args.task))
+    try:
+        local_owner = local_owner_blocks(args.target, d, args.task, ts, leases)
+    except LeaseError as err:
+        raise SystemExit("drop: the lease store cannot be reached (%s) — nothing dropped" % err)
+    if local_owner:
+        raise SystemExit("%s belongs to another session (or this call has no session identity) — use `chongdae take %s --why WHY` for an idle task's handover before dropping it" % (args.task, args.task))
+    elif not leases and ts.get("claimed_by") and claim_owner(ts["claimed_by"]) != me(args.target):
+        raise SystemExit("%s is claimed by %s — its owner must release it before it can be dropped" % (args.task, signer_text(ts["claimed_by"])))
+    native = []
+    for tag in task_in_flight(d, args.task):
+        pending = load(work_path(d, tag + ".pending.json"))
+        if pending_alive(work_path(d, tag + ".pending.json"), pending):
+            raise SystemExit("%s still has a running process (%s) — wait for it to stop before dropping; nothing was cancelled or dropped" % (args.task, tag))
+        if pending.get("native"):
+            native.append(tag)   # dropping asserts the session has cancelled its host agent; the engine cannot observe that agent
     if ts.get("response") and (ts["response"].get("status") == "done" or measured(args.target, ts)):
         print("note: %s's hands changed the tree — if that work stands, `chongdae take %s --why` finishes it as done work instead" % (args.task, args.task))
     ts["status"] = "dropped"
     ts["dropped"] = {"why": args.why, "by": signer(args), **stamp()}
+    if native:
+        ts["dropped"]["native-dispatches-retired"] = native
     ts["touched"] = scoped_measure(args.target, plan, state, args.task, ts, providers(args.target, plan))[0]   # what changed in its window stays attributed to it, dropped or not (open tasks' scopes say whose)
     ts.setdefault("non-claims", []).append("dropped, not done: %s" % args.why)
     release_result(args.target, d, args.task, ts)
     save_state(d, state)
+    for tag in native:
+        os.remove(work_path(d, tag + ".pending.json"))   # request/asked evidence stays; no other task's pending job is touched
     commit_record(args.target, os.path.basename(d), "drop %s: %s" % (args.task, args.why))
     print("dropped %s: %s" % (args.task, args.why))
+    if native:
+        print("  retired native dispatch %s on the session's word that its host agent was cancelled; request evidence kept" % ", ".join(native))
     return 0
 
 
@@ -4972,9 +5693,9 @@ def cmd_claim(args):
     leases = lease_backend(args.target)
     if leases:
         return claim_lease(args, leases)
-    if args.brk or args.release or args.prune:
+    if args.brk or args.prune:
         raise SystemExit("--%s needs a lease: settings.chongdae.lease (\"local\", \"git\" or a command) — without one a claim is a line in the record; "
-                         "`claim TASK --by \"\"` releases it" % ("break" if args.brk else "release" if args.release else "prune"))
+                         "`claim TASK --release` (or `--by \"\"`) releases it" % ("break" if args.brk else "prune"))
     code = None if args.list else remote_before(args.target, "`chongdae claim`")
     if code is not None:
         return code
@@ -4998,8 +5719,10 @@ def cmd_claim(args):
         raise SystemExit("no task %s" % args.task)
     # a claim says which machine advances the task (`run` compares it with this machine's user) and who decided it: a
     # person's `--by NAME`, else the session — on this machine, signed as itself, not with the owner's name
-    who = args.by if args.by is not None else {**agent_signer(args.target), "machine": me(args.target)}
-    if ts.get("claimed_by") and claim_owner(ts["claimed_by"]) != claim_owner(who):
+    releasing = args.release or args.by == ""
+    who = None if releasing else args.by if args.by is not None else {**agent_signer(args.target), "machine": me(args.target)}
+    owner = me(args.target) if releasing else claim_owner(who)
+    if ts.get("claimed_by") and claim_owner(ts["claimed_by"]) != owner:
         raise SystemExit("%s is claimed by %s — they release it (claim --by \"\") or you agree with them, not with chongdae" % (args.task, signer_text(ts["claimed_by"])))
     ts["claimed_by"] = who or None
     save_state(d, state)
@@ -5104,6 +5827,47 @@ def claim_lease(args, leases):
         return DECISION
 
 
+def close_busy(target, d, plan, state):
+    """A close cannot end the shared container while another session or dispatched hands still use it. Unlike
+    uncommitted work, `--anyway` cannot dispose of somebody else's ongoing work or cancel a running process."""
+    busy = []
+    leases = lease_backend(target)
+    if leases:
+        try:
+            holder = lease_holder(target)
+            for held in leases.list(ref_part(os.path.basename(d)) + "/"):
+                if not lapsed(held) and not same_holder(held.get("holder"), holder):
+                    busy.append("%s is held by %s — wait for its holder to finish or release it" % (held.get("key"), holder_text(held.get("holder"))))
+        except LeaseError as err:
+            busy.append("the lease store cannot be reached (%s); whether another session is working cannot be established" % err)
+    declared = providers(target, plan)
+    for task in all_tasks(plan, state):
+        tid, ts = task["id"], state["tasks"][task["id"]]
+        pending_operation = operation_pending(d, tid)
+        if pending_operation:
+            busy.append("%s has interrupted operation %s — `chongdae did %s` recovers observed results without repetition; reconcile any unknown outcome before closing" %
+                        (tid, pending_operation["id"], tid))
+        active = task_in_flight(d, tid)
+        if active:
+            busy.append("%s has running or unanswered dispatched work (%s) — finish the dispatch and `chongdae run %s` to consume it" % (tid, ", ".join(active), tid))
+        if ts.get("status") in CLOSED:
+            continue
+        try:
+            local_owner = local_owner_blocks(target, d, tid, ts, leases)
+        except LeaseError as err:
+            busy.append("%s: the lease store cannot be reached (%s); ownership cannot be established" % (tid, err))
+            local_owner = False
+        if local_owner:
+            busy.append("%s is unfinished and owned by another session (or this call has no session identity) — let its owner finish, "
+                        "or use `chongdae take %s --why WHY` for an explicit handover once its hands have stopped" % (tid, tid))
+        elif not leases and ts.get("claimed_by") and claim_owner(ts["claimed_by"]) != me(target):
+            busy.append("%s is unfinished and claimed by %s — its owner must finish or release it" % (tid, signer_text(ts["claimed_by"])))
+        if not ts.get("taken") and hire(declared, task)[1] == "subagent":
+            busy.append("%s is an unfinished sub-agent task — wait for its hand-back, then `chongdae run %s`; if cancelled, stop its hands "
+                        "before `chongdae drop %s --why WHY`" % (tid, tid, tid))
+    return busy
+
+
 def cmd_close(args):
     """A session run ends. Open tasks stay in the record as open; nothing is decided for them.
     A worktree run also merges back: commit the worktree, merge into main — clean merge + green recheck ends the run;
@@ -5122,6 +5886,9 @@ def cmd_close(args):
         return merge_back(args.target, wt, os.path.basename(d))
     if state.get("status") != "running":
         raise SystemExit("no session run in progress")
+    busy = close_busy(args.target, d, plan, state)
+    if busy:
+        return stop("session agent: this run still has other owners or active hands — it stays open; `--anyway` cannot end their work", *busy)
     refused = parent_refusal(args.target, state)
     if refused:
         raise SystemExit("not closed: " + refused)
@@ -5140,13 +5907,6 @@ def cmd_close(args):
                     "or `chongdae close --anyway --why WHY` closes with it uncommitted (recorded)"
                     % ("; ".join("%s (%s)" % (f, ", ".join(loose[f])) for f in files), os.path.basename(d), os.path.basename(d)),
                     *work_commit_lines(os.path.basename(d), plan, state, loose, args.target))
-    # a task that reads as an operation and has no `did`: the operation ran as plain Bash (its exit unread) or not at all
-    ops = unrecorded_operations(plan, state)
-    if ops and not anyway:
-        return stop("session agent: %s %s as an operation outside the repository and %s no `did` record — record what ran: `chongdae did %s --why WHY -- COMMAND` "
-                    "(it runs the command now and keeps its exit and output's end), then `chongdae close`; or `chongdae close --anyway --why WHY` "
-                    "when nothing outside was done (recorded)" % (", ".join(t for t, _ in ops), "reads" if len(ops) == 1 else "read", "has" if len(ops) == 1 else "have", ops[0][0]),
-                    *("%s: '%s' in its brief — %s" % (t, w, cut((state["tasks"][t].get("def") or {}).get("brief") or "", 160)) for t, w in ops))
     state["status"] = "complete"   # which tasks stayed open is the tasks' own status; `report`/`status` recount it, nothing read a copy
     state["ended"] = stamp()
     save_state(d, state)
@@ -5169,12 +5929,10 @@ def cmd_close(args):
                     *("%s @ %s: %s" % (review_kind(f), f.get("where"), f.get("text")) for f in standing))
     if anyway:
         state["closed-anyway"] = {"why": args.why, "by": signer(args), **({"uncommitted": sorted(loose)} if loose else {}),
-                                  **({"operations-unrecorded": [t for t, _ in ops]} if ops else {}),
                                   **({"standing": [{k: f.get(k) for k in ("kind", "where", "text")} for f in standing]} if standing else {}), **stamp()}
-        if loose or standing or ops:
+        if loose or standing:
             state.setdefault("non-claims", []).append("closed with %s standing (`close --anyway`): %s" % (
                 " and ".join(x for x in ("%d uncommitted file(s) of its work (%s)" % (len(loose), ", ".join(sorted(loose))) if loose else "",
-                                         "%d task(s) reading as an operation with no `did` (%s)" % (len(ops), ", ".join(t for t, _ in ops)) if ops else "",
                                          "%d reviewer objection(s) the tree could answer (%s)" % (len(review_distinct(standing)), review_count(standing)) if standing else "") if x), args.why))
     for tid, ts in state["tasks"].items():
         if ts.get("lease-held"):
@@ -5202,7 +5960,10 @@ def cmd_confirm(args):
     if not (args.by or args.delegated):
         raise SystemExit("say who confirmed (--by) or why the human delegated it (--delegated)")
     plan = load(os.path.join(d, "plan.json"))
-    task = next((t for t in plan.get("tasks", []) if t.get("id") == args.task), {})
+    task = next((t for t in all_tasks(plan, state) if t.get("id") == args.task), ts.get("def") or {"id": args.task})
+    code = produced_freshness({"target": args.target, "d": d, "plan": plan, "state": state}, task, ts)
+    if code is not None:
+        return code
     refused = result_gen_refusal(args.target, d, args.task, ts)
     if refused:
         raise SystemExit("%s: %s" % (args.task, refused))
@@ -5400,9 +6161,22 @@ def cmd_adopt(args):
     unknown = [f for f in files if f not in known]
     if unknown:
         raise SystemExit("%s: nothing in this run or in the tree changed it — there is no work to attribute (a path is project-relative)" % ", ".join(unknown))
+    now = dirty(args.target) or {}
+    for t2 in all_tasks(plan, state):
+        o = state["tasks"].get(t2["id"], {})
+        if t2["id"] == args.task:
+            continue
+        affected = bool(set(files) & (set(o.get("touched") or []) | set(o.get("shared") or {}) |
+                        {f for a in o.get("adopted") or [] if isinstance(a, dict) for f in a.get("files") or []}))
+        if o.get("status") == "todo" and isinstance(o.get("start"), dict):
+            affected = affected or any(o["start"].get(f) != (now.get(f) or file_hash(args.target, f)) for f in files)
+        if affected:
+            refused = mutation_owner_refusal(args.target, d, t2["id"], o)
+            if refused:
+                raise SystemExit("adopt would also change %s: %s" % (t2["id"], refused))
     judgment = {**({"delegated": delegation_record(d, args.delegated, "adopt")["delegated"]} if args.delegated else
                    {"by": signer(args)}), "why": args.why, "files": files, **stamp()}
-    now, moved = dirty(args.target) or {}, {}
+    moved = {}
     for t2 in all_tasks(plan, state):
         o = state["tasks"].get(t2["id"], {})
         if t2["id"] == args.task:
@@ -5589,7 +6363,7 @@ def cmd_report(args):
                 # objection — a deploy or a deletion that exited non-zero left the outside in a state nobody has looked at
                 f = {"kind": "did", "where": "%s/%s did %d" % (name, tid, i), "by": r.get("signer"),
                      "text": "`%s` -> exit %s%s, run by chongdae at %s, signed %s%s%s" % (
-                         r.get("command"), r.get("exit"), " (it did not run)" if r.get("ran") is False else "", r.get("at"), signer_text(r.get("signer")),
+                         r.get("command"), "unknown" if r.get("outcome") == "unknown" else r.get("exit"), " (it did not run)" if r.get("ran") is False else "", r.get("at"), signer_text(r.get("signer")),
                          ": " + r["why"] if r.get("why") else "", "; approved in %s" % r["approved-in"] if r.get("approved-in") else "; no approval cited")
                          + "".join("; %s is outside the project: %s" % (outside_what(o), outside_text(o)) for o in r.get("outside") or [])
                          + ("; " + masked_text(r["masked"]) if r.get("masked") else "")}
@@ -5600,10 +6374,11 @@ def cmd_report(args):
                 findings.append(f)
             word = reads_as_operation(ts.get("def") or {}) if ts.get("status") == "done" and not ts.get("did") else None
             if word:
-                # an operation the record does not hold: what ran, its exit, its output are nowhere but the session's transcript
-                findings.append({"kind": "operation-unrecorded", "where": "%s/%s" % (name, tid), "layer": "observation",
-                                 "text": "reads as an operation outside the repository ('%s' in its brief) and has no `did` record — what ran, and its exit, "
-                                         "are not in the record: %s" % (word, cut((ts.get("def") or {}).get("brief") or "", 160))})
+                # A filename or the subject of an edit can mention deploy/publish. Do not turn wording into a claim of
+                # missing execution, ask to re-run an operation, or create debt at close.
+                findings.append({"kind": "operation-mention", "where": "%s/%s" % (name, tid), "layer": "observation",
+                                 "text": "brief or role mentions '%s'; this task has no `did` record. Wording alone does not establish that an operation "
+                                         "was intended or executed: %s" % (word, cut((ts.get("def") or {}).get("brief") or "", 160))})
             if (ts.get("performed_by") or {}).get("provider") == "subagent" and ts.get("status") in ("done", "dropped"):
                 findings.append({"kind": "subagent", "where": "%s/%s" % (name, tid), "layer": "observation",
                                  "text": "done by the session's sub-agent (%s) — declared hands, not self-performed; chongdae saw the session's tree, not the sub-agent%s"
@@ -5980,7 +6755,7 @@ def task_story(run_d, task, ts, day, run_end):
     for r in ts.get("checked", {}).get("ran", []) if isinstance(ts.get("checked"), dict) else []:
         out.append("  checked by chongdae at %s: %s -> exit %s%s" % (when(r.get("at"), day), r.get("command"), r.get("exit"), " (%s)" % r["outcome"] if r.get("outcome") else ""))
     for r in ts.get("did") or []:
-        out.append("  did at %s by %s: %s -> exit %s%s%s%s" % (when(r.get("at"), day), signer_text(r.get("signer")), r.get("command"), r.get("exit"),
+        out.append("  did at %s by %s: %s -> exit %s%s%s%s" % (when(r.get("at"), day), signer_text(r.get("signer")), r.get("command"), "unknown" if r.get("outcome") == "unknown" else r.get("exit"),
                                                           " (it did not run)" if r.get("ran") is False else "",
                                                           " — " + r["why"] if r.get("why") else "", "; approved in %s" % r["approved-in"] if r.get("approved-in") else ""))
         out += [pad + "| " + line for line in r.get("tail") or []]
@@ -6338,10 +7113,54 @@ def cmd_show(args):
 
 # ---------------------------------------------------------------- main
 
+class CommandLock:
+    """One record-changing command per checkout, from its first read through its commit.
+
+    A per-task lease coordinates remote workers; it cannot protect this checkout's shared state snapshots or git
+    index. Hold an OS lock here instead of a timed marker: a slow check cannot expire it, and process death releases
+    it. Other projects and worktrees have their own lock. Never unlink the file (waiters may hold the old inode).
+    """
+    def __init__(self, target, path=None):
+        self.path = path or os.path.join(os.path.realpath(target), RUNS, LOCAL, "command.lock")
+        self.file = None
+        self.acquired = False
+
+    def __enter__(self):
+        import errno
+        os.makedirs(os.path.dirname(self.path), exist_ok=True)
+        self.file = open(self.path, "a+b")
+        try:
+            if os.name == "nt":
+                import msvcrt
+                if os.fstat(self.file.fileno()).st_size == 0:
+                    self.file.write(b"\0")
+                    self.file.flush()
+                self.file.seek(0)
+                msvcrt.locking(self.file.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(self.file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self.acquired = True
+        except OSError as err:
+            self.file.close()
+            self.file = None
+            if err.errno not in (errno.EACCES, errno.EAGAIN, errno.EDEADLK):
+                raise
+        return self
+
+    def __exit__(self, *exc):
+        if self.file is not None:
+            # Ordinary command locks are not inherited; the internal launcher explicitly keeps its own lock across exec.
+            self.file.close()
+            self.file = None
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv[:1] == ["_checks"] and len(argv) == 3:
         return checks_worker(argv[1], argv[2])   # the task's checks in a process of their own (budget_checks): not a command anyone types
+    if argv[:1] == ["_launch"] and len(argv) == 3:
+        return launch_worker(argv[1], argv[2])   # durable detached launch, before the worker can execute
     command = None
     if argv[:1] == ["did"] and "--" in argv:
         # `did TASK [options] -- COMMAND ARG...`: everything after the first `--` is the command's own argv, options included
@@ -6367,8 +7186,9 @@ def main(argv=None):
             p.add_argument("--why", default=None, help="with --anyway: why the run closes with them standing")
             p.add_argument("--by", default=None, help="with --anyway: who decided (default: the session — its host and model)")
         if name == "run":
-            p.add_argument("tasks", nargs="*", metavar="TASK", help="session tasks whose work leaves nothing in the tree (a decision, an answer): naming one is the "
-                           "session's word that it is done. A task with no check, no change of its own and no `did` is otherwise left open, not finished by a `run` that did not name it")
+            p.add_argument("tasks", nargs="*", metavar="TASK", help="advance only these tasks; dependencies must already be done or also selected. "
+                           "Naming a no-check task is the session's word that it is done. Host sub-agent tasks must be named after their answers arrive. "
+                           "Another session's task needs an explicit `take --why` handover; naming it does not transfer ownership")
         if name in ("confirm", "accept", "retry"):
             p.add_argument("task")
             p.add_argument("--by", default=None, help="the person who decided" + (" (a gate: --by NAME or --delegated is required)" if name != "retry" else " (default: the session — its host and model; a retry is not a gate)"))
@@ -6424,6 +7244,7 @@ def main(argv=None):
                              "observation, or as an objection when it exited non-zero.")
             p.add_argument("task", help="the task whose work the operation is")
             p.add_argument("--why", default=None, help="what the operation is for")
+            p.add_argument("--reconcile", default=None, metavar="ID", help="resolve an interrupted operation after checking external effects; requires --why, executes nothing, and keeps unknown outcomes as unknown")
             p.add_argument("--approved-in", dest="approved_in", default=None, metavar="SOURCE:ID",
                            help="where the person agreed to it (a mangsang source, `source:at-63`) — cite it when the operation cannot be undone")
             p.add_argument("--by", default=None, help="who decided to run it (default: the session — its host and model)")
@@ -6431,7 +7252,7 @@ def main(argv=None):
                            "blank lines and `#` comments skipped). Each is recorded with its own exit and tail, all in one commit; a non-zero exit stops the rest")
         if name == "take":
             p.add_argument("task")
-            p.add_argument("--why", required=True, help="why the session finishes it (the worker's sandbox could not, a guard judged the tree the session was also writing)")
+            p.add_argument("--why", required=True, help="why this session finishes it or takes ownership from another session; live checks/providers and unanswered native dispatches must finish first")
             p.add_argument("--by", default=None, help="who decided (default: the session — its host and model, not git user.name)")
         if name == "drop":
             p.add_argument("task")
@@ -6468,7 +7289,31 @@ def main(argv=None):
         # the shell's directory is not the project: `cd tests` and then `chongdae run` found no run there
         args.target = record_root(os.getcwd()) or "."
     try:
-        return COMMANDS[args.cmd](args)
+        if args.cmd in ("status", "show", "report", "recheck"):
+            return COMMANDS[args.cmd](args)
+        with CommandLock(args.target) as lock:
+            if not lock.acquired:
+                print("still working: another chongdae command is updating this project; "
+                      "this call changed nothing — retry `chongdae %s` with the same arguments" % args.cmd)
+                return WAITING
+            recover_project_states(args.target)
+            refused = task_mutation_guard(args)
+            if refused:
+                return stop(refused)
+            if args.cmd == "close":
+                d = run_dir(args.target, getattr(args, "run", None))
+                main = (load(os.path.join(d, "state.json")).get("worktree") or {}).get("main") if d else None
+                if main and os.path.realpath(main) != os.path.realpath(args.target):
+                    # Landing changes the destination checkout too. Acquire before close changes either record;
+                    # a busy destination must leave the child running so the same close can be retried.
+                    with CommandLock(main) as destination:
+                        if not destination.acquired:
+                            print("still working: another chongdae command is updating the destination project; "
+                                  "this call changed nothing — retry `chongdae close` with the same arguments")
+                            return WAITING
+                        recover_project_states(main)
+                        return COMMANDS[args.cmd](args)
+            return COMMANDS[args.cmd](args)
     except RemoteStop as err:
         print("decision: %s" % err)
         return DECISION

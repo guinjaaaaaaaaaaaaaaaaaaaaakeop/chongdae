@@ -374,10 +374,22 @@ an `<outside:…>` marker. guin-site run-20261012-052255-3556 kept only the mach
 its subject cut mid-name ("…/scratchpad/empty"), and two lines of banner and rule as the tail of each deletion; f3beee0's subject
 ended `'<outsi… --write`.
 
-A done task that reads as an operation and has no `did` — its brief or role holds one of a small list: `deploy`, `push`,
+A done task that mentions an operation and has no `did` — its brief or role holds one of a small list: `deploy`, `push`,
 `publish`, `migrate`, `delete` (the verbs, not "deployed"), `배포`, `푸시`, `삭제`, `마이그레이션` (not as a modifier: "배포 버전",
-"배포한 …", "삭제된 …"); a task its checks decide is a build and is not read — stops `close` (below) and is an observation in
-`report` (`operation-unrecorded`): what ran and its exit are only in the session's transcript.
+"배포한 …", "삭제된 …"); a task its checks decide is a build and is not read — is only a lexical hint in `report`
+(`operation-mention`, layer `observation`). It never stops `close` or creates missing-operation debt: a filename such as
+`deploy.yml`, or the subject of an edit such as “미배포”, does not establish that an operation was intended or executed.
+Actual operations still go through `did`, whose exit and output are evidence; never repeat an operation to clear a word match.
+
+`did` saves its intent before execution and each batch item's observed result before starting the next item. If its
+caller is interrupted, `did TASK` recovers known results without executing any supplied command. An item with no
+observed result is unknown, even if its process has stopped; the task cannot advance or close while that
+operation remains unresolved. Inspect its external effects and ensure it has stopped, then use
+`did TASK --reconcile ID --why "what was checked"`. This executes nothing and retains an unknown exit with the reason;
+it does not convert an unobserved outcome into success. Issue any remaining operation deliberately after reconciliation.
+If the original session ended, `take TASK --why "recovery handover"` transfers an idle interrupted operation's task
+without running checks or changing its completion status. The pending journal stays intact for the new owner's
+reconciliation. Live workers and live foreign leases still prevent a handover.
 
 `--each FILE` (or `--each -`, stdin): several operations as one judgment — one command per line (no shell line; blank lines and
 `#` comments skipped), each recorded with its own exit and tail (`batch: {of, n}`), all in one commit. A non-zero exit stops the
@@ -397,6 +409,11 @@ End the session run (open tasks recorded as open); the lock's `reviewer` is plac
 
 Three stops before it is final, all the session's (`decision: session agent: …`), never a person's question:
 
+- **Other owners or active hands.** An unfinished task owned by another session, a live foreign lease, a running
+  checker/provider, an unanswered native dispatch, or an unfinished host sub-agent task keeps the run open. `--anyway`
+  cannot override this: wait for the hand-back and `run TASK`, or explicitly hand over idle work with `take --why`.
+  Stop a cancelled sub-agent before dropping its task. Ordinary open tasks owned by this session and with no active
+  hands can still be left open in a closed record; this does not mark them done.
 - **Work not committed.** A finished task's work — its `touched`, anything under its `--scope` — that differs from HEAD stops
   the close, with the files, their tasks and the commands, a commit per task: `git add -- FILE…`, then
   `git commit -m "run-<id>/<task> (session): <its brief>" -- FILE…`. That subject is the form for the session's commits of a
@@ -417,12 +434,9 @@ Three stops before it is final, all the session's (`decision: session agent: …
   under the kind it carries — kinds sorted, then how many of them are carried: `cq-failed 2, non-claim 10; 3 of them carried,
   already in the count`; two copies of one charge count once.
 
-- **An operation with no record.** A done task that reads as an operation outside the repository (above, under `did`) and
-  has no `did`: `did TASK --why … -- COMMAND` records it (it runs the command now), or `close --anyway --why` when nothing
-  outside was done. guin-site run-20261015-054352-a0ec: cache-ops' deploy and push ran as plain Bash.
-
-`close --anyway --why WHY [--by NAME]` closes with any of them standing: recorded in state.json `closed-anyway` (why, by, the
-uncommitted files, the tasks with no `did`, the standing objections, at) and said as a non-claim.
+`close --anyway --why WHY [--by NAME]` closes with uncommitted work or reviewer objections standing, never other owners
+or active hands: recorded in state.json `closed-anyway` (why, by, the
+uncommitted files, the standing objections, at) and said as a non-claim.
 
 The close then says, in one line, when the branch has no upstream (`main: no upstream`, when the repository has a remote) or
 commits its upstream has not (`main: 213 commits not on origin/main (as of the last fetch)`) — read from the local
@@ -435,7 +449,7 @@ What this record says a reviewer should see, typed `dwitbuk/findings@1`: outside
 self-performed (with who decided it: `NAME`, or `the session (<host> <model>)`), session-judged (a drop, take, claim,
 retry, adopt, reopen or dispatch the session signed as itself — an observation, carrying `by`), subagent (a task the
 session's sub-agent did — an observation), did (an operation run with `did` — an observation; an objection when it
-exited non-zero), operation-unrecorded (a done task that reads as an operation with no `did` — an observation), verifier-non-claim (what a
+exited non-zero), operation-mention (an operation word in a done task with no `did` — an observation, not evidence of execution), verifier-non-claim (what a
 verifier says it did not do, such as an accept without reading the tree — an observation), stage-finding, verifier-reject (every rejected attempt's findings), left-open, non-claims (the same
 sentence on several tasks of a run is said once, with the tasks), unreleased-writer (a committed record a working
 source wrote) — with `--since REV`, changes since that revision and the runs whose record was not complete there
@@ -490,14 +504,55 @@ sub-agent, taken) are never named, nor is chongdae's own run of the checks. It r
 Advance the current run one step. Exit codes: 0 — advanced as far as it goes (a session run waiting for `add` or `close`, a
 plan run complete); 2 (`DECISION`) — stopped for the session agent or a human, the last line (`decision: …`) says who and what;
 4 (`WAITING`) — still working: the call's budget is spent while a provider or chongdae's own checks run, the line starts with
-`still working:`, and `run` again resumes the same work. A call takes at most about four minutes (`CHONGDAE_WAIT`, below). `run TASK…` names
-session tasks whose work leaves nothing in the tree: naming one is the session's word that it is done (said as a non-claim);
-unnamed, a task with no check, no change of its own and no `did` stays open (above) — the session that added it is told so;
-in a run two sessions share (a second `init` is told to add its work to the running run), another session's open task is
-said as theirs, not as this call's to do (sagoforce 10-26: a second session's `run publish-worker` was told "ko-audit,
-img-audit stay open … Do the work" over the first session's running audits). Under a lease it advances
+`still working:`, and the same command resumes the same work. A call takes at most about four minutes (`CHONGDAE_WAIT`, below).
+`run TASK…` advances only those tasks. Unfinished dependencies are reported, never silently included. With no check and
+no change or operation, naming a task is still the session's word that it is done (recorded as a non-claim).
+Without task names, the ordinary plan can advance its ready tasks; a host sub-agent's task needs an explicit name after
+the parent receives its completed result. Partial edits do not mean the sub-agent finished. In a run shared by sessions,
+another session's task is left alone even when named, with changes, operations or passing checks; `take TASK --why …`
+records a handover after its outstanding work has stopped. Legacy tasks with no recorded session retain the old ownership
+behavior. Under a lease it advances
 only the tasks this session holds (taking a ready unheld one when it holds fewer than `lease-max`) and renews a hold
 where it saw progress; under `remote: "shared"` it fetches and takes the remote's record first
+
+The same ownership rule protects judgments and task edits: `retry`, `accept`, `confirm`, `unstage`, `adopt`, `did`,
+`dispute`, `drop`, and attaching checks cannot change another owner's task. A `--by` signature does not transfer it.
+Adoption and disputes also check any other task they would change; generated amendment tasks retain their parent session.
+
+**Concurrent commands in one checkout.** A record-changing command holds an OS lock at
+`.chongdae/local/command.lock` from its first read through its last commit. Another such command returns exit 4 promptly,
+without changing the record: retry that same command and its arguments. This prevents an old task snapshot overwriting
+another session's changes, duplicate provider dispatch and competing record commits. Killing the command releases the
+lock; a detached provider/check can still be resumed from its pending record. `status`, `show`, `report`, and `recheck`
+remain available, and JSON files are replaced atomically for readers. Separate projects and worktrees have separate locks;
+the existing leases still coordinate different machines. This lock protects chongdae commands, not arbitrary source edits.
+Detached checks and providers have a durable launch intent before a process is created. An internal launcher registers
+its own PID before executing the worker; recovery uses the same intent, so a caller interrupted around process creation
+does not create an undiscoverable duplicate worker.
+Completed worker answers and check results remain bound to that launch until the task durably acknowledges applying
+them. An interrupted caller consumes the retained result on resume; cleanup cannot cause a completed worker to run again.
+Changed source still invalidates the retained result and requires fresh verification.
+Task records, their private overlays, and run state are saved through one local transaction journal. Readers see a
+complete generation even when a writer stops between files; the next mutation or record commit finishes applying it.
+The journal and source witnesses remain local and git-ignored.
+Landing a worktree also acquires the destination project's lock before changing either run. Record commits use their own
+temporary git index and advance HEAD only if it still names the commit they started from, so a concurrent source commit
+is preserved. If HEAD moved, the judgment stays on disk for the next record commit.
+
+Checks and verifier results belong to the source they examined. Content snapshots include ignored nested repositories
+and initialized submodules, including uncommitted changes; record-only changes and committing identical source content do
+not invalidate them. If source changes while checks, a verifier or an after-role runs, the old pass cannot finish the task.
+Resume the named task after its writers stop: checks and affected reviewers run again. The same rule applies while a
+produced task waits at its human gate: changed source returns it to work before a fresh confirmation. Scopes declare
+ownership rather than dependencies, so changes elsewhere in the source tree conservatively invalidate a running review.
+
+**Parallel implementation and independent review.** Add each implementation task before dispatch, with disjoint scopes
+and `--role subagent`. Keep the task owned by its parent session; workers return their result to that parent. When A
+finishes while B is still editing, `run A` must leave B open. After the writers finish, launch fresh reviewers in parallel
+with the requirements and the resulting code; keep those reviewers read-only. Apply their findings as implementation
+work and review the changed result again. Use named `run` calls for the completed pieces. A second parent in the same
+project keeps its own tasks in the shared run; independent projects use independent runs. Finish outstanding workers and
+reviews before closing the shared run.
 
 ### `/chongdae:delegate`
 
@@ -857,3 +912,9 @@ copy under one version; `hunsu install --refresh <plugin>` recopies after the bu
 
 `python test_chongdae.py` — a temp project; every stop, rejection and kind of finding fires once, with recorded
 provider responses where a model would have answered. No model calls.
+The same entry point also runs the subprocess concurrency, review freshness, and record-transaction suites. Each can be
+run separately with `python test_concurrency.py`, `python test_review_freshness.py`, `python test_record_transactions.py`,
+or `python test_launch_recovery.py` (fault injection around detached process creation).
+It also includes `test_state_recovery.py`, `test_completion_recovery.py`, `test_mutation_ownership.py`,
+`test_operation_recovery.py`, and `test_operation_handover.py` for interrupted state saves, result consumption,
+task mutation authority, operations, and recovery in a replacement session.

@@ -664,6 +664,10 @@ def test_a_session_task_can_be_handed_to_the_locked_implementer():
         assert code == 0, out
         tasks = pj.state()["tasks"]
         assert tasks["mine"]["status"] == "done" and tasks["mine"]["performed_by"]["provider"] == "session"
+        assert tasks["theirs"]["status"] == "todo", "a named run must not dispatch an unselected hired task"
+        code, out = run("run", "theirs", "--target", pj.dir)
+        assert code == 0, out
+        tasks = pj.state()["tasks"]
         assert tasks["theirs"]["status"] == "done" and tasks["theirs"]["performed_by"]["provider"] == "command" and tasks["theirs"]["response"]["status"] == "done", tasks["theirs"]
         req = json.load(open(os.path.join(chongdae.run_dir(pj.dir), "local", "theirs.request.json")))
         assert req["contract"] == {"Q-add": "## Q-add\n\n`add` appends one item."}, "a session run's --from names the document whose sections are the contract"
@@ -950,6 +954,203 @@ def test_another_sessions_open_task_in_a_shared_run_is_theirs_not_this_calls_to_
             os.environ["CHONGDAE_SESSION"] = old
 
 
+def test_named_run_selects_only_its_tasks_even_when_others_have_changes_operations_or_checks():
+    """sagoforce's run letter-overwrite-order completed the still-partial worker task. A task list is a selection,
+    including when an unrelated task's check could pass or it already has one operation recorded."""
+    with Project() as pj:
+        assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
+        assert run("add", "partial", "--brief", "two parts remain", "--scope", "worker", "--target", pj.dir)[0] == 0
+        write(os.path.join(pj.dir, "worker", "part.txt"), "first part only\n")
+        assert run("did", "partial", "--why", "first part", "--target", pj.dir, "--", sys.executable, "-c", "pass")[0] == 0
+        marker = "from pathlib import Path; Path('unrelated-check-ran').touch()"
+        assert run("add", "unchecked", "--check", chongdae.shlex.join([sys.executable, "-c", marker]), "--target", pj.dir)[0] == 0
+        assert run("add", "requested", "--scope", "api", "--target", pj.dir)[0] == 0
+        write(os.path.join(pj.dir, "api", "fixed.txt"), "done\n")
+        code, out = run("run", "requested", "--target", pj.dir)
+        st = pj.state()["tasks"]
+        assert code == 0 and st["requested"]["status"] == "done", out
+        assert st["partial"]["status"] == st["unchecked"]["status"] == "todo", out
+        assert not os.path.exists(os.path.join(pj.dir, "unrelated-check-ran")), out
+
+
+def test_other_sessions_partial_work_cannot_be_run_by_name_and_can_be_handed_over():
+    old = os.environ.get("CHONGDAE_SESSION")
+    try:
+        with Project() as pj:
+            os.environ["CHONGDAE_SESSION"] = "first-parent"
+            assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
+            marker = "from pathlib import Path; Path('owner-check-ran').touch()"
+            assert run("add", "partial", "--check", chongdae.shlex.join([sys.executable, "-c", marker]), "--scope", "worker", "--target", pj.dir)[0] == 0
+            write(os.path.join(pj.dir, "worker", "part.txt"), "partial\n")
+            assert run("did", "partial", "--why", "one operation", "--target", pj.dir, "--", sys.executable, "-c", "pass")[0] == 0
+            os.environ["CHONGDAE_SESSION"] = "second-parent"
+            for selection in ((), ("partial",)):
+                code, out = run("run", *selection, "--target", pj.dir)
+                assert pj.state()["tasks"]["partial"]["status"] == "todo", out
+                assert not os.path.exists(os.path.join(pj.dir, "owner-check-ran")), out
+                assert "theirs to finish" in out, out
+                if selection:
+                    assert code == chongdae.DECISION and "take partial --why" in out, out
+            code, out = run("take", "partial", "--why", "first parent handed this task over", "--target", pj.dir)
+            assert code == 0, out
+            st = pj.state()["tasks"]["partial"]
+            assert st["added-in"] == "second-parent" and st["handoffs"][-1]["why"] == "first parent handed this task over"
+            code, out = run("run", "partial", "--target", pj.dir)
+            assert code == 0 and pj.state()["tasks"]["partial"]["status"] == "done", out
+    finally:
+        if old is None:
+            os.environ.pop("CHONGDAE_SESSION", None)
+        else:
+            os.environ["CHONGDAE_SESSION"] = old
+
+
+def test_known_task_owner_is_not_bypassed_by_a_missing_session_identity():
+    keys = ("CHONGDAE_SESSION", "CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID")
+    old = {key: os.environ.get(key) for key in keys}
+    try:
+        for leased in (False, True):
+            with Project() as pj:
+                os.environ["CHONGDAE_SESSION"] = "parent-owner"
+                if leased:
+                    write(os.path.join(pj.dir, "hunsu.json"), {"settings": {"chongdae": {"lease": "local"}}})
+                assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
+                assert run("add", "partial", "--scope", "worker", "--target", pj.dir)[0] == 0
+                write(os.path.join(pj.dir, "worker", "partial.txt"), "in progress\n")
+                for key in keys:
+                    os.environ.pop(key, None)
+                code, out = run("run", "partial", "--target", pj.dir)
+                assert code == chongdae.DECISION and "another session" in out, out
+                code, out = run("take", "partial", "--why", "handover", "--target", pj.dir)
+                assert code != 0 and "no session identity" in out, out
+                assert pj.state()["tasks"]["partial"]["status"] == "todo"
+                assert pj.state()["tasks"]["partial"]["added-in"] == "parent-owner"
+        # An older unowned record is still usable without identifying a caller.
+        with Project() as pj:
+            assert run("init", "--session", "--goal", "legacy", "--target", pj.dir)[0] == 0
+            assert run("add", "legacy", "--target", pj.dir)[0] == 0
+            assert run("run", "legacy", "--target", pj.dir)[0] == 0
+    finally:
+        for key, value in old.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
+def test_configuring_a_lease_does_not_automatically_take_another_parents_task():
+    old = os.environ.get("CHONGDAE_SESSION")
+    try:
+        with Project() as pj:
+            write(os.path.join(pj.dir, "hunsu.json"), {"settings": {"chongdae": {"lease": "local"}}})
+            os.environ["CHONGDAE_SESSION"] = "parent-a"
+            assert run("init", "--session", "--goal", "parallel", "--target", pj.dir)[0] == 0
+            assert run("add", "worker", "--role", "subagent", "--scope", "worker", "--target", pj.dir)[0] == 0
+            write(os.path.join(pj.dir, "worker", "partial.txt"), "partial\n")
+            d = chongdae.run_dir(pj.dir)
+            os.environ["CHONGDAE_SESSION"] = "parent-b"
+            code, out = run("run", "worker", "--target", pj.dir)
+            assert code == chongdae.DECISION and "another session" in out, out
+            assert pj.state()["tasks"]["worker"]["status"] == "todo"
+            assert chongdae.lease_backend(pj.dir).current(chongdae.task_key(os.path.basename(d), "worker")) is None
+            # Taking an actual lease explicitly is still a valid handover into lease coordination.
+            assert run("claim", "worker", "--target", pj.dir)[0] == 0
+            assert run("run", "worker", "--target", pj.dir)[0] == 0
+            assert pj.state()["tasks"]["worker"]["status"] == "done"
+    finally:
+        if old is None:
+            os.environ.pop("CHONGDAE_SESSION", None)
+        else:
+            os.environ["CHONGDAE_SESSION"] = old
+
+
+def test_an_established_lapsed_lease_can_supersede_the_original_added_in_owner():
+    old, old_clock = os.environ.get("CHONGDAE_SESSION"), chongdae.clock
+    try:
+        with Project() as pj:
+            write(os.path.join(pj.dir, "hunsu.json"), {"settings": {"chongdae": {"lease": "local", "lease-ttl": 1}}})
+            os.environ["CHONGDAE_SESSION"] = "parent-a"
+            assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
+            assert run("add", "idle", "--target", pj.dir)[0] == 0
+            assert run("claim", "idle", "--target", pj.dir)[0] == 0
+            os.environ["CHONGDAE_SESSION"] = "parent-b"
+            chongdae.clock = lambda: old_clock() + 10
+            code, out = run("run", "idle", "--target", pj.dir)
+            assert code == 0 and pj.state()["tasks"]["idle"]["status"] == "done", out
+            assert pj.state()["tasks"]["idle"]["gen"] == 2
+    finally:
+        chongdae.clock = old_clock
+        if old is None:
+            os.environ.pop("CHONGDAE_SESSION", None)
+        else:
+            os.environ["CHONGDAE_SESSION"] = old
+
+
+def test_parallel_subagents_are_not_finished_until_the_parent_names_their_returned_work():
+    """Both workers have edits and green-capable checks; only A has returned. Bare run does not guess either is done,
+    and run A does not run B's check or verifier. The parent can later finish B by name, including a read-only review."""
+    with Project() as pj:
+        assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
+        for tid in ("a", "b"):
+            marker = "from pathlib import Path; Path('%s-check-ran').touch()" % tid
+            assert run("add", tid, "--role", "subagent", "--scope", tid, "--check", chongdae.shlex.join([sys.executable, "-c", marker]), "--target", pj.dir)[0] == 0
+            write(os.path.join(pj.dir, tid, "part.txt"), "partial\n")
+        code, out = run("run", "--target", pj.dir)
+        assert code == chongdae.DECISION and "wait for the sub-agent's answer" in out, out
+        assert not os.path.exists(os.path.join(pj.dir, "a-check-ran")) and not os.path.exists(os.path.join(pj.dir, "b-check-ran"))
+        code, out = run("run", "a", "--target", pj.dir)
+        assert code == 0 and pj.state()["tasks"]["a"]["status"] == "done" and pj.state()["tasks"]["b"]["status"] == "todo", out
+        assert not os.path.exists(os.path.join(pj.dir, "b-check-ran")), out
+        assert run("run", "b", "--target", pj.dir)[0] == 0
+        assert run("add", "review", "--role", "subagent", "--brief", "fresh eyes, read only", "--target", pj.dir)[0] == 0
+        assert run("run", "--target", pj.dir)[0] == chongdae.DECISION
+        assert run("run", "review", "--target", pj.dir)[0] == 0
+
+
+def test_named_plan_tasks_wait_for_dependencies_without_running_unselected_work():
+    with Project() as pj:
+        tasks = [{"id": tid, "role": "session", "checks": [[sys.executable, "-c", "pass"]], "needs": needs}
+                 for tid, needs in (("first", []), ("second", ["first"]), ("unrelated", []))]
+        path = os.path.join(pj.dir, "plan.json")
+        write(path, {"artifact-type": "chongdae/plan@1", "goal": "g", "providers": {"session": "session"}, "tasks": tasks})
+        assert run("init", "--plan", path, "--target", pj.dir)[0] == 0
+        code, out = run("run", "second", "--target", pj.dir)
+        assert code == chongdae.DECISION and "second waits for first" in out, out
+        assert all(t["status"] == "todo" for t in pj.state()["tasks"].values())
+        code, out = run("run", "first", "second", "--target", pj.dir)
+        assert code == 0 and pj.state()["tasks"]["second"]["status"] == "done", out
+        assert pj.state()["tasks"]["unrelated"]["status"] == "todo" and pj.state()["status"] == "running", out
+
+
+def test_take_cannot_transfer_live_checks_or_unanswered_native_dispatches():
+    old = os.environ.get("CHONGDAE_SESSION")
+    try:
+        with Project() as pj:
+            os.environ["CHONGDAE_SESSION"] = "first-parent"
+            assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
+            assert run("add", "task", "--target", pj.dir)[0] == 0
+            d = chongdae.run_dir(pj.dir)
+            os.environ["CHONGDAE_SESSION"] = "second-parent"
+            for tag, pending, request in (("task.checks", {"pid": os.getpid()}, None),
+                                           ("task.verify", {"native": ["host-agent"]}, {"task": "task"})):
+                if request:
+                    write(chongdae.work_path(d, tag + ".request.json"), request)
+                path = chongdae.work_path(d, tag + ".pending.json")
+                write(path, pending)
+                code, out = run("take", "task", "--why", "handover", "--target", pj.dir)
+                assert code != 0 and "still has work in flight" in out, out
+                assert pj.state()["tasks"]["task"]["added-in"] == "first-parent"
+                os.remove(path)
+            # A similarly prefixed task's native dispatch does not block this one.
+            write(chongdae.work_path(d, "task.other.pending.json"), {"native": ["host-agent"]})
+            write(chongdae.work_path(d, "task.other.request.json"), {"task": "task.other"})
+            assert run("take", "task", "--why", "handover", "--target", pj.dir)[0] == 0
+    finally:
+        if old is None:
+            os.environ.pop("CHONGDAE_SESSION", None)
+        else:
+            os.environ["CHONGDAE_SESSION"] = old
+
+
 def test_a_dispute_in_a_report_the_validator_refused_still_goes_to_the_tests_writer():
     """guin-site write-bsky-build, 2026-10-10: three answers each disputed the same three tests, and each named its check
     as `cd <project> && …`; the validator refused the report (`failed`, checks-ran), chongdae resent the build for its
@@ -1168,12 +1369,13 @@ def test_take_and_retry_checked_run_the_command_record_it_and_hand_it_to_the_ver
 def test_a_session_tasks_done_carries_what_the_session_did_in_its_window():
     """A session task without a check is done on the agent's word. The host keeps a transcript; the SessionStart hook said
     where. The task's trace is cut from it at the time the task was added: what the session actually ran and changed for it."""
-    keys = ("CLAUDE_CODE_SESSION_ID", "AGENT_HOST", "AI_AGENT", "CLAUDE_EFFORT")
+    keys = ("CLAUDE_CODE_SESSION_ID", "AGENT_HOST", "AI_AGENT", "CLAUDE_EFFORT", "CODEX_THREAD_ID", "CHONGDAE_SESSION")
     old = {k: os.environ.get(k) for k in keys}
     try:
         for k in keys:
             os.environ.pop(k, None)
         os.environ["CLAUDE_CODE_SESSION_ID"] = "sess-1"
+        os.environ["AGENT_HOST"] = "claude-code"   # this fixture is a Claude transcript even when tests run from Codex
         with Project() as pj:
             tr = os.path.join(pj.dir, "sess-1.jsonl")
             write(os.path.join(pj.dir, chongdae.RUNS, "sessions", "sess-1.json"), {"transcript": tr})
@@ -1243,8 +1445,13 @@ def test_the_record_carries_what_replays_a_run_and_nothing_of_this_machine():
     machine's sessions, snapshots of unrelated files, interpreter leftovers or home paths — those stay in <run>/local/."""
     home = os.path.expanduser("~")
     with Project() as pj:
+        keys = ("CHONGDAE_USER", "CLAUDE_CODE_SESSION_ID", "AGENT_HOST", "CHONGDAE_SESSION", "CODEX_THREAD_ID")
+        old = {key: os.environ.get(key) for key in keys}
+        for key in keys:
+            os.environ.pop(key, None)
         os.environ["CHONGDAE_USER"] = "kim"
         os.environ["CLAUDE_CODE_SESSION_ID"] = "sess-local"
+        os.environ["AGENT_HOST"] = "claude-code"   # the simulated host identity is independent of the test runner's host
         try:
             write(os.path.join(pj.dir, "hunsu.lock.json"), {"roles": {"implementer": pj.fake_provider(RESPONSE_DONE)}})
             write(os.path.join(pj.dir, "unrelated.png"), "not this run's\n")   # dirt before the run: nobody's business
@@ -1297,8 +1504,11 @@ def test_the_record_carries_what_replays_a_run_and_nothing_of_this_machine():
             assert subprocess.run(["git", "rev-parse", "HEAD"], cwd=pj.dir, capture_output=True, text=True).stdout == head
             assert os.path.exists(os.path.join(chongdae.run_dir(pj.dir), "state.json")), "the record is on disk"
         finally:
-            os.environ.pop("CHONGDAE_USER", None)
-            os.environ.pop("CLAUDE_CODE_SESSION_ID", None)
+            for key, value in old.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
 
 
 def test_a_session_run_keeps_each_tasks_word_its_own():
@@ -1475,6 +1685,12 @@ def test_session_run_tasks_added_as_the_work_goes_claims_and_the_write_hook():
             code, out = run("drop", "T4", "--why", "the check named a pytest flag; unittest here", "--by", "alice", "--target", pj.dir)
             assert code == 0 and pj.state()["tasks"]["T4"]["status"] == "dropped" and pj.state()["tasks"]["T4"]["dropped"]["by"] == "alice"
             assert "t4-work.py" in pj.state()["tasks"]["T4"]["touched"], "what changed in a dropped task's window stays attributed to it"
+            code, out = run("close", *UNCOMMITTED, "--target", pj.dir)
+            assert code == chongdae.DECISION and "claimed by bob" in out, out
+            assert run("claim", "T3", "--by", "", "--target", pj.dir)[0] != 0, "alice cannot release bob's claim"
+            os.environ["CHONGDAE_USER"] = "bob"
+            assert run("claim", "T3", "--by", "", "--target", pj.dir)[0] == 0, "the documented release works for its owner"
+            os.environ["CHONGDAE_USER"] = "alice"
             code, out = run("close", *UNCOMMITTED, "--target", pj.dir)
             assert code == 0 and "2 task(s) done, 1 open (T3), 1 dropped (T4)" in out, out
             assert pj.state()["status"] == "complete" and "open" not in pj.state()   # open tasks are the tasks' statuses; `report`/`status` recount them
@@ -1726,7 +1942,7 @@ def test_the_lock_says_who_does_a_task_and_the_session_says_why_when_it_does_it_
         assert run("add", "own2", "--check", sys.executable + " -c pass", "--role", "session", "--why", "a one-line fix", "--by", "kim", "--target", pj.dir)[0] == 0
         defs = {tid: ts["def"]["role"] for tid, ts in pj.state()["tasks"].items()}
         assert defs == {"plan": "session", "model": "session", "tests": "nitpick", "build": "implementer", "own": "session", "own2": "session"}, defs
-        assert run("run", "plan", "model", "--target", pj.dir)[0] == 0
+        assert run("run", "plan", "model", "tests", "build", "own", "own2", "--target", pj.dir)[0] == 0
         st = pj.state()["tasks"]
         assert st["tests"]["performed_by"]["provider"] == "command" and st["build"]["performed_by"]["provider"] == "command" and st["own"]["performed_by"]["provider"] == "session"
         assert st["own2"]["self-performed"]["by"] == "kim" and st["own"]["self-performed"]["instead-of"] == "implementer"
@@ -2064,6 +2280,7 @@ def test_the_session_disputes_its_own_builds_tests_and_the_fix_survives_the_next
             assert code == 0 and "tests reopened to amend test_a.py" in out and "the session amends them" in out, out
             st = pj.state()["tasks"]
             assert st["tests"]["status"] == "todo" and st["tests"]["amending"][0]["why"] == "test_x expects the wrong order", st["tests"]
+            assert "after-source" not in st["tests"] and "after-source" in st["tests"]["attempts"][0], st["tests"]
             assert chongdae.is_agent(st["tests"]["attempts"][0]["reopened"]["by"]) and st["tests"]["attempts"][0]["touched"] == ["test_a.py"], st["tests"]["attempts"]
             assert st["build"]["attempts"][0]["retried"]["disputed"].startswith("tests disputed") and st["build"]["attempts"][0]["rejected"]["by"] == "contract", st["build"]
             code, out = run("run", "--target", pj.dir)
@@ -2366,7 +2583,7 @@ def test_an_omitted_by_is_the_session_and_readers_say_so():
         assert run("drop", "d", "--why", "superseded by c", "--target", pj.dir)[0] == 0
         assert run("add", "g", "--brief", "gated", "--gate", "human", "--target", pj.dir)[0] == 0
         assert run("add", "blk", "--check", sys.executable + " -c pass", "--target", pj.dir)[0] == 0
-        code, out = run("run", "c", "--target", pj.dir)
+        code, out = run("run", "own", "own2", "c", "g", "--target", pj.dir)
         assert code == chongdae.DECISION and "human: review" in out, out
         assert run("confirm", "g", "--target", pj.dir)[0] != 0, "a gate still needs a person or a delegation"
         assert run("confirm", "g", "--by", "kim", "--target", pj.dir)[0] == 0
@@ -2419,7 +2636,7 @@ def test_the_sessions_sub_agents_are_declared_hands_and_scopes_split_one_tree():
         write(os.path.join(pj.dir, "src", "shared", "api.ts"), "y\n")
         write(os.path.join(pj.dir, "src", "other.ts"), "z\n")
         write(os.path.join(pj.dir, "README.md"), "# r2\n")
-        code, out = run("run", "--target", pj.dir)
+        code, out = run("run", "build", "ui", "api", "misc", "--target", pj.dir)
         assert code == 0 and all("done %s" % t in out for t in ("build", "ui", "api", "misc")), out
         assert "note: scope: README.md is in no open task's scope (scoped and open: api, misc, ui) — build counts it by its window; `chongdae adopt TASK README.md --why WHY`" in out, out
         st = pj.state()["tasks"]
@@ -2441,14 +2658,14 @@ def test_the_sessions_sub_agents_are_declared_hands_and_scopes_split_one_tree():
         code, out = run("add", "q", "--role", "subagent", "--scope", "docs", "--target", pj.dir)
         assert "note: p has the same scope entry" in out, out
         write(os.path.join(pj.dir, "docs", "x.md"), "x\n")
-        code, out = run("run", "--target", pj.dir)
+        code, out = run("run", "p", "q", "--target", pj.dir)
         assert code == 0 and "note: scope: docs/x.md is in p's scope and q's alike — p counts it by its window; `chongdae adopt q docs/x.md --why WHY`" in out, out
         st = pj.state()["tasks"]
         assert st["p"]["touched"] == ["docs/x.md"] and st["p"]["shared"] == {"docs/x.md": ["q"]} and st["q"]["touched"] == ["docs/x.md"], (st["p"], st["q"])
         # an unscoped task keeps the window rule when no scoped task is open
         assert run("add", "w", "--role", "subagent", "--target", pj.dir)[0] == 0
         write(os.path.join(pj.dir, "src", "ui", "a.css"), "a { b }\n")
-        code, out = run("run", "--target", pj.dir)
+        code, out = run("run", "w", "--target", pj.dir)
         assert code == 0 and "scope:" not in out and pj.state()["tasks"]["w"]["touched"] == ["src/ui/a.css"], out
 
 
@@ -2822,6 +3039,32 @@ def test_c4_without_a_lease_setting_claims_are_the_records_as_before():
         assert g(m.top, "--git-dir", m.remote, "rev-parse", "main") == g(m.a, "rev-parse", "origin/main"), "nothing pushed without a remote setting"
 
 
+def test_nonlease_claim_release_requires_its_owner_and_accepts_both_spellings():
+    old = os.environ.get("CHONGDAE_USER")
+    try:
+        with Project() as pj:
+            os.environ["CHONGDAE_USER"] = "bob"
+            assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
+            assert run("add", "task", "--target", pj.dir)[0] == 0
+            for claim, release in ((("--by", "bob"), ("--by", "")), ((), ("--release",))):
+                os.environ["CHONGDAE_USER"] = "bob"
+                assert run("claim", "task", *claim, "--target", pj.dir)[0] == 0
+                before = pj.state()["tasks"]["task"]["claimed_by"]
+                os.environ["CHONGDAE_USER"] = "alice"
+                code, out = run("claim", "task", *release, "--target", pj.dir)
+                assert code != 0 and "claimed by" in out, out
+                assert pj.state()["tasks"]["task"]["claimed_by"] == before
+                os.environ["CHONGDAE_USER"] = "bob"
+                code, out = run("claim", "task", *release, "--target", pj.dir)
+                assert code == 0 and "task released" in out, out
+                assert pj.state()["tasks"]["task"]["claimed_by"] is None
+    finally:
+        if old is None:
+            os.environ.pop("CHONGDAE_USER", None)
+        else:
+            os.environ["CHONGDAE_USER"] = old
+
+
 def test_c5_claims_and_releases_leave_no_commit_on_main_and_no_ref_behind():
     with Machines({"lease": "git", "remote": "sync"}) as m:
         run_id = m.start()
@@ -2871,8 +3114,10 @@ def test_c8_a_result_made_under_an_old_generation_is_refused_and_the_old_holder_
         assert m.state("A")["tasks"]["T1"]["gen"] == 1
         m.offset[0] = 4000
         assert m.on("B", "claim", "T1")[0] == 0
+        before = m.state("A")["tasks"]["T1"]
         code, out = m.on("A", "confirm", "T1", "--by", "kim")
-        assert code != 0 and "made under gen 1" in out and "B/s1 holds the task at gen 2" in out, out
+        assert code != 0 and "held by another session" in out and "nothing changed" in out, out
+        assert m.state("A")["tasks"]["T1"] == before, "the common mutation guard refuses before changing the old generation's result"
         write(os.path.join(m.a, "awake.py"), "x = 1\n")
         code, out = m.on("A", "run")
         assert code == chongdae.DECISION and "(gen 1) was taken — B/s1 holds it now (gen 2) and took it after it lapsed" in out and "stays in this tree" in out, out
@@ -2988,6 +3233,7 @@ def test_a_child_run_names_its_parent_and_the_parent_shows_its_children():
         assert "child" not in chongdae.load(os.path.join(m.a, ".chongdae", parent, "state.json")), "the parent's state holds nothing of its children"
         # someone else breaks the parent task's hold: the child does not land
         assert m.on("A", "claim", "--break", "T1", "--why", "reassigned", session="s9")[0] == 0
+        os.environ["CHONGDAE_SESSION"] = "s1"   # the original child owner tries to land after its parent lease was taken
         code, out = run("close", "--target", wt)
         assert code != 0 and "not closed:" in out and "held by A/s9 at gen 2" in out, out
 
@@ -3180,9 +3426,16 @@ def test_the_calls_budget_covers_chongdaes_own_checks_and_the_next_call_resumes_
             assert code == chongdae.WAITING and out.startswith("still working: T1 (its checks): chongdae's own run of its checks is still going") and dt < 2.5, (out, dt)
             d = chongdae.run_dir(pj.dir)
             assert os.path.exists(os.path.join(d, "local", "T1.checks.pending.json"))
-            # the next call waits for the same run — never a second one — then the verifier, which outlasts the budget
-            t0 = time.time(); code, out = run("run", "--target", pj.dir); dt = time.time() - t0
-            assert code == chongdae.WAITING and "T1 (verify): the provider is still working" in out and dt < 4.5, (out, dt)
+            # Resume the same process until the verifier starts. Source
+            # fingerprinting and subprocess startup have a real cost: a
+            # three-second check need not finish in exactly two one-second calls.
+            for _ in range(4):
+                t0 = time.time(); code, out = run("run", "--target", pj.dir); dt = time.time() - t0
+                assert code == chongdae.WAITING and dt < 4.5, (out, dt)
+                if "T1 (verify): the provider is still working" in out:
+                    break
+            else:
+                assert False, out
             assert io.open(count).read() == "x", "the checks ran once"
             ts = pj.state()["tasks"]["T1"]
             assert ts["checks-passed"]["ran"][0]["tail"] == ["suite ok"] and "checks-tree" not in chongdae.load(os.path.join(d, "tasks", "T1.json")), ts
@@ -3493,6 +3746,176 @@ def test_done_is_committed_when_it_is_made():
         assert not subprocess.run(["git", "status", "--porcelain", "--", ".chongdae"], cwd=pj.dir, capture_output=True, text=True).stdout.strip()
 
 
+def test_close_cannot_end_another_sessions_unfinished_work_or_its_live_lease():
+    """A named run finishing A must not let that session close the shared container while B still has partial work.
+    --anyway is not authority to end the other session's work; a configured lease remains authoritative."""
+    old = os.environ.get("CHONGDAE_SESSION")
+    try:
+        for leased in (False, True):
+            with Project() as pj:
+                if leased:
+                    write(os.path.join(pj.dir, "hunsu.json"), {"settings": {"chongdae": {"lease": "local"}}})
+                os.environ["CHONGDAE_SESSION"] = "session-b"
+                assert run("init", "--session", "--goal", "shared work", "--target", pj.dir)[0] == 0
+                assert run("add", "B", "--brief", "two unfinished parts", "--target", pj.dir)[0] == 0
+                if leased:
+                    os.environ["CHONGDAE_SESSION"] = "session-a"
+                    for command in (("close",), ("close", "--anyway", "--why", "other task finished"), ("drop", "B", "--why", "not mine")):
+                        code, out = run(*command, "--target", pj.dir)
+                        assert code != 0 and pj.state()["status"] == "running" and pj.state()["tasks"]["B"]["status"] == "todo", out
+                    os.environ["CHONGDAE_SESSION"] = "session-b"
+                    assert run("claim", "B", "--target", pj.dir)[0] == 0
+                else:
+                    write(os.path.join(pj.dir, "partial.txt"), "first part only\n")
+                    assert run("did", "B", "--target", pj.dir, "--", sys.executable, "-c", "pass")[0] == 0
+                os.environ["CHONGDAE_SESSION"] = "session-a"
+                for extra in ((), ("--anyway", "--why", "A is complete")):
+                    code, out = run("close", *extra, "--target", pj.dir)
+                    assert code == chongdae.DECISION and "B" in out and "stays open" in out, out
+                    st = pj.state()
+                    assert st["status"] == "running" and st["tasks"]["B"]["status"] == "todo" and "ended" not in st, st
+                if leased:
+                    os.environ["CHONGDAE_SESSION"] = "session-b"
+                    assert run("claim", "B", "--release", "--target", pj.dir)[0] == 0
+                    os.environ["CHONGDAE_SESSION"] = "session-a"
+                    assert run("close", "--target", pj.dir)[0] == 0   # explicit claim/release established lease authority; configuration alone did not
+    finally:
+        if old is None:
+            os.environ.pop("CHONGDAE_SESSION", None)
+        else:
+            os.environ["CHONGDAE_SESSION"] = old
+
+
+def test_close_and_drop_without_identity_cannot_end_a_known_owners_task():
+    from unittest.mock import patch
+    for leased in (False, True):
+        with Project() as pj, patch.dict(os.environ, {"CHONGDAE_SESSION": "owner"}):
+            if leased:
+                write(os.path.join(pj.dir, "hunsu.json"), {"settings": {"chongdae": {"lease": "local"}}})
+            assert run("init", "--session", "--goal", "known owner", "--target", pj.dir)[0] == 0
+            assert run("add", "T", "--target", pj.dir)[0] == 0
+            for key in ("CHONGDAE_SESSION", "CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID"):
+                os.environ.pop(key, None)
+            assert chongdae.this_session() is None
+            for command in (("close", "--anyway", "--why", "unknown caller"), ("drop", "T", "--why", "unknown caller")):
+                code, out = run(*command, "--target", pj.dir)
+                assert code != 0 and "session identity" in out, out
+                assert pj.state()["status"] == "running" and pj.state()["tasks"]["T"]["status"] == "todo"
+
+
+def test_drop_retires_only_its_cancelled_native_dispatch_and_cannot_steal_a_foreign_task():
+    old = os.environ.get("CHONGDAE_SESSION")
+    try:
+        with Project() as pj:
+            os.environ["CHONGDAE_SESSION"] = "owner"
+            write(os.path.join(pj.dir, "hunsu.lock.json"), {"roles": {"implementer": {"native": [sys.executable, "worker.py", "{request}", "{response}"]}}})
+            assert run("init", "--session", "--goal", "cancel native work", "--target", pj.dir)[0] == 0
+            assert run("add", "T", "--role", "implementer", "--check", sys.executable + " -c pass", "--target", pj.dir)[0] == 0
+            code, out = run("run", "T", "--target", pj.dir)
+            assert code == chongdae.DECISION and "dispatch T" in out, out
+            d = chongdae.run_dir(pj.dir)
+            request = chongdae.work_path(d, "T.request.json")
+            original = open(request, "rb").read()
+            # A dotted sibling's pending job must survive T's cancellation.
+            write(chongdae.work_path(d, "T.other.request.json"), {"task": "T.other"})
+            sibling = chongdae.work_path(d, "T.other.pending.json")
+            write(sibling, {"native": ["other-worker"]})
+            os.environ["CHONGDAE_SESSION"] = "stranger"
+            code, out = run("drop", "T", "--why", "not mine", "--target", pj.dir)
+            assert code != 0 and "take T --why" in out, out
+            assert pj.state()["tasks"]["T"]["status"] == "todo"
+            os.environ["CHONGDAE_SESSION"] = "owner"
+            code, out = run("drop", "T", "--why", "host agent cancelled; task abandoned", "--target", pj.dir)
+            assert code == 0 and "retired native dispatch T" in out, out
+            assert not os.path.exists(chongdae.work_path(d, "T.pending.json")) and os.path.exists(sibling)
+            assert open(request, "rb").read() == original
+            assert pj.state()["tasks"]["T"]["dropped"]["native-dispatches-retired"] == ["T"]
+            assert run("close", "--target", pj.dir)[0] == 0
+        with Project() as pj:
+            os.environ["CHONGDAE_SESSION"] = "owner"
+            assert run("init", "--session", "--goal", "idle handover", "--target", pj.dir)[0] == 0
+            assert run("add", "T", "--target", pj.dir)[0] == 0
+            os.environ["CHONGDAE_SESSION"] = "receiver"
+            assert run("drop", "T", "--why", "without handover", "--target", pj.dir)[0] != 0
+            assert run("take", "T", "--why", "owner handed over idle work", "--target", pj.dir)[0] == 0
+            assert run("drop", "T", "--why", "superseded", "--target", pj.dir)[0] == 0
+    finally:
+        if old is None:
+            os.environ.pop("CHONGDAE_SESSION", None)
+        else:
+            os.environ["CHONGDAE_SESSION"] = old
+
+
+def test_drop_preserves_live_processes_and_foreign_leases():
+    with Project() as pj:
+        assert run("init", "--session", "--goal", "running checks", "--target", pj.dir)[0] == 0
+        assert run("add", "T", "--target", pj.dir)[0] == 0
+        d = chongdae.run_dir(pj.dir)
+        path = chongdae.work_path(d, "T.checks.pending.json")
+        write(path, {"pid": os.getpid()})
+        code, out = run("drop", "T", "--why", "cancel", "--target", pj.dir)
+        assert code != 0 and "running process" in out, out
+        assert pj.state()["tasks"]["T"]["status"] == "todo" and os.path.exists(path)
+        write(path, {"pid": 2 ** 30})
+        assert run("drop", "T", "--why", "process has stopped", "--target", pj.dir)[0] == 0
+    old = os.environ.get("CHONGDAE_SESSION")
+    try:
+        with Project() as pj:
+            write(os.path.join(pj.dir, "hunsu.json"), {"settings": {"chongdae": {"lease": "local"}}})
+            os.environ["CHONGDAE_SESSION"] = "owner"
+            assert run("init", "--session", "--goal", "leased task", "--target", pj.dir)[0] == 0
+            assert run("add", "T", "--target", pj.dir)[0] == 0
+            assert run("claim", "T", "--target", pj.dir)[0] == 0
+            os.environ["CHONGDAE_SESSION"] = "stranger"
+            code, out = run("drop", "T", "--why", "not mine", "--target", pj.dir)
+            assert code != 0 and "held by another session" in out, out
+            assert pj.state()["tasks"]["T"]["status"] == "todo"
+            os.environ["CHONGDAE_SESSION"] = "owner"
+            assert run("claim", "T", "--release", "--target", pj.dir)[0] == 0
+            os.environ["CHONGDAE_SESSION"] = "stranger"
+            assert run("claim", "T", "--target", pj.dir)[0] == 0
+            assert run("drop", "T", "--why", "new holder abandons it", "--target", pj.dir)[0] == 0
+    finally:
+        if old is None:
+            os.environ.pop("CHONGDAE_SESSION", None)
+        else:
+            os.environ["CHONGDAE_SESSION"] = old
+
+
+def test_close_waits_for_parallel_subagents_and_dispatched_processes_even_with_anyway():
+    """Both ordinary host subagents and pending checks/providers can outlive one run call. Closing cannot strand their
+    answer; ordinary open session tasks (no active hands) can still be deliberately left open in a closed record."""
+    with Project() as pj:
+        assert run("init", "--session", "--goal", "parallel agents", "--target", pj.dir)[0] == 0
+        for tid in ("A", "B"):
+            assert run("add", tid, "--role", "subagent", "--brief", "independent review", "--target", pj.dir)[0] == 0
+        assert run("run", "A", "--target", pj.dir)[0] == 0
+        code, out = run("close", "--anyway", "--why", "A finished", "--target", pj.dir)
+        assert code == chongdae.DECISION and "B is an unfinished sub-agent task" in out, out
+        assert pj.state()["status"] == "running" and pj.state()["tasks"]["B"]["status"] == "todo"
+        assert run("run", "B", "--target", pj.dir)[0] == 0
+        assert run("close", "--target", pj.dir)[0] == 0
+    for suffix, pending in ((".checks", {"pid": os.getpid()}), (".verify", {"pid": os.getpid()}),
+                            (".after.quibble", {"native": ["worker", "--prompt-only"]})):
+        with Project() as pj:
+            assert run("init", "--session", "--goal", "pending work", "--target", pj.dir)[0] == 0
+            assert run("add", "T", "--brief", "still running", "--target", pj.dir)[0] == 0
+            d = chongdae.run_dir(pj.dir)
+            tag = "T" + suffix
+            write(chongdae.work_path(d, tag + ".request.json"), {"task": "T"})
+            write(chongdae.work_path(d, tag + ".pending.json"), pending)
+            code, out = run("close", "--anyway", "--why", "stop", "--target", pj.dir)
+            assert code == chongdae.DECISION and tag in out and "active hands" in out, out
+            assert pj.state()["status"] == "running"
+            # An ended process is not active; a native answer ends the dispatch. Close may intentionally leave the task open.
+            if "native" in pending:
+                write(chongdae.work_path(d, tag + ".response.json"), RESPONSE_DONE)
+            else:
+                write(chongdae.work_path(d, tag + ".pending.json"), {"pid": 2 ** 30})
+            code, out = run("close", "--target", pj.dir)
+            assert code == 0 and pj.state()["tasks"]["T"]["status"] == "todo", out
+
+
 def test_close_stops_on_uncommitted_work_and_on_what_the_reviewer_finds_the_tree_can_answer():
     """guin-site run-20261012-052255-3556 closed with plan/ATPROTO.md — in cleanup-ops' scope and `touched` — edited and not
     committed; and the reviewer, run as the close was final, reported two cq-failed the tree could answer: they arrived after
@@ -3579,7 +4002,7 @@ def test_a_run_for_one_task_does_not_finish_another_with_nothing_of_its_own():
         assert "git commit -m '%s/comment (session): read.ts comments' -- read.ts" % os.path.basename(chongdae.run_dir(pj.dir)) in out, out
         # a `run` naming another task does not finish it either
         code, out = run("run", "comment", "--target", pj.dir)
-        assert code == chongdae.DECISION and pj.state()["tasks"]["ops"]["status"] == "todo", out
+        assert code == 0 and pj.state()["tasks"]["ops"]["status"] == "todo" and "done ops" not in out, out
         code, out = run("run", "nosuch", "--target", pj.dir)
         assert code != 0 and "no task nosuch" in out, out
         # its work done now, as a `did` and its Done line: the next `run` makes it done
@@ -3607,7 +4030,7 @@ def test_a_run_for_one_task_does_not_finish_another_with_nothing_of_its_own():
         assert code == 0 and "done ops" in out, out
 
 
-def test_close_and_report_name_an_operation_with_no_did_and_a_bash_operation_gets_a_did_nudge():
+def test_operation_words_are_report_hints_and_a_bash_operation_gets_a_did_nudge():
     """guin-site run-20261015-054352-a0ec: cache-ops' deploy and push ran as `npm run deploy … | grep …; git push 2>&1 |
     tail -1` (both exits lost), the push written as prose in ATPROTO.md; nothing in the record says what ran."""
     with Project() as pj:
@@ -3617,16 +4040,14 @@ def test_close_and_report_name_an_operation_with_no_did_and_a_bash_operation_get
         assert run("add", "comment", "--brief", "주석을 배포 버전마다로 맞춘다", "--target", pj.dir)[0] == 0   # a modifier, not an operation
         assert run("run", "ops", "comment", "--target", pj.dir)[0] == 0
         code, out = run("close", "--target", pj.dir)
-        assert code == chongdae.DECISION and "ops reads as an operation outside the repository and has no `did` record" in out \
-            and "chongdae did ops" in out and "comment:" not in out, out
-        assert pj.state()["status"] == "running"
+        assert code == 0 and "closed " in out and "chongdae did ops" not in out, out
+        assert pj.state()["status"] == "complete" and "closed-anyway" not in pj.state()
         code, out = run("report", "--target", pj.dir)
-        found = [f for f in json.loads(out)["findings"] if f["kind"] == "operation-unrecorded"]
+        findings = json.loads(out)["findings"]
+        assert not any(f["kind"] == "operation-unrecorded" for f in findings), findings
+        found = [f for f in findings if f["kind"] == "operation-mention"]
         assert [f["where"].split("/")[-1] for f in found] == ["ops"] and found[0]["layer"] == "observation", found
-        code, out = run("close", "--anyway", "--why", "the preview only; the owner deploys later", "--target", pj.dir)
-        st = pj.state()
-        assert code == 0 and st["closed-anyway"]["operations-unrecorded"] == ["ops"], (out, st.get("closed-anyway"))
-        assert any("task(s) reading as an operation with no `did` (ops)" in n for n in st["non-claims"]), st["non-claims"]
+        assert "Wording alone does not establish" in found[0]["text"], found
     assert chongdae.reads_as_operation({"brief": "the deployed version in the key"}) is None
     assert chongdae.reads_as_operation({"brief": "delete the old D1"}) == "delete"
     assert chongdae.reads_as_operation({"brief": "deploy", "checks": [["true"]]}) is None, "a build its checks decide is not an operation"
@@ -3661,6 +4082,33 @@ def test_close_and_report_name_an_operation_with_no_did_and_a_bash_operation_get
         assert hook("pre_bash.py", payload("git push")) == (0, "") and "make release" in hook("pre_bash.py", payload("make release"))[1]
         hooks = json.load(open(os.path.join(HERE, "hooks", "hooks.json"), encoding="utf-8"))["hooks"]["PreToolUse"]
         assert any(h["matcher"] == "Bash" and "pre_bash.py" in h["hooks"][0]["command"] for h in hooks), hooks
+
+
+def test_code_descriptions_do_not_create_operation_debt_at_close():
+    """sagoforce 10-28: six code/document tasks stopped close over names like check-publish-ready and deploy.yml,
+    and “미배포”; the operations were on another task. No wording establishes that anything outside the tree ran."""
+    for anyway in (False, True):
+        with Project() as pj:
+            _git(pj.dir, "commit", "-q", "--allow-empty", "-m", "base")
+            assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
+            for tid, brief in (("publish-doc", "check-publish-ready 문서의 오타 수정"),
+                               ("deploy-doc", "deploy.yml 주석 정정"), ("snapshot", "미배포 일괄 박제 시험 추가")):
+                assert run("add", tid, "--brief", brief, "--target", pj.dir)[0] == 0
+                write(os.path.join(pj.dir, tid + ".md"), "corrected wording\n")
+                assert run("run", tid, "--target", pj.dir)[0] == 0
+                _git(pj.dir, "add", tid + ".md")
+                _git(pj.dir, "commit", "-qm", "correct wording")
+            args = ("--anyway", "--why", "exercise the optional close path") if anyway else ()
+            code, out = run("close", *args, "--target", pj.dir)
+            assert code == 0, out
+            st = pj.state()
+            assert st["status"] == "complete"
+            assert "operations-unrecorded" not in st.get("closed-anyway", {}), st
+            assert not any("operation" in n for n in st.get("non-claims", [])), st
+            findings = json.loads(run("report", "--target", pj.dir)[1])["findings"]
+            hints = [f for f in findings if f["kind"] == "operation-mention"]
+            assert len(hints) == 3 and all(f["layer"] == "observation" for f in hints), findings
+            assert not any(f["kind"] == "operation-unrecorded" for f in findings), findings
 
 
 def test_the_session_start_and_close_say_unpushed_commits_and_no_upstream():
@@ -3885,5 +4333,15 @@ if __name__ == "__main__":
             except (Exception, SystemExit) as err:   # a self-check that dies between tests lies by omission
                 failed += 1
                 print("FAIL", name, "--", "%s: %s" % (type(err).__name__, err))
+    # These exercise real overlapping processes and source edits while checks/reviewers are running.
+    # Keep them in the normal entry point so concurrency regressions cannot be skipped by the usual self-check.
+    import unittest
+    suite = unittest.defaultTestLoader.loadTestsFromNames([
+        "test_concurrency", "test_review_freshness", "test_record_transactions", "test_launch_recovery",
+        "test_state_recovery", "test_completion_recovery", "test_mutation_ownership", "test_operation_recovery",
+        "test_operation_handover",
+    ])
+    concurrent = unittest.TextTestRunner(verbosity=2).run(suite)
+    failed += len(concurrent.failures) + len(concurrent.errors)
     print("all passed" if not failed else "%d failed" % failed)
     sys.exit(1 if failed else 0)
