@@ -1,0 +1,232 @@
+{
+  "artifact-type": "chongdae/task@1",
+  "written_by": "chongdae 1.24.0",
+  "status": "done",
+  "def": {
+    "id": "docs-update",
+    "role": "implementer",
+    "brief": "Minimal documentation consistency for the 2.0.0 candidate (unpublished), in README.md and SELFHOSTING.md only. The runtime is frozen at commit 852b852 (chongdae.py, hooks, commands, skills and test files must stay byte-identical; a check compares them). AGENTS.md and CLAUDE.md stay unchanged (CLAUDE.md is exactly \"@AGENTS.md\" and a newline). No machine paths, outer-checkout paths or run ids in product docs. Do not commit. Write only what is true of the code at 852b852:\n\nD1 In README's files/records description: the engine-owned run files plan.json, state.json and tasks/<id>.json are public projections — this machine's project root, home, temporary directories and plugin-cache paths become `.`, `~`, `<tmp>` and `<plugin:NAME@VERSION>` only where a path begins (a `**`-wrapped path at a path start included; a relative path that merely contains such a segment is kept); the exact raw strings live in the ignored overlays local/plan.json, local/state.json and local/tasks/<id>.json, and raw provider requests, responses and transcripts stay exact in ignored local/ storage; a public dict key that would hold a machine path is refused (MachinePathKey), never renamed. Extend the existing transaction sentence (\"Task records, their private overlays, and run state are saved through one local transaction journal\") to include the plan.\nD2 Landing: a supported worktree landing (close's merge-back) writes into the main checkout's local overlays only the raw strings whose public value is their projection, for that run's state, task and plan files — no private state, journal, leases, acknowledgements or worker artifacts; a run merged by hand, or read on another machine, has only its public projection there, so a check whose argv named machine-specific paths may not rerun there.\nD3 Bounded claims, stated plainly: asked/, contract/, delegations/, reviews/ and report output are not part of this normalization; only `**` emphasis is recognized (other Markdown, HTML or ANSI markup is not parsed, so a machine path behind other markup can stay public); backslash (Windows-style) handling is tested only with mocked strings, not on a live Windows host, and drive-letter or case variants and UNC paths are not recognized.\nD4 Versioning: say explicitly that dropping a supported Python version or host version (raising engines.python, or requiring a newer Claude Code or Codex) is a major change; the current floor is Python 3.11 (Install already says so; keep it).\nD5 Self-check: name test_public_projection.py among the suites the entry point runs.\nD6 SELFHOSTING.md: its sentence that `git show HEAD:plugin.json` and `git show HEAD:.claude-plugin/plugin.json` say Python >=3.9 is no longer true (the adopted floor commit made all three manifests >=3.11). State instead that the released 1.24.0 (commit c1c3f63) declared >=3.9 in plugin.json and .claude-plugin/plugin.json and >=3.11 in .codex-plugin/plugin.json, that source now declares >=3.11 in all three, and that this drop of 3.9/3.10 is a major change under README's versioning. Change nothing else in SELFHOSTING.md.\nKeep every addition short and in the existing style; link sections instead of repeating them.",
+    "closes": [],
+    "needs": [],
+    "checks": [
+      [
+        "python3",
+        "<tmp>/cd-selfhost/check_docs.py",
+        "README.md",
+        "AGENTS.md",
+        "CLAUDE.md",
+        "SELFHOSTING.md"
+      ],
+      [
+        "python3",
+        "<tmp>/cd-selfhost/docs-content.check.py"
+      ],
+      [
+        "git",
+        "diff",
+        "--check",
+        "--",
+        "README.md",
+        "SELFHOSTING.md"
+      ]
+    ],
+    "tests": [],
+    "gate": null,
+    "domain": "code",
+    "scope": [
+      "README.md",
+      "SELFHOSTING.md"
+    ]
+  },
+  "seq": 14,
+  "added": "2026-10-30T11:39:35+00:00",
+  "response": {
+    "status": "done",
+    "summary": "Updated README.md and the specified SELFHOSTING.md paragraph. All requested checks passed; runtime, tests, AGENTS.md and CLAUDE.md remain unchanged.",
+    "verified": [
+      {
+        "check": "python3 <tmp>/cd-selfhost/check_docs.py README.md AGENTS.md CLAUDE.md SELFHOSTING.md",
+        "exit": 0
+      },
+      {
+        "check": "python3 <tmp>/cd-selfhost/docs-content.check.py",
+        "exit": 0
+      },
+      {
+        "check": "git diff --check -- README.md SELFHOSTING.md",
+        "exit": 0
+      }
+    ],
+    "decisions": [],
+    "non-claims": [
+      "Documentation-only checks; no live Windows verification or full behavior suite run. No commit or release performed."
+    ],
+    "disputed-tests": [],
+    "worker": {
+      "host": "codex",
+      "model": "gpt-6-astra",
+      "effort": "medium"
+    }
+  },
+  "answered": {
+    "at": "2026-10-30T11:40:23+00:00",
+    "chongdae": "chongdae 1.24.0"
+  },
+  "touched_by_provider": [
+    "README.md",
+    "SELFHOSTING.md"
+  ],
+  "performed_by": {
+    "provider": "command",
+    "argv": [
+      "python3",
+      "{plugin:hacheong}/worker.py",
+      "--member",
+      "dakdol",
+      "--request",
+      "{request}",
+      "--response",
+      "{response}",
+      "--host",
+      "codex"
+    ],
+    "host": "codex",
+    "model": "gpt-6-astra",
+    "effort": "medium",
+    "versions": {
+      "used": {
+        "hacheong": "1.12.1",
+        "chongdae": "1.24.0"
+      }
+    },
+    "trace": {
+      "changed": [
+        "update ./README.md",
+        "update ./SELFHOSTING.md"
+      ],
+      "commands-run": 10,
+      "commands-failed": 0
+    }
+  },
+  "non-claims": [
+    "(provider) Documentation-only checks; no live Windows verification or full behavior suite run. No commit or release performed."
+  ],
+  "checks-passed": {
+    "ran": [
+      {
+        "command": "python3 <tmp>/cd-selfhost/check_docs.py README.md AGENTS.md CLAUDE.md SELFHOSTING.md",
+        "exit": 0,
+        "tail": [
+          "docs ok: README.md, AGENTS.md, CLAUDE.md, SELFHOSTING.md — links and anchors resolve, command names are engine subcommands (19), no trailing whitespace, no local machine path"
+        ],
+        "at": "2026-10-30T11:40:23+00:00",
+        "chongdae": "chongdae 1.24.0"
+      },
+      {
+        "command": "python3 <tmp>/cd-selfhost/docs-content.check.py",
+        "exit": 0,
+        "tail": [
+          "README/SELFHOSTING statements present; AGENTS.md and CLAUDE.md unchanged; runtime and 15 test/source paths identical to 852b852"
+        ],
+        "at": "2026-10-30T11:40:23+00:00",
+        "chongdae": "chongdae 1.24.0"
+      },
+      {
+        "command": "git diff --check -- README.md SELFHOSTING.md",
+        "exit": 0,
+        "tail": [
+          ""
+        ],
+        "at": "2026-10-30T11:40:23+00:00",
+        "chongdae": "chongdae 1.24.0"
+      }
+    ],
+    "at": "2026-10-30T11:40:23+00:00",
+    "chongdae": "chongdae 1.24.0"
+  },
+  "review": {
+    "artifact-type": "dwitbuk/review@1",
+    "verdict": "accept",
+    "findings": [],
+    "worker": {
+      "host": "claude-code",
+      "model": "claude-opus-5-5",
+      "turns": 10,
+      "cost_usd": 0.1395718
+    }
+  },
+  "verdict-given": {
+    "at": "2026-10-30T11:40:46+00:00",
+    "chongdae": "chongdae 1.24.0"
+  },
+  "reviewed_tree": {
+    "README.md": "507ff59d23a9895b6cf4974ee18378aa9a43989e",
+    "SELFHOSTING.md": "6f94910e8466734c1363a630fab6859df0d1f471"
+  },
+  "verified_by": {
+    "provider": "command",
+    "argv": [
+      "python3",
+      "{plugin:dwitbuk}/eyes_worker.py",
+      "--request",
+      "{request}",
+      "--response",
+      "{response}",
+      "--host",
+      "claude"
+    ],
+    "host": "claude-code",
+    "model": "claude-opus-5-5",
+    "turns": 10,
+    "cost_usd": 0.1395718,
+    "versions": {
+      "used": {
+        "dwitbuk": "1.16.0",
+        "chongdae": "1.24.0"
+      }
+    },
+    "trace": {
+      "changed": [],
+      "commands-run": 0,
+      "commands-failed": 0
+    }
+  },
+  "seen-non-claims": {
+    "by": "verifier of docs-update",
+    "texts": [
+      "(provider) Documentation-only checks; no live Windows verification or full behavior suite run. No commit or release performed."
+    ],
+    "at": "2026-10-30T11:40:46+00:00",
+    "chongdae": "chongdae 1.24.0"
+  },
+  "checks": [
+    [
+      "python3",
+      "<tmp>/cd-selfhost/check_docs.py",
+      "README.md",
+      "AGENTS.md",
+      "CLAUDE.md",
+      "SELFHOSTING.md"
+    ],
+    [
+      "python3",
+      "<tmp>/cd-selfhost/docs-content.check.py"
+    ],
+    [
+      "git",
+      "diff",
+      "--check",
+      "--",
+      "README.md",
+      "SELFHOSTING.md"
+    ]
+  ],
+  "touched": [
+    "README.md",
+    "SELFHOSTING.md"
+  ],
+  "done": {
+    "at": "2026-10-30T11:40:46+00:00",
+    "chongdae": "chongdae 1.24.0"
+  }
+}

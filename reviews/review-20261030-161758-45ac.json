@@ -1,0 +1,102 @@
+{
+  "artifact-type": "dwitbuk/review@1",
+  "id": "review-20261030-161758-45ac",
+  "since": "4de6d33",
+  "head": "e0757d39419999292c1532907f92b41f96e27524",
+  "findings": [
+    {
+      "kind": "unreviewed",
+      "where": "hunsu.json resolutions['building a slice']",
+      "text": "applied from the judge's proposal, marked reviewed: false — `hunsu policy` shows the conflict a person judges",
+      "standing": true,
+      "reporter": "hunsu",
+      "layer": "objection"
+    },
+    {
+      "kind": "unreviewed",
+      "where": "hunsu.json resolutions['reviewing, disputing or trying a change']",
+      "text": "applied from the judge's proposal, marked reviewed: false — `hunsu policy` shows the conflict a person judges",
+      "standing": true,
+      "reporter": "hunsu",
+      "layer": "objection"
+    },
+    {
+      "kind": "unreviewed",
+      "where": "hunsu.json resolutions['a decision waiting on the person']",
+      "text": "applied from the judge's proposal, marked reviewed: false — `hunsu policy` shows the conflict a person judges",
+      "standing": true,
+      "reporter": "hunsu",
+      "layer": "objection"
+    },
+    {
+      "kind": "unreviewed",
+      "where": "hunsu.json resolutions['asking what happened or what is open']",
+      "text": "applied from the judge's proposal, marked reviewed: false — `hunsu policy` shows the conflict a person judges",
+      "standing": true,
+      "reporter": "hunsu",
+      "layer": "objection"
+    },
+    {
+      "kind": "unreviewed",
+      "where": "hunsu.json resolutions['before a merge']",
+      "text": "applied from the judge's proposal, marked reviewed: false — `hunsu policy` shows the conflict a person judges",
+      "standing": true,
+      "reporter": "hunsu",
+      "layer": "objection"
+    },
+    {
+      "kind": "self-performed",
+      "where": "run-20261030-065818-2049/adopt-env",
+      "text": "the session did this itself instead of the lock's implementer (decided by the session (codex gpt-6-astra)): Adoption, not authorship: hunsu.json, hunsu.lock.json, hunsu-judgments.json, .claude/settings.json and the four added .gitignore lines were written by bootstrap session adedcf9a-a669-42c0-bc58-6dfbfaa31873 (hunsu compose/lock under the owner's delegated setup; its own notes in the ignored .hunsu-bootstrap/status.json) before any chongdae run existed. There is nothing to build, so no implementer is hired: this session records their provenance unchanged, and the checks decide whether the environment holds. The owner's stage prompt asked for this adoption; the session signs, no person's name.",
+      "layer": "observation"
+    },
+    {
+      "kind": "session-judged",
+      "where": "run-20261030-065818-2049/adopt-env",
+      "text": "adopt .claude/settings.json, .gitignore, hunsu-judgments.json, hunsu.json, hunsu.lock.json decided by the session (codex gpt-6-astra), not a person: These files were written by bootstrap session adedcf9a-a669-42c0-bc58-6dfbfaa31873 before this run or any run existed (no chongdae run was open during bootstrap). They are adopted unchanged as this task's work so they can be committed under a run; this session did not author their content. .gitignore: only the four added lines (.claude/settings.local.json, hunsu-conflicts.md, *-response.transcript.jsonl, .hunsu-bootstrap/) are bootstrap work; the two committed lines are unchanged.",
+      "layer": "observation"
+    },
+    {
+      "kind": "verifier-non-claim",
+      "where": "run-20261030-065818-2049",
+      "text": "selfhosting-fix: (verifier) accepted without reading the tree: the eyes opened no file and ran no command — the verdict rests on the packet alone",
+      "layer": "observation"
+    },
+    {
+      "kind": "seen-non-claims",
+      "where": "run-20261030-065818-2049/selfhosting-doc (2)",
+      "text": "2 provider non-claim(s) went to the verifier with the work and it accepted — read there, said here, not charged; each stays in its task's `non-claims`",
+      "layer": "observation"
+    },
+    {
+      "kind": "outside-run",
+      "where": "AGENTS.md, CLAUDE.md, README.md, plugin.json",
+      "text": "4 file(s) changed since 4de6d33; no completed run recorded touching them",
+      "layer": "objection"
+    },
+    {
+      "kind": "outside-run",
+      "where": ".claude-plugin/plugin.json",
+      "text": "1 file(s) changed since 4de6d33; no completed run recorded touching them",
+      "layer": "objection"
+    },
+    {
+      "kind": "non-claim",
+      "where": "run-20261030-065818-2049",
+      "text": "no session transcript here: what the session did for this task is its word alone  [task adopt-env]",
+      "layer": "objection"
+    },
+    {
+      "kind": "non-claim",
+      "where": "run-20261030-065818-2049",
+      "text": "no check decides this task  [task provenance-note]",
+      "layer": "objection"
+    },
+    {
+      "kind": "non-claim",
+      "where": "run-20261030-065818-2049",
+      "text": "provenance-note: done on the session's word by name (`run provenance-note`), with nothing of its own in the tree and no `did`  [task provenance-note]",
+      "layer": "objection"
+    }
+  ]
+}

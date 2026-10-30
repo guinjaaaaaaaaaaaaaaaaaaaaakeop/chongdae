@@ -1,0 +1,10 @@
+{
+  "artifact-type": "chongdae/plan@1",
+  "written_by": "chongdae 1.24.0",
+  "goal": "Privacy repair (owner-authorized, new work, not retroactive): chongdae's public task records leak this machine's absolute paths (jokbo run-20261030-063525-2d81: stages.newbie.response.tried[].command). Contain first with machine-local commit-records:false in a recorded environment task; then the lock's Claude tests writer and Codex builder make save_state write a path-normalized public projection while exact raw values stay in ignored local state for validation, recovery and ownership; the lock's Claude verifier checks it. No version bump, push, cache change or history rewrite; prior README/AGENTS/manifest edits and SELFHOSTING.md stay as they are.",
+  "kind": "session",
+  "tasks": [],
+  "providers": {
+    "session": "session"
+  }
+}

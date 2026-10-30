@@ -1,0 +1,263 @@
+{
+  "artifact-type": "chongdae/task@1",
+  "written_by": "chongdae 1.24.0",
+  "status": "done",
+  "def": {
+    "id": "markdown-tests",
+    "role": "nitpick",
+    "brief": "Add the tests that decide contract M (below) to test_public_projection.py only; keep its 43 existing tests exactly as they are. Name them test_M1_..., test_M2_..., test_M3_..., test_M4_.... They must fail against the current chongdae.py (0ae52cf, where every M1 example stays raw) and pass once M is built. Do not change the engine or any other test file.\n\nRequired cases (home mocked as /home/person in a child process, as the R1 tests do; project root /work/project; this host's temp dir and /tmp for temporary paths):\n- M1/M2 through public_projection: every M1 example with its exact expected output (the observed `- **<tmp>/cd-py311/bin/python3 (outside HOME):** fails.` included), each asserting the complete string so the opening and closing `**` are kept byte-for-byte.\n- M3 guards: `src**/tmp/a`, `a**/tmp/b**`, `docs**/home/person/x`, `docs**/work/project/x` unchanged; a single `*` wrapper (`*/tmp/x*`) keeps today's behavior; an unwrapped path ending in `**` (e.g. `/tmp/x**`) keeps today's behavior.\n- M4: merge_private(public, raws) equals each original exactly; through save_state in a `<project>/.chongdae/run-<id>` directory (a task's summary, a finding and a non-claim holding wrapped home, project and temp paths), the public tasks/<id>.json holds none of those absolute paths in its complete bytes, the local overlay holds the exact raws, and load_state in a new process returns them exactly.\n- M5: neutral_path (narrow=False) on a wrapped temp path keeps today's output.\nRun the file with python3 as the session runs it (pinned to 3.11 on PATH).\n\nContract M: a machine path wrapped in Markdown strong emphasis (`**...**`) is projected. Narrow follow-up to contract R (final), on top of commit 0ae52cf. Found by the session's complete-byte export scan of run run-20261030-091750-7101: a worker summary held `- **<tmp>/cd-py311/bin/python3 (outside HOME):** fails.` and the public projection left that temporary path raw, because `*` is not in R1's path-start set. Today (0ae52cf, home mocked as /home/person, project root /work/project) every example below stays unchanged.\n\nM1 A wrapper opens a path. A `**` that itself sits at a path start — at the start of the string, or right after whitespace, a quote, a backtick, or one of = ( [ , : ; | & > (R1's set) — and is followed immediately by a machine prefix (the project root, the home, a temporary directory, by R1/R2's rules) makes that prefix begin a path: the prefix is projected and the opening `**` is kept exactly. Examples: `- **<tmp>/cd-py311/bin/python3 (outside HOME):** fails.` -> `- **<tmp> (outside HOME):** fails.`; `**/tmp/x**` -> `**<tmp>**`; `see **/tmp/x** now` -> `see **<tmp>** now`; `**/home/person/notes**` -> `**~/notes**`; `**/home/person**` -> `**~**`; `**/work/project/src/a.py**` -> `**./src/a.py**`; `**/work/project**` -> `**.**`.\n\nM2 The closing markup is kept. For a path opened by such a wrapper, a `**` right after the path closes it and is not part of the path: the temporary-directory rule's \"whole path under it\" stops before it, and the home and project-root right boundary accepts it, so the closing `**` stays byte-for-byte (as in every M1 example). Paths not opened by a wrapper keep today's behavior exactly.\n\nM3 Guards. A `**` that is not at a path start opens nothing: `src**/tmp/a`, `a**/tmp/b**`, `docs**/home/person/x` and `docs**/work/project/x` stay unchanged, as every relative path does (R1). Only `**` is recognized: a single `*`, `_`, `__`, HTML, ANSI escapes or any other markup are not parsed and keep today's behavior. No general Markdown, HTML or ANSI handling is added.\n\nM4 The raw mirror stays exact. For every string M1 changes, merge_private(public, raws) from public_projection equals the original string; through save_state the public file holds the projected form, the ignored local overlay the exact raw, and load_state (also in a new process) returns the exact raw.\n\nM5 Nothing else changes. neutral_path (narrow=False) and its callers keep their behavior exactly; every guarantee of contracts P, P2-rel and R (R1-R7, R3a) stays true, including R6's projection of public checks (no public argv exception) and R3's refusal of machine-path keys. Scope: chongdae.py only, a minimal change to the narrow path projection; no CLI command, setting or record key.",
+    "closes": [],
+    "needs": [],
+    "checks": [],
+    "tests": [
+      "test_public_projection.py"
+    ],
+    "gate": null,
+    "domain": "code",
+    "scope": [
+      "test_public_projection.py"
+    ]
+  },
+  "seq": 11,
+  "added": "2026-10-30T11:23:26+00:00",
+  "non-claims": [
+    "no check decides this task; done means the agent said so",
+    "(provider) M5 'every guarantee of contracts P, P2-rel and R (R1-R7, R3a) stays true' is decided by the 43 existing tests in this file plus test_record_transactions.py and test_state_recovery.py, not by a new M test; only neutral_path's output on wrapped temp paths has its own M5 test.",
+    "(provider) M5 'neutral_path ... and its callers keep their behavior exactly': only neutral_path itself is tested on wrapped strings; its callers (portable commands, asked/) are not tested here with `**`-wrapped input.",
+    "(provider) M3 'No general Markdown, HTML or ANSI handling is added' is tested only through the sample strings for single *, _, __, <b>, ANSI and backtick-then-**, each pinned to its output at 0ae52cf; other markup is not enumerated.",
+    "(provider) Strings with three or more stars (e.g. `***/tmp/x***`) are not covered: the contract does not say how they behave.",
+    "(provider) M4's overlay check finds each raw string among the JSON string values of the files under local/; it does not pin the overlay's file layout.",
+    "(provider) Amendment: the disputed test was wrong and has been corrected. Using wrapped machine paths as keys contradicts M5: \"every guarantee of contracts P, P2-rel and R (R1-R7, R3a) stays true, including ... R3's refusal of machine-path keys.\" Only the fixture's keys were changed; every expected output is the same.",
+    "(provider) M5 'every guarantee of contracts P, P2-rel and R (R1-R7, R3a) stays true' is decided by the 43 existing tests plus test_record_transactions.py and test_state_recovery.py, not by a new M test.",
+    "(provider) M5 'neutral_path ... and its callers keep their behavior exactly': only neutral_path itself is tested on wrapped strings, not its callers.",
+    "(provider) M5 'Scope: chongdae.py only, a minimal change to the narrow path projection; no CLI command, setting or record key' is not tested; no test can see whether a change is minimal.",
+    "(provider) M3 'No general Markdown, HTML or ANSI handling is added' is tested only through sample strings for single *, _, __, <b>, ANSI and backtick-then-**.",
+    "(provider) Strings with three or more stars (e.g. `***/tmp/x***`) are not covered; the contract does not say how they behave.",
+    "(provider) M4's overlay check finds each raw string among the JSON string values under local/; it does not pin the overlay's file layout."
+  ],
+  "touched_by_provider": [
+    "test_public_projection.py"
+  ],
+  "performed_by": {
+    "provider": "command",
+    "argv": [
+      "python3",
+      "{plugin:hacheong}/worker.py",
+      "--member",
+      "teujip",
+      "--request",
+      "{request}",
+      "--response",
+      "{response}",
+      "--host",
+      "claude"
+    ],
+    "host": "claude-code",
+    "model": "claude-opus-5-5",
+    "turns": 5,
+    "cost_usd": 0.21315079999999997,
+    "versions": {
+      "used": {
+        "hacheong": "1.12.1",
+        "chongdae": "1.24.0"
+      }
+    },
+    "trace": {
+      "changed": [],
+      "commands-run": 3,
+      "commands-failed": 0
+    }
+  },
+  "checks": [],
+  "attempts": [
+    {
+      "status": "done",
+      "summary": "I added 16 tests for contract M to test_public_projection.py, in a new ProjectionM class with two helpers: child_env and neutral_as. Only additions were made: the 43 existing tests are byte-for-byte unchanged, and the engine and the other test files were not touched. I ran the file with python3 3.11.16 against 0ae52cf: 59 tests ran and 16 failed. The 43 existing tests all pass. Every new M test fails because wrapped paths are still left raw, not because of an error in the test code. Home is mocked as /home/person in a child process and the project root is /work/project. M1 checks every example's complete output string, the wrapper after each of R1's left boundaries, this host's temp dir and its realpath, and that a wrapper still needs R1's right boundary (`**/home/person-old/x**` stays as it is). M2 checks that the closing `**` is kept, that the temp path stops before it, and that unwrapped paths beside a wrapped one keep today's output. M3 checks the four guard strings and today's output for single `*`, `_`, `__`, HTML, ANSI and an unwrapped `/tmp/x**` (-> `<tmp>`). M4 checks that merge_private returns the originals. It also checks save_state into `<project>/.chongdae/run-<id>` (the project is a temp dir, home is /home/person): no home, project or temp path appears anywhere in the bytes of tasks/a.json, the local overlay holds the exact raws, and load_state returns them both in this process and in a new one. M5 checks neutral_path's current output (`**/tmp/x**` -> `**<tmp>`). Most guard and today's-behavior checks would pass on their own today, so each sits in a test that also asserts a wrapped path M1 must project.",
+      "tests": [
+        "test_public_projection.py"
+      ],
+      "covers": [
+        {
+          "section": "M1",
+          "tests": [
+            "test_M1_observed_worker_summary_is_projected",
+            "test_M1_every_example_projects_to_its_exact_string",
+            "test_M1_temp_wrapper_with_this_hosts_temp_dir",
+            "test_M1_wrapper_after_every_r1_left_boundary",
+            "test_M1_wrapped_prefix_still_needs_r1_right_boundary"
+          ]
+        },
+        {
+          "section": "M2",
+          "tests": [
+            "test_M2_closing_wrapper_is_kept_byte_for_byte",
+            "test_M2_temp_whole_path_stops_before_the_closing_wrapper",
+            "test_M2_unwrapped_paths_keep_todays_behavior_beside_a_wrapped_one"
+          ]
+        },
+        {
+          "section": "M3",
+          "tests": [
+            "test_M3_wrapper_not_at_a_path_start_opens_nothing",
+            "test_M3_the_four_guard_strings_alone_stay_unchanged",
+            "test_M3_single_star_and_other_markup_keep_todays_behavior",
+            "test_M3_unwrapped_path_ending_in_stars_keeps_todays_behavior"
+          ]
+        },
+        {
+          "section": "M4",
+          "tests": [
+            "test_M4_merge_private_returns_each_original_exactly",
+            "test_M4_save_state_public_file_holds_no_wrapped_machine_path",
+            "test_M4_local_overlay_and_reload_hold_the_exact_raws"
+          ]
+        },
+        {
+          "section": "M5",
+          "tests": [
+            "test_M5_neutral_path_keeps_todays_output_on_wrapped_temp_paths"
+          ]
+        }
+      ],
+      "non-claims": [
+        "M5 'every guarantee of contracts P, P2-rel and R (R1-R7, R3a) stays true' is decided by the 43 existing tests in this file plus test_record_transactions.py and test_state_recovery.py, not by a new M test; only neutral_path's output on wrapped temp paths has its own M5 test.",
+        "M5 'neutral_path ... and its callers keep their behavior exactly': only neutral_path itself is tested on wrapped strings; its callers (portable commands, asked/) are not tested here with `**`-wrapped input.",
+        "M5 'Scope: chongdae.py only, a minimal change to the narrow path projection; no CLI command, setting or record key' is not tested; no test can see whether a change is minimal.",
+        "M3 'No general Markdown, HTML or ANSI handling is added' is tested only through the sample strings for single *, _, __, <b>, ANSI and backtick-then-**, each pinned to its output at 0ae52cf; other markup is not enumerated.",
+        "Strings with three or more stars (e.g. `***/tmp/x***`) are not covered: the contract does not say how they behave.",
+        "M4's overlay check finds each raw string among the JSON string values of the files under local/; it does not pin the overlay's file layout."
+      ],
+      "worker": {
+        "host": "claude-code",
+        "model": "claude-opus-5-5",
+        "turns": 9,
+        "cost_usd": 0.5369662
+      },
+      "reopened": {
+        "by": "chongdae",
+        "auto": "tests disputed by markdown-build",
+        "at": "2026-10-30T11:30:20+00:00",
+        "chongdae": "chongdae 1.24.0"
+      },
+      "disputed-tests": [
+        {
+          "test": "test_public_projection.py::ProjectionM::test_M1_every_example_projects_to_its_exact_string",
+          "contract_quote": "every guarantee of contracts P, P2-rel and R (R1-R7, R3a) stays true, including R6's projection of public checks (no public argv exception) and R3's refusal of machine-path keys.",
+          "why": "The fixture passes {k: k for k in self.M1}, placing each wrapped machine path in a dictionary key, and expects successful projection with those keys retained. Once M1 recognizes these paths, R3 requires public_projection to refuse those keys with MachinePathKey. The fixture must use non-machine-path keys to test value projection."
+        }
+      ],
+      "answered": {
+        "at": "2026-10-30T11:28:01+00:00",
+        "chongdae": "chongdae 1.24.0"
+      },
+      "done": {
+        "at": "2026-10-30T11:28:01+00:00",
+        "chongdae": "chongdae 1.24.0"
+      },
+      "touched": [
+        "test_public_projection.py"
+      ]
+    }
+  ],
+  "amending": [
+    {
+      "test": "test_public_projection.py::ProjectionM::test_M1_every_example_projects_to_its_exact_string",
+      "contract_quote": "every guarantee of contracts P, P2-rel and R (R1-R7, R3a) stays true, including R6's projection of public checks (no public argv exception) and R3's refusal of machine-path keys.",
+      "why": "The fixture passes {k: k for k in self.M1}, placing each wrapped machine path in a dictionary key, and expects successful projection with those keys retained. Once M1 recognizes these paths, R3 requires public_projection to refuse those keys with MachinePathKey. The fixture must use non-machine-path keys to test value projection."
+    }
+  ],
+  "response": {
+    "status": "done",
+    "summary": "The builder was right about the disputed test, and I've fixed it. test_M1_every_example_projects_to_its_exact_string used each wrapped machine path as a dictionary key as well as the value. Once M1 recognizes these paths, R3 says public_projection must refuse those keys. So the test expected something the contract forbids. It now uses plain keys (m0..m6), with each M1 example as the value, and still checks every example's complete expected string. That one test method is the only change in test_public_projection.py. No other test, the engine or any other file was touched. I ran it with python3 3.11.16 against the current chongdae.py, which doesn't have the M change: 59 tests ran and 16 failed, the same 16 M tests as before. The corrected test now fails for the right reason: the observed worker summary stays raw (`- **<tmp>/cd-py311/bin/python3 (outside HOME):** fails.` instead of `- **<tmp> (outside HOME):** fails.`), not a refused key or an error in the test.",
+    "tests": [
+      "test_public_projection.py"
+    ],
+    "covers": [
+      {
+        "section": "M1",
+        "tests": [
+          "test_public_projection.py::ProjectionM::test_M1_observed_worker_summary_is_projected",
+          "test_public_projection.py::ProjectionM::test_M1_every_example_projects_to_its_exact_string",
+          "test_public_projection.py::ProjectionM::test_M1_temp_wrapper_with_this_hosts_temp_dir",
+          "test_public_projection.py::ProjectionM::test_M1_wrapper_after_every_r1_left_boundary",
+          "test_public_projection.py::ProjectionM::test_M1_wrapped_prefix_still_needs_r1_right_boundary"
+        ]
+      },
+      {
+        "section": "M2",
+        "tests": [
+          "test_public_projection.py::ProjectionM::test_M2_closing_wrapper_is_kept_byte_for_byte",
+          "test_public_projection.py::ProjectionM::test_M2_temp_whole_path_stops_before_the_closing_wrapper",
+          "test_public_projection.py::ProjectionM::test_M2_unwrapped_paths_keep_todays_behavior_beside_a_wrapped_one"
+        ]
+      },
+      {
+        "section": "M3",
+        "tests": [
+          "test_public_projection.py::ProjectionM::test_M3_wrapper_not_at_a_path_start_opens_nothing",
+          "test_public_projection.py::ProjectionM::test_M3_the_four_guard_strings_alone_stay_unchanged",
+          "test_public_projection.py::ProjectionM::test_M3_single_star_and_other_markup_keep_todays_behavior",
+          "test_public_projection.py::ProjectionM::test_M3_unwrapped_path_ending_in_stars_keeps_todays_behavior"
+        ]
+      },
+      {
+        "section": "M4",
+        "tests": [
+          "test_public_projection.py::ProjectionM::test_M4_merge_private_returns_each_original_exactly",
+          "test_public_projection.py::ProjectionM (save_state/load_state M4 tests, unchanged from the first attempt)"
+        ]
+      },
+      {
+        "section": "M5",
+        "tests": [
+          "test_public_projection.py::ProjectionM (neutral_path M5 test, unchanged from the first attempt)"
+        ]
+      }
+    ],
+    "non-claims": [
+      "Amendment: the disputed test was wrong and has been corrected. Using wrapped machine paths as keys contradicts M5: \"every guarantee of contracts P, P2-rel and R (R1-R7, R3a) stays true, including ... R3's refusal of machine-path keys.\" Only the fixture's keys were changed; every expected output is the same.",
+      "M5 'every guarantee of contracts P, P2-rel and R (R1-R7, R3a) stays true' is decided by the 43 existing tests plus test_record_transactions.py and test_state_recovery.py, not by a new M test.",
+      "M5 'neutral_path ... and its callers keep their behavior exactly': only neutral_path itself is tested on wrapped strings, not its callers.",
+      "M5 'Scope: chongdae.py only, a minimal change to the narrow path projection; no CLI command, setting or record key' is not tested; no test can see whether a change is minimal.",
+      "M3 'No general Markdown, HTML or ANSI handling is added' is tested only through sample strings for single *, _, __, <b>, ANSI and backtick-then-**.",
+      "Strings with three or more stars (e.g. `***/tmp/x***`) are not covered; the contract does not say how they behave.",
+      "M4's overlay check finds each raw string among the JSON string values under local/; it does not pin the overlay's file layout."
+    ],
+    "worker": {
+      "host": "claude-code",
+      "model": "claude-opus-5-5",
+      "turns": 5,
+      "cost_usd": 0.21315079999999997
+    }
+  },
+  "answered": {
+    "at": "2026-10-30T11:32:06+00:00",
+    "chongdae": "chongdae 1.24.0"
+  },
+  "touched": [
+    "test_public_projection.py"
+  ],
+  "done": {
+    "at": "2026-10-30T11:32:06+00:00",
+    "chongdae": "chongdae 1.24.0"
+  },
+  "seen-non-claims": {
+    "by": "verifier of markdown-build",
+    "texts": [
+      "(provider) M5 'every guarantee of contracts P, P2-rel and R (R1-R7, R3a) stays true' is decided by the 43 existing tests in this file plus test_record_transactions.py and test_state_recovery.py, not by a new M test; only neutral_path's output on wrapped temp paths has its own M5 test.",
+      "(provider) M5 'neutral_path ... and its callers keep their behavior exactly': only neutral_path itself is tested on wrapped strings; its callers (portable commands, asked/) are not tested here with `**`-wrapped input.",
+      "(provider) M3 'No general Markdown, HTML or ANSI handling is added' is tested only through the sample strings for single *, _, __, <b>, ANSI and backtick-then-**, each pinned to its output at 0ae52cf; other markup is not enumerated.",
+      "(provider) Strings with three or more stars (e.g. `***/tmp/x***`) are not covered: the contract does not say how they behave.",
+      "(provider) M4's overlay check finds each raw string among the JSON string values of the files under local/; it does not pin the overlay's file layout.",
+      "(provider) Amendment: the disputed test was wrong and has been corrected. Using wrapped machine paths as keys contradicts M5: \"every guarantee of contracts P, P2-rel and R (R1-R7, R3a) stays true, including ... R3's refusal of machine-path keys.\" Only the fixture's keys were changed; every expected output is the same.",
+      "(provider) M5 'every guarantee of contracts P, P2-rel and R (R1-R7, R3a) stays true' is decided by the 43 existing tests plus test_record_transactions.py and test_state_recovery.py, not by a new M test.",
+      "(provider) M5 'neutral_path ... and its callers keep their behavior exactly': only neutral_path itself is tested on wrapped strings, not its callers.",
+      "(provider) M5 'Scope: chongdae.py only, a minimal change to the narrow path projection; no CLI command, setting or record key' is not tested; no test can see whether a change is minimal.",
+      "(provider) M3 'No general Markdown, HTML or ANSI handling is added' is tested only through sample strings for single *, _, __, <b>, ANSI and backtick-then-**.",
+      "(provider) Strings with three or more stars (e.g. `***/tmp/x***`) are not covered; the contract does not say how they behave.",
+      "(provider) M4's overlay check finds each raw string among the JSON string values under local/; it does not pin the overlay's file layout."
+    ],
+    "at": "2026-10-30T11:36:00+00:00",
+    "chongdae": "chongdae 1.24.0"
+  }
+}

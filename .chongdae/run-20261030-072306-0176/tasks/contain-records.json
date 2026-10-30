@@ -1,0 +1,178 @@
+{
+  "artifact-type": "chongdae/task@1",
+  "written_by": "chongdae 1.24.0",
+  "status": "done",
+  "def": {
+    "id": "contain-records",
+    "role": "session",
+    "brief": "Set settings.chongdae.commit-records to false in hunsu.local.json (git-ignored, machine-local overlay; keep its local-hooks-ok entry). Effect: the engine writes this run's records but does not commit them, until the projection repair is independently checked. Not done: no ignore rule added, no existing record branch or commit rewritten or deleted; commits already made (run-20261030-065818-2049 and this run's init 7919012) stay in history as they are.",
+    "closes": [],
+    "needs": [],
+    "checks": [
+      [
+        "python3",
+        "-c",
+        "import json; s=json.load(open(\"hunsu.local.json\")); assert s[\"settings\"][\"chongdae\"][\"commit-records\"] is False, s; assert s[\"local-hooks-ok\"]==[\"claude-hook.sh\"], s; print(\"hunsu.local.json: settings.chongdae.commit-records is false; local-hooks-ok kept\")"
+      ],
+      [
+        "git",
+        "check-ignore",
+        "-q",
+        "hunsu.local.json"
+      ],
+      [
+        "python3",
+        "{plugin:hunsu}/hunsu.py",
+        "check",
+        "--target",
+        "."
+      ]
+    ],
+    "tests": [],
+    "gate": null,
+    "scope": [
+      "hunsu.local.json"
+    ]
+  },
+  "seq": 1,
+  "added": "2026-10-30T07:23:17+00:00",
+  "self-performed": {
+    "instead-of": "implementer",
+    "why": "Containment, not a build: one key in this machine's ignored overlay (hunsu.local.json settings.chongdae.commit-records: false, the released engine's documented setting, chongdae.py commit_record) so the records the released 1.24.0 engine writes during this repair, which may carry unprojected worker answers, stay on this machine instead of entering git. The owner asked for it under a recorded environment task; no implementer is hired for an overlay edit. It bypasses no guard or permission: records are still written and recovered, only not committed.",
+    "by": {
+      "agent": "claude-code claude-opus-5-5"
+    },
+    "at": "2026-10-30T07:23:17+00:00",
+    "chongdae": "chongdae 1.24.0"
+  },
+  "checks-passed": {
+    "ran": [
+      {
+        "command": "python3 -c 'import json; s=json.load(open(\"hunsu.local.json\")); assert s[\"settings\"][\"chongdae\"][\"commit-records\"] is False, s; assert s[\"local-hooks-ok\"]==[\"claude-hook.sh\"], s; print(\"hunsu.local.json: settings.chongdae.commit-records is false; local-hooks-ok kept\")'",
+        "exit": 0,
+        "tail": [
+          "hunsu.local.json: settings.chongdae.commit-records is false; local-hooks-ok kept"
+        ],
+        "at": "2026-10-30T07:23:26+00:00",
+        "chongdae": "chongdae 1.24.0"
+      },
+      {
+        "command": "git check-ignore -q hunsu.local.json",
+        "exit": 0,
+        "tail": [
+          ""
+        ],
+        "at": "2026-10-30T07:23:26+00:00",
+        "chongdae": "chongdae 1.24.0"
+      },
+      {
+        "command": "python3 '{plugin:hunsu}/hunsu.py' check --target .",
+        "exit": 0,
+        "tail": [
+          "info  4 finding(s) settled by the members' own text (sequenced / not co-active / duplicate, each on a verified sentence) — no resolution needed; see hunsu-conflicts.md",
+          "  (offline: a release is known here only from this machine's marketplace copies — `hunsu outdated` asks the marketplaces, read-only)",
+          "errors 0 · warnings 0 · info 1"
+        ],
+        "at": "2026-10-30T07:23:26+00:00",
+        "chongdae": "chongdae 1.24.0"
+      }
+    ],
+    "at": "2026-10-30T07:23:26+00:00",
+    "chongdae": "chongdae 1.24.0"
+  },
+  "review": {
+    "artifact-type": "dwitbuk/review@1",
+    "verdict": "accept",
+    "findings": [],
+    "worker": {
+      "host": "claude-code",
+      "model": "claude-opus-5-5",
+      "turns": 3,
+      "cost_usd": 0.03489
+    }
+  },
+  "verdict-given": {
+    "at": "2026-10-30T07:23:33+00:00",
+    "chongdae": "chongdae 1.24.0"
+  },
+  "reviewed_tree": {
+    ".claude-plugin/plugin.json": "e243a5d51f82b623e35d38417fd2213ad6d5640e",
+    "README.md": "484314d80a83fa4f3c426ded2ee89eebf0a74a5b",
+    "plugin.json": "0199d8e4d2227357de77c5cc2adbcf5d198bd285",
+    "AGENTS.md": "356bfb71a61076f443ebfd64eb93886bbbad4383",
+    "CLAUDE.md": "c140473a3a5fbe89301c99d9d0d1b76c5971f2c3"
+  },
+  "verified_by": {
+    "provider": "command",
+    "argv": [
+      "python3",
+      "{plugin:dwitbuk}/eyes_worker.py",
+      "--request",
+      "{request}",
+      "--response",
+      "{response}",
+      "--host",
+      "claude"
+    ],
+    "host": "claude-code",
+    "model": "claude-opus-5-5",
+    "turns": 3,
+    "cost_usd": 0.03489,
+    "versions": {
+      "used": {
+        "dwitbuk": "1.16.0",
+        "chongdae": "1.24.0"
+      }
+    },
+    "trace": {
+      "changed": [],
+      "commands-run": 0,
+      "commands-failed": 0
+    }
+  },
+  "checks": [
+    [
+      "python3",
+      "-c",
+      "import json; s=json.load(open(\"hunsu.local.json\")); assert s[\"settings\"][\"chongdae\"][\"commit-records\"] is False, s; assert s[\"local-hooks-ok\"]==[\"claude-hook.sh\"], s; print(\"hunsu.local.json: settings.chongdae.commit-records is false; local-hooks-ok kept\")"
+    ],
+    [
+      "git",
+      "check-ignore",
+      "-q",
+      "hunsu.local.json"
+    ],
+    [
+      "python3",
+      "{plugin:hunsu}/hunsu.py",
+      "check",
+      "--target",
+      "."
+    ]
+  ],
+  "touched": [],
+  "performed_by": {
+    "provider": "session",
+    "host": "claude-code",
+    "agent": "claude-code_2-1-314_agent",
+    "effort": "xhigh",
+    "model": "claude-opus-5-5",
+    "versions": {
+      "used": {
+        "chongdae": "1.24.0"
+      }
+    },
+    "trace": {
+      "changed": [
+        "write ./hunsu.local.json"
+      ],
+      "commands-run": 1,
+      "command-lines": "kept in the local session transcript, not in the record",
+      "window-from": "2026-10-30T07:23:17+00:00"
+    }
+  },
+  "done": {
+    "at": "2026-10-30T07:23:33+00:00",
+    "chongdae": "chongdae 1.24.0"
+  }
+}

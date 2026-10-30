@@ -1,0 +1,148 @@
+{
+  "artifact-type": "chongdae/task@1",
+  "written_by": "chongdae 1.24.0",
+  "status": "done",
+  "def": {
+    "id": "final-suite-2",
+    "role": "session",
+    "brief": "Final verification of candidate 554f8b3 (runtime and tests identical to 852b852; later commits change only docs and the five version fields). Check 1 binds the source: HEAD, sha256 of chongdae.py, the test files and hooks, and a clean product tree. Check 2: test_chongdae.py once, with the HOME interpreter ~/.local/bin/python3.11 (3.11.16) in a worker-fixture context (AGENT_WORKER=1 only for the suite process; subprocess python/python3 pinned to python3.11 through <tmp>/cd-py311/bin); complete output in <tmp>/cd-selfhost/final-full-554f8b3.log; counts printed; the suite's own exit code. Normal-parent targeted fixtures are not repeated: the fixture files are unchanged since 306bf16 and passed 14/14 in final-suite. The 0ae52cf full run (120 function PASS, 100 unittest OK, 0 skip, 638s) stays evidence for 0ae52cf only (log kept as final-full-0ae52cf.log).",
+    "closes": [],
+    "needs": [],
+    "checks": [
+      [
+        "python3",
+        "<tmp>/cd-selfhost/bind.check.py"
+      ],
+      [
+        "~/.local/bin/python3.11",
+        "<tmp>/cd-selfhost/final_full.py",
+        "<tmp>/cd-selfhost/final-full-554f8b3.log"
+      ]
+    ],
+    "tests": [],
+    "gate": null
+  },
+  "seq": 16,
+  "added": "2026-10-30T11:42:36+00:00",
+  "self-performed": {
+    "instead-of": "implementer",
+    "why": "Verification only, no build: the one final full suite on the 2.0.0 candidate, required by AGENTS.md because the Markdown wrapper fix (852b852) changed runtime after the earlier final run (which is evidence for 0ae52cf only). Run by chongdae so the exit and counts are in the record; nothing in the tree is written.",
+    "by": {
+      "agent": "claude-code claude-opus-5-5"
+    },
+    "at": "2026-10-30T11:42:36+00:00",
+    "chongdae": "chongdae 1.24.0"
+  },
+  "checks-passed": {
+    "ran": [
+      {
+        "command": "python3 <tmp>/cd-selfhost/bind.check.py",
+        "exit": 0,
+        "tail": [
+          "8a747755b777090d test_review_freshness.py",
+          "a48b8bf3fbf39990 test_state_recovery.py",
+          "411033f926d66fb3 hooks/pre_bash.py",
+          "ac493dc966f190e1 hooks/pre_write.py",
+          "1b6732d3ed25a452 hooks/session_start.py",
+          "candidate HEAD 554f8b3c4b631cf0e569b94fcfd1ed0628eb79ce - product tree clean (run records and reviews aside)"
+        ],
+        "at": "2026-10-30T11:42:37+00:00",
+        "chongdae": "chongdae 1.24.0"
+      },
+      {
+        "command": "'~/.local/bin/python3.11' <tmp>/cd-selfhost/final_full.py <tmp>/cd-selfhost/final-full-554f8b3.log",
+        "exit": 0,
+        "tail": [
+          "interpreter ~/.local/bin/python3.11 3.11.16; AGENT_WORKER=1; subprocess python3 -> ~/.local/share/uv/python/cpython-3.11.16-macos-aarch64-none/bin/python3.11",
+          "functions: 120 PASS, 0 FAIL, 0 SKIP",
+          "unittest: Ran 116 in 181.748s | OK",
+          "last line: all passed",
+          "exit 0, 639s, full output in <tmp>"
+        ],
+        "at": "2026-10-30T11:53:15+00:00",
+        "chongdae": "chongdae 1.24.0"
+      }
+    ],
+    "at": "2026-10-30T11:53:16+00:00",
+    "chongdae": "chongdae 1.24.0"
+  },
+  "review": {
+    "artifact-type": "dwitbuk/review@1",
+    "verdict": "accept",
+    "findings": [],
+    "worker": {
+      "host": "claude-code",
+      "model": "claude-opus-5-5",
+      "turns": 4,
+      "cost_usd": 0.0536494
+    }
+  },
+  "verdict-given": {
+    "at": "2026-10-30T11:53:27+00:00",
+    "chongdae": "chongdae 1.24.0"
+  },
+  "reviewed_tree": {},
+  "verified_by": {
+    "provider": "command",
+    "argv": [
+      "python3",
+      "{plugin:dwitbuk}/eyes_worker.py",
+      "--request",
+      "{request}",
+      "--response",
+      "{response}",
+      "--host",
+      "claude"
+    ],
+    "host": "claude-code",
+    "model": "claude-opus-5-5",
+    "turns": 4,
+    "cost_usd": 0.0536494,
+    "versions": {
+      "used": {
+        "dwitbuk": "1.16.0",
+        "chongdae": "1.24.0"
+      }
+    },
+    "trace": {
+      "changed": [],
+      "commands-run": 0,
+      "commands-failed": 0
+    }
+  },
+  "checks": [
+    [
+      "python3",
+      "<tmp>/cd-selfhost/bind.check.py"
+    ],
+    [
+      "~/.local/bin/python3.11",
+      "<tmp>/cd-selfhost/final_full.py",
+      "<tmp>/cd-selfhost/final-full-554f8b3.log"
+    ]
+  ],
+  "touched": [],
+  "performed_by": {
+    "provider": "session",
+    "host": "claude-code",
+    "agent": "claude-code_2-1-314_agent",
+    "effort": "xhigh",
+    "model": "claude-opus-5-5",
+    "versions": {
+      "used": {
+        "chongdae": "1.24.0"
+      }
+    },
+    "trace": {
+      "changed": [],
+      "commands-run": 2,
+      "command-lines": "kept in the local session transcript, not in the record",
+      "elsewhere": "1 command(s) or edit(s) outside this project, kept only in the local session",
+      "window-from": "2026-10-30T11:42:36+00:00"
+    }
+  },
+  "done": {
+    "at": "2026-10-30T11:53:27+00:00",
+    "chongdae": "chongdae 1.24.0"
+  }
+}

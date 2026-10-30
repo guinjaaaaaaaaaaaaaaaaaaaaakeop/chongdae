@@ -1,0 +1,289 @@
+{
+  "artifact-type": "chongdae/task@1",
+  "written_by": "chongdae 1.24.0",
+  "status": "done",
+  "def": {
+    "id": "privacy-build-tests",
+    "role": "nitpick",
+    "brief": "Amend test_chongdae.py, test_concurrency.py: privacy-build disputed them — test_chongdae.py: Fixture context, not production behavior (contract F). F1: seven tests that exercise the hooks of a NORMAL parent session fail only because the test process inherits AGENT_WORKER=1 from a hired worker, where hooks are silent by design: test_hooks_and_engine_anchor_to_the_project_not_the_shells_directory, test_operation_words_are_report_hints_and_a_bash_operation_gets_a_did_nudge, test_performed_by_is_recorded_like_an_author_line, test_session_run_tasks_added_as_the_work_goes_claims_and_the_write_hook, test_session_start_under_hunsus_probe_says_its_standing_text_not_one_state, test_the_session_start_and_close_say_unpushed_commits_and_no_upstream, test_the_session_start_line_counts_open_tasks_by_the_rule_run_uses (all in test_chongdae.py). Each must construct the environment of the session it means for every hook or engine subprocess it runs: a normal session has no AGENT_WORKER; a scenario that means worker suppression sets AGENT_WORKER=1 itself. Do not change the hooks, the engine or their AGENT_WORKER behavior, do not clear AGENT_WORKER process-wide (os.environ) or for the whole suite, and do not weaken any hook assertion: only the env a test passes to the subprocess it means changes. F2: six expectations assume the raw sys.executable appears in public command records, but chongdae records commands portably (portable_argv: a path under the home becomes `~/...`, an installed plugin's path `{plugin:NAME}`), so they fail whenever the interpreter lives under HOME (e.g. ~/.local/bin/python3.11): test_a_disputed_contract_test_goes_back_to_its_writer_and_the_build_goes_out_again, test_a_quibble_task_is_sent_a_review_shaped_request_not_its_own_empty_checks, test_a_verifier_finding_whose_quote_is_not_where_it_says_is_overruled_and_the_work_is_not_resent, test_did_keeps_a_script_outside_the_project_a_sensible_subject_a_meaningful_tail_and_a_batch_as_one_judgment, test_did_runs_one_operation_records_it_whatever_the_exit_and_report_lists_it (test_chongdae.py) and test_concurrency.ConcurrentCommands.test_check_attachment_is_not_lost_during_another_run. Each must expect the contract-correct public form (what the engine's portable recording gives for the command the test passed, e.g. derived with chongdae.portable_argv / shlex.join) or use a stable fixture input whose public form is known; not the raw path, not a skip, and no change to the engine's normalizers. Evidence before the amendment (the session's runs): with ~/.local/bin/python3.11 as the test interpreter (sys.executable under HOME) and subprocess python/python3 pinned to 3.11 on PATH (<tmp>/cd-py311/bin holds python and python3 links to it), all 13 fail with AGENT_WORKER=1; without AGENT_WORKER the 7 hook tests pass and the 6 fail. A runner outside the tree reproduces them by name: `PATH=<tmp>/cd-py311/bin:$PATH ~/.local/bin/python3.11 <tmp>/cd-selfhost/run_selected.py NAME...` (unittest ids such as test_concurrency.ConcurrentCommands.test_... work too). Done when all 13 pass with AGENT_WORKER=1 and without it, under that interpreter and under one outside HOME; only test_chongdae.py and test_concurrency.py change, and no other test.; test_concurrency.py: Fixture context, not production behavior (contract F). F1: seven tests that exercise the hooks of a NORMAL parent session fail only because the test process inherits AGENT_WORKER=1 from a hired worker, where hooks are silent by design: test_hooks_and_engine_anchor_to_the_project_not_the_shells_directory, test_operation_words_are_report_hints_and_a_bash_operation_gets_a_did_nudge, test_performed_by_is_recorded_like_an_author_line, test_session_run_tasks_added_as_the_work_goes_claims_and_the_write_hook, test_session_start_under_hunsus_probe_says_its_standing_text_not_one_state, test_the_session_start_and_close_say_unpushed_commits_and_no_upstream, test_the_session_start_line_counts_open_tasks_by_the_rule_run_uses (all in test_chongdae.py). Each must construct the environment of the session it means for every hook or engine subprocess it runs: a normal session has no AGENT_WORKER; a scenario that means worker suppression sets AGENT_WORKER=1 itself. Do not change the hooks, the engine or their AGENT_WORKER behavior, do not clear AGENT_WORKER process-wide (os.environ) or for the whole suite, and do not weaken any hook assertion: only the env a test passes to the subprocess it means changes. F2: six expectations assume the raw sys.executable appears in public command records, but chongdae records commands portably (portable_argv: a path under the home becomes `~/...`, an installed plugin's path `{plugin:NAME}`), so they fail whenever the interpreter lives under HOME (e.g. ~/.local/bin/python3.11): test_a_disputed_contract_test_goes_back_to_its_writer_and_the_build_goes_out_again, test_a_quibble_task_is_sent_a_review_shaped_request_not_its_own_empty_checks, test_a_verifier_finding_whose_quote_is_not_where_it_says_is_overruled_and_the_work_is_not_resent, test_did_keeps_a_script_outside_the_project_a_sensible_subject_a_meaningful_tail_and_a_batch_as_one_judgment, test_did_runs_one_operation_records_it_whatever_the_exit_and_report_lists_it (test_chongdae.py) and test_concurrency.ConcurrentCommands.test_check_attachment_is_not_lost_during_another_run. Each must expect the contract-correct public form (what the engine's portable recording gives for the command the test passed, e.g. derived with chongdae.portable_argv / shlex.join) or use a stable fixture input whose public form is known; not the raw path, not a skip, and no change to the engine's normalizers. Evidence before the amendment (the session's runs): with ~/.local/bin/python3.11 as the test interpreter (sys.executable under HOME) and subprocess python/python3 pinned to 3.11 on PATH (<tmp>/cd-py311/bin holds python and python3 links to it), all 13 fail with AGENT_WORKER=1; without AGENT_WORKER the 7 hook tests pass and the 6 fail. A runner outside the tree reproduces them by name: `PATH=<tmp>/cd-py311/bin:$PATH ~/.local/bin/python3.11 <tmp>/cd-selfhost/run_selected.py NAME...` (unittest ids such as test_concurrency.ConcurrentCommands.test_... work too). Done when all 13 pass with AGENT_WORKER=1 and without it, under that interpreter and under one outside HOME; only test_chongdae.py and test_concurrency.py change, and no other test.",
+    "closes": [],
+    "needs": [],
+    "checks": [],
+    "tests": [
+      "test_chongdae.py",
+      "test_concurrency.py"
+    ],
+    "gate": null,
+    "domain": "code"
+  },
+  "seq": 2,
+  "added": "2026-10-30T09:24:34+00:00",
+  "non-claims": [
+    "no check decides this task; done means the agent said so",
+    "(provider) As the amendment expects, the corrected tests pass now; none of them is red before a build.",
+    "(provider) These test names do not contain the section id (F1/F2): the amendment names existing tests, and renaming them would change other tests' identity. So a check cannot select them by section id, only by name.",
+    "(provider) The F2 expectations are built with the engine's own helpers (portable_argv, neutral_path, public_projection), as the brief allows. So they check that the recorded command matches that projection of the given argv. They cannot catch a bug inside those helpers; test_public_projection.py covers that.",
+    "(provider) test_chongdae.py::test_a_landed_worktree_run_records_the_merge_commit fails (FileNotFoundError '<tmp>') both with and without this amendment, outside HOME with AGENT_WORKER=1. It is not one of the 13 and was not changed.",
+    "(provider) Checked only on macOS with Python 3.11 (~/.local/bin/python3.11 and the <tmp>/cd-py311 link); not on Windows or another Python version.",
+    "(provider) The builder's dispute is correct and the test was wrong. R6 says: \"A task's checks ... are not narrowed by the projection: they keep the portable form portable_argv gives them when the task is added\". The expectation now follows that sentence.",
+    "(provider) The corrected test fails on today's engine when the interpreter is outside HOME (<tmp>/cd-py311/bin/python3), because the engine still narrows checks. It passes under ~/.local/bin/python3.11, where there is no temp prefix to tell the two forms apart.",
+    "(provider) The test name does not contain the section id (R6/F). It is an existing test, so a check selects it by name.",
+    "(provider) The expectation is built with the engine's own portable_argv, so it cannot catch a bug inside portable_argv itself.",
+    "(provider) I did not re-run the other 12 tests from the earlier amendment; they were not changed in this pass.",
+    "(provider) As the amendment expects, the corrected test passes on today's engine, so it is not red before a build.",
+    "(provider) The test name does not contain the section id (R6/F); it is an existing test that a check selects by name.",
+    "(provider) Both expected values are built with the engine's own portable_argv and public_projection, so the test cannot catch a bug inside those helpers.",
+    "(provider) The raw-value check goes through chongdae.load_state, which merges local/tasks/b.json over the public file. It checks the merged view, not which file the exact argv sits in.",
+    "(provider) I did not re-run the other 12 tests from the first amendment; they were not changed in this pass.",
+    "(provider) The 'without AGENT_WORKER' runs through run_selected.py set AGENT_WORKER to empty; the whole-file run had it fully unset. Checked on macOS with Python 3.11 only."
+  ],
+  "amending": [
+    {
+      "test": "test_concurrency.py",
+      "why": "The owner rejected R6 as written (public def.checks/checks exempt from projection). Under the corrected contract R6, public def.checks are projected like every public string; the exact argv stays in the local overlay. Commit ecdb9dc changed test_concurrency.ConcurrentCommands.test_check_attachment_is_not_lost_during_another_run to expect def.checks == [portable_argv([sys.executable, '-c', 'pass'])] for the rejected exemption; correct that expectation prospectively (a new change, ecdb9dc stays in history) to the public projection of the recorded portable argv, as 6431d3f had it: [public_projection(portable_argv([sys.executable, '-c', 'pass']), str(project))[0]]; and, if this test can read the raw value without changing the engine (load_state of the run directory), also assert the merged raw def.checks equals portable_argv([...]) exactly. Change only this test; the F1/F2 fixture amendment otherwise stands. It passes against today's engine (which projects checks).",
+      "by": "session"
+    }
+  ],
+  "touched_by_provider": [
+    "test_concurrency.py"
+  ],
+  "performed_by": {
+    "provider": "command",
+    "argv": [
+      "python3",
+      "{plugin:hacheong}/worker.py",
+      "--member",
+      "teujip",
+      "--request",
+      "{request}",
+      "--response",
+      "{response}",
+      "--host",
+      "claude"
+    ],
+    "host": "claude-code",
+    "model": "claude-opus-5-5",
+    "turns": 8,
+    "cost_usd": 0.21599640000000003,
+    "versions": {
+      "used": {
+        "hacheong": "1.12.1",
+        "chongdae": "1.24.0"
+      }
+    },
+    "trace": {
+      "changed": [],
+      "commands-run": 6,
+      "commands-failed": 0
+    }
+  },
+  "checks": [],
+  "attempts": [
+    {
+      "status": "done",
+      "summary": "I fixed the test setup in all 13 disputed tests, changing only test_chongdae.py and test_concurrency.py. No hook, engine or normalizer code changed, and no hook assertion was weakened.\n\nF1 (the 7 hook tests): the shared `hook()` helper now builds its env with a new `session_env(**env)`. That function copies os.environ, applies the given keys and removes any key passed as None. Each hook call in the seven tests now passes `**NORMAL_SESSION` (`{\"AGENT_WORKER\": None}`). The direct session_start subprocess in test_performed_by_is_recorded_like_an_author_line gets `env=session_env(**NORMAL_SESSION)`. The worker-suppression asserts still set `AGENT_WORKER=\"1\"` themselves, and os.environ is never cleared. Other tests call `hook()` exactly as before, so they behave the same.\n\nF2 (the 6 command expectations): each expectation now builds the form the engine actually records instead of the raw sys.executable:\n- writer, quibble and verifier requests and records: `chongdae.portable_argv(...)`, or `shlex.join(portable_argv(...))` where the record holds a joined string.\n- `did` records: a new `did_command(argv, target)`. It joins `neutral_path` of each argument and runs `public_projection` over the result. That is how `cmd_did` writes them: `outside_argv` uses `neutral_path`, so a `/tmp` interpreter becomes `'<tmp>'`, not just a `~` path.\n- the concurrency public task file: `public_projection(portable_argv(...), project)`. test_concurrency.py now imports chongdae from beside the engine to do this.\n\nVerified with `<tmp>/cd-selfhost/run_selected.py`: all 13 pass in all four combinations — with ~/.local/bin/python3.11 (under HOME) and with <tmp>/cd-py311/bin/python3 (outside HOME), each with AGENT_WORKER=1 and without it.\n\nThe request's checks pass: test_public_projection.py, test_record_transactions.py and test_state_recovery.py exit 0, and the prior-work hash check lists no changed files. The full test_concurrency.py passes.\n\nThe full test_chongdae.py has 1 failure, which was already there: test_a_landed_worktree_run_records_the_merge_commit fails with `FileNotFoundError: '<tmp>'`. It fails the same way with the unamended HEAD test file, run from a copy outside the tree. It is the projected worktree-main close lock that this goal's projection contract is meant to fix, so I left it alone.",
+      "tests": [
+        "test_chongdae.py",
+        "test_concurrency.py"
+      ],
+      "covers": [
+        {
+          "section": "F1",
+          "tests": [
+            "test_hooks_and_engine_anchor_to_the_project_not_the_shells_directory",
+            "test_operation_words_are_report_hints_and_a_bash_operation_gets_a_did_nudge",
+            "test_performed_by_is_recorded_like_an_author_line",
+            "test_session_run_tasks_added_as_the_work_goes_claims_and_the_write_hook",
+            "test_session_start_under_hunsus_probe_says_its_standing_text_not_one_state",
+            "test_the_session_start_and_close_say_unpushed_commits_and_no_upstream",
+            "test_the_session_start_line_counts_open_tasks_by_the_rule_run_uses"
+          ]
+        },
+        {
+          "section": "F2",
+          "tests": [
+            "test_a_disputed_contract_test_goes_back_to_its_writer_and_the_build_goes_out_again",
+            "test_a_quibble_task_is_sent_a_review_shaped_request_not_its_own_empty_checks",
+            "test_a_verifier_finding_whose_quote_is_not_where_it_says_is_overruled_and_the_work_is_not_resent",
+            "test_did_keeps_a_script_outside_the_project_a_sensible_subject_a_meaningful_tail_and_a_batch_as_one_judgment",
+            "test_did_runs_one_operation_records_it_whatever_the_exit_and_report_lists_it",
+            "test_concurrency.ConcurrentCommands.test_check_attachment_is_not_lost_during_another_run"
+          ]
+        }
+      ],
+      "non-claims": [
+        "As the amendment expects, the corrected tests pass now; none of them is red before a build.",
+        "These test names do not contain the section id (F1/F2): the amendment names existing tests, and renaming them would change other tests' identity. So a check cannot select them by section id, only by name.",
+        "The F2 expectations are built with the engine's own helpers (portable_argv, neutral_path, public_projection), as the brief allows. So they check that the recorded command matches that projection of the given argv. They cannot catch a bug inside those helpers; test_public_projection.py covers that.",
+        "test_chongdae.py::test_a_landed_worktree_run_records_the_merge_commit fails (FileNotFoundError '<tmp>') both with and without this amendment, outside HOME with AGENT_WORKER=1. It is not one of the 13 and was not changed.",
+        "Checked only on macOS with Python 3.11 (~/.local/bin/python3.11 and the <tmp>/cd-py311 link); not on Windows or another Python version."
+      ],
+      "worker": {
+        "host": "claude-code",
+        "model": "claude-opus-5-5",
+        "turns": 30,
+        "cost_usd": 1.0651176
+      },
+      "reopened": {
+        "by": {
+          "agent": "claude-code claude-opus-5-5"
+        },
+        "why": "Contract R6 (added after this amendment): a task's checks (def.checks, checks) are executable argv and keep the portable form portable_argv gives them at add; the narrow projection does not apply to them. test_concurrency.ConcurrentCommands.test_check_attachment_is_not_lost_during_another_run now expects def.checks == [public_projection(portable_argv([sys.executable, '-c', 'pass']), project)[0]]; under R6 the expected public form is [portable_argv([sys.executable, '-c', 'pass'])]. The two differ when the interpreter's path is under a temporary directory (<tmp>/cd-py311/bin/python3 gives '<tmp>' today but must stay the path). Change only that expectation; the F1/F2 amendment otherwise stands. It may fail before privacy-build-2 is built (today's engine still projects checks).",
+        "disputed": "tests disputed by privacy-build-2",
+        "at": "2026-10-30T10:14:38+00:00",
+        "chongdae": "chongdae 1.24.0"
+      },
+      "disputed-tests": [
+        {
+          "test": "test_concurrency.py",
+          "why": "Contract R6 (added after this amendment): a task's checks (def.checks, checks) are executable argv and keep the portable form portable_argv gives them at add; the narrow projection does not apply to them. test_concurrency.ConcurrentCommands.test_check_attachment_is_not_lost_during_another_run now expects def.checks == [public_projection(portable_argv([sys.executable, '-c', 'pass']), project)[0]]; under R6 the expected public form is [portable_argv([sys.executable, '-c', 'pass'])]. The two differ when the interpreter's path is under a temporary directory (<tmp>/cd-py311/bin/python3 gives '<tmp>' today but must stay the path). Change only that expectation; the F1/F2 amendment otherwise stands. It may fail before privacy-build-2 is built (today's engine still projects checks).",
+          "by": "session"
+        }
+      ],
+      "answered": {
+        "at": "2026-10-30T10:07:59+00:00",
+        "chongdae": "chongdae 1.24.0"
+      },
+      "done": {
+        "at": "2026-10-30T10:08:00+00:00",
+        "chongdae": "chongdae 1.24.0"
+      },
+      "touched": [
+        "test_chongdae.py",
+        "test_concurrency.py"
+      ]
+    },
+    {
+      "status": "done",
+      "summary": "I changed the one disputed expectation and left the rest of the earlier F1/F2 amendment as it was. The fix is correct by R6, but the test still fails on today's engine when the interpreter is under /tmp, which is what the dispute predicted.\n\nThe disputed check is test_concurrency.ConcurrentCommands.test_check_attachment_is_not_lost_during_another_run. It used to expect `def.checks == [public_projection(portable_argv([sys.executable, '-c', 'pass']), project)[0]]`. It now expects `def.checks == [portable_argv([sys.executable, '-c', 'pass'])]`. The test was wrong and the builder read the contract correctly. R6 says a task's checks \"are not narrowed by the projection: they keep the portable form portable_argv gives them when the task is added\". Nothing else in either file changed; the diff is two lines in test_concurrency.py.\n\nI ran it with <tmp>/cd-selfhost/run_selected.py, with <tmp>/cd-py311/bin on PATH, with AGENT_WORKER=1 and without it:\n- **~/.local/bin/python3.11 (under HOME):** passes.\n- **<tmp>/cd-py311/bin/python3 (outside HOME):** fails. It expects `[['<tmp>/cd-py311/bin/python3', '-c', 'pass']]`, but today's engine still applies the narrow projection to checks. It should pass once privacy-build-2 is built.",
+      "tests": [
+        "test_concurrency.py"
+      ],
+      "covers": [
+        {
+          "section": "R6",
+          "tests": [
+            "test_concurrency.ConcurrentCommands.test_check_attachment_is_not_lost_during_another_run"
+          ]
+        },
+        {
+          "section": "F",
+          "tests": [
+            "test_concurrency.ConcurrentCommands.test_check_attachment_is_not_lost_during_another_run"
+          ]
+        }
+      ],
+      "non-claims": [
+        "The builder's dispute is correct and the test was wrong. R6 says: \"A task's checks ... are not narrowed by the projection: they keep the portable form portable_argv gives them when the task is added\". The expectation now follows that sentence.",
+        "The corrected test fails on today's engine when the interpreter is outside HOME (<tmp>/cd-py311/bin/python3), because the engine still narrows checks. It passes under ~/.local/bin/python3.11, where there is no temp prefix to tell the two forms apart.",
+        "The test name does not contain the section id (R6/F). It is an existing test, so a check selects it by name.",
+        "The expectation is built with the engine's own portable_argv, so it cannot catch a bug inside portable_argv itself.",
+        "I did not re-run the other 12 tests from the earlier amendment; they were not changed in this pass."
+      ],
+      "worker": {
+        "host": "claude-code",
+        "model": "claude-opus-5-5",
+        "turns": 8,
+        "cost_usd": 0.1925626
+      },
+      "reopened": {
+        "by": {
+          "agent": "claude-code claude-opus-5-5"
+        },
+        "why": "The owner rejected R6 as written (public def.checks/checks exempt from projection). Under the corrected contract R6, public def.checks are projected like every public string; the exact argv stays in the local overlay. Commit ecdb9dc changed test_concurrency.ConcurrentCommands.test_check_attachment_is_not_lost_during_another_run to expect def.checks == [portable_argv([sys.executable, '-c', 'pass'])] for the rejected exemption; correct that expectation prospectively (a new change, ecdb9dc stays in history) to the public projection of the recorded portable argv, as 6431d3f had it: [public_projection(portable_argv([sys.executable, '-c', 'pass']), str(project))[0]]; and, if this test can read the raw value without changing the engine (load_state of the run directory), also assert the merged raw def.checks equals portable_argv([...]) exactly. Change only this test; the F1/F2 fixture amendment otherwise stands. It passes against today's engine (which projects checks).",
+        "disputed": "tests disputed by privacy-build-3",
+        "at": "2026-10-30T10:20:48+00:00",
+        "chongdae": "chongdae 1.24.0"
+      },
+      "disputed-tests": [
+        {
+          "test": "test_concurrency.py",
+          "why": "The owner rejected R6 as written (public def.checks/checks exempt from projection). Under the corrected contract R6, public def.checks are projected like every public string; the exact argv stays in the local overlay. Commit ecdb9dc changed test_concurrency.ConcurrentCommands.test_check_attachment_is_not_lost_during_another_run to expect def.checks == [portable_argv([sys.executable, '-c', 'pass'])] for the rejected exemption; correct that expectation prospectively (a new change, ecdb9dc stays in history) to the public projection of the recorded portable argv, as 6431d3f had it: [public_projection(portable_argv([sys.executable, '-c', 'pass']), str(project))[0]]; and, if this test can read the raw value without changing the engine (load_state of the run directory), also assert the merged raw def.checks equals portable_argv([...]) exactly. Change only this test; the F1/F2 fixture amendment otherwise stands. It passes against today's engine (which projects checks).",
+          "by": "session"
+        }
+      ],
+      "answered": {
+        "at": "2026-10-30T10:15:17+00:00",
+        "chongdae": "chongdae 1.24.0"
+      },
+      "done": {
+        "at": "2026-10-30T10:15:17+00:00",
+        "chongdae": "chongdae 1.24.0"
+      },
+      "touched": [
+        "test_chongdae.py",
+        "test_concurrency.py"
+      ]
+    }
+  ],
+  "response": {
+    "status": "done",
+    "summary": "I changed the one disputed test, and it now passes on today's engine in all four setups I ran.\n\nThe test is test_concurrency.ConcurrentCommands.test_check_attachment_is_not_lost_during_another_run. Only that test changed, and only in test_concurrency.py. The rest of the F1/F2 amendment and the engine are untouched.\n\n- **The public check:** the public task file must hold the projected form of the recorded command, `[public_projection(portable_argv([sys.executable, '-c', 'pass']), str(project))[0]]`. That is what 6431d3f had, and it follows the corrected R6: public checks are projected like every other public string.\n- **The local check:** the test also reads the merged state with `chongdae.load_state(<run dir>)`, which needs no engine change. It asserts that the merged `def.checks` there equals `[portable_argv([...])]` exactly, so the exact command is still kept in the local overlay.\n\nI ran it through <tmp>/cd-selfhost/run_selected.py, with <tmp>/cd-py311/bin on PATH:\n- **~/.local/bin/python3.11 (under HOME):** passes with AGENT_WORKER=1 and with AGENT_WORKER set to empty.\n- **<tmp>/cd-py311/bin/python3 (outside HOME):** passes with both settings. Here the public form (`'<tmp>'`) and the local form (the real path) differ, so both checks are actually tested.\n- **Whole file:** with AGENT_WORKER unset, under <tmp>/cd-py311/bin/python3, all 5 tests in test_concurrency.py pass.\n\nCommit ecdb9dc is left in history. I made no commit.",
+    "tests": [
+      "test_concurrency.py"
+    ],
+    "covers": [
+      {
+        "section": "R6",
+        "tests": [
+          "test_concurrency.ConcurrentCommands.test_check_attachment_is_not_lost_during_another_run"
+        ]
+      },
+      {
+        "section": "F",
+        "tests": [
+          "test_concurrency.ConcurrentCommands.test_check_attachment_is_not_lost_during_another_run"
+        ]
+      }
+    ],
+    "non-claims": [
+      "As the amendment expects, the corrected test passes on today's engine, so it is not red before a build.",
+      "The test name does not contain the section id (R6/F); it is an existing test that a check selects by name.",
+      "Both expected values are built with the engine's own portable_argv and public_projection, so the test cannot catch a bug inside those helpers.",
+      "The raw-value check goes through chongdae.load_state, which merges local/tasks/b.json over the public file. It checks the merged view, not which file the exact argv sits in.",
+      "I did not re-run the other 12 tests from the first amendment; they were not changed in this pass.",
+      "The 'without AGENT_WORKER' runs through run_selected.py set AGENT_WORKER to empty; the whole-file run had it fully unset. Checked on macOS with Python 3.11 only."
+    ],
+    "worker": {
+      "host": "claude-code",
+      "model": "claude-opus-5-5",
+      "turns": 8,
+      "cost_usd": 0.21599640000000003
+    }
+  },
+  "answered": {
+    "at": "2026-10-30T10:21:32+00:00",
+    "chongdae": "chongdae 1.24.0"
+  },
+  "touched": [
+    "test_chongdae.py",
+    "test_concurrency.py"
+  ],
+  "done": {
+    "at": "2026-10-30T10:21:32+00:00",
+    "chongdae": "chongdae 1.24.0"
+  },
+  "seen-non-claims": {
+    "by": "verifier of markdown-build",
+    "texts": [
+      "(provider) As the amendment expects, the corrected tests pass now; none of them is red before a build.",
+      "(provider) These test names do not contain the section id (F1/F2): the amendment names existing tests, and renaming them would change other tests' identity. So a check cannot select them by section id, only by name.",
+      "(provider) The F2 expectations are built with the engine's own helpers (portable_argv, neutral_path, public_projection), as the brief allows. So they check that the recorded command matches that projection of the given argv. They cannot catch a bug inside those helpers; test_public_projection.py covers that.",
+      "(provider) test_chongdae.py::test_a_landed_worktree_run_records_the_merge_commit fails (FileNotFoundError '<tmp>') both with and without this amendment, outside HOME with AGENT_WORKER=1. It is not one of the 13 and was not changed.",
+      "(provider) Checked only on macOS with Python 3.11 (~/.local/bin/python3.11 and the <tmp>/cd-py311 link); not on Windows or another Python version.",
+      "(provider) The builder's dispute is correct and the test was wrong. R6 says: \"A task's checks ... are not narrowed by the projection: they keep the portable form portable_argv gives them when the task is added\". The expectation now follows that sentence.",
+      "(provider) The corrected test fails on today's engine when the interpreter is outside HOME (<tmp>/cd-py311/bin/python3), because the engine still narrows checks. It passes under ~/.local/bin/python3.11, where there is no temp prefix to tell the two forms apart.",
+      "(provider) The test name does not contain the section id (R6/F). It is an existing test, so a check selects it by name.",
+      "(provider) The expectation is built with the engine's own portable_argv, so it cannot catch a bug inside portable_argv itself.",
+      "(provider) I did not re-run the other 12 tests from the earlier amendment; they were not changed in this pass.",
+      "(provider) As the amendment expects, the corrected test passes on today's engine, so it is not red before a build.",
+      "(provider) The test name does not contain the section id (R6/F); it is an existing test that a check selects by name.",
+      "(provider) Both expected values are built with the engine's own portable_argv and public_projection, so the test cannot catch a bug inside those helpers.",
+      "(provider) The raw-value check goes through chongdae.load_state, which merges local/tasks/b.json over the public file. It checks the merged view, not which file the exact argv sits in.",
+      "(provider) I did not re-run the other 12 tests from the first amendment; they were not changed in this pass.",
+      "(provider) The 'without AGENT_WORKER' runs through run_selected.py set AGENT_WORKER to empty; the whole-file run had it fully unset. Checked on macOS with Python 3.11 only."
+    ],
+    "at": "2026-10-30T11:36:00+00:00",
+    "chongdae": "chongdae 1.24.0"
+  }
+}

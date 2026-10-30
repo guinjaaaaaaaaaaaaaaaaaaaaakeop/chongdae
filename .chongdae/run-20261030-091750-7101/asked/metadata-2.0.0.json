@@ -1,0 +1,32 @@
+{
+  "artifact-type": "chongdae/request@1",
+  "written_by": "chongdae 1.24.0",
+  "stage": "build",
+  "run": "run-20261030-091750-7101",
+  "task": "metadata-2.0.0",
+  "role": "implementer",
+  "target": ".",
+  "goal": "Privacy follow-up and fixture isolation (owner-authorized; new work): first isolate test fixtures (seven normal-parent hook tests that inherit a worker's AGENT_WORKER, six expectations that miss portable command paths) through a disputed-tests amendment by the lock's Claude tests writer; then one bounded contract for the public projection (left boundaries for every prefix, backslash host paths within a stated platform limit, refusal of machine-path keys, the projected worktree-main close lock and raw CLI reload) with Claude tests, a Codex build and the Claude verifier; then adopt the earlier authorized README/Python-floor/AGENTS/CLAUDE work with its provenance and document the major-version rule and the public/local split. commit-records stays false; no version bump, push, release, cache change or history rewrite.",
+  "brief": "Prepare the UNPUBLISHED 2.0.0 candidate metadata (owner-authorized; no push, install or release). Set version to exactly \"2.0.0\" in the existing five fields and nowhere else: plugin.json version, .claude-plugin/plugin.json version, .codex-plugin/plugin.json version, and in .claude-plugin/marketplace.json both metadata.version and the chongdae entry's plugins[].version. Major because the Python floor rises to >=3.11 (dropping 3.9/3.10; README's versioning now classifies dropping a Python or host version as major). Keep engines.python \">=3.11\" in all three manifests. .agents/plugins/marketplace.json has no version field: do not add one; leave it unchanged (it names chongdae with local source ./). Change nothing else in these files (no reformatting) and no other file: runtime, tests and docs are frozen at the current commit (a check compares them). Do not commit.",
+  "closes": [],
+  "contract": {},
+  "checks": [
+    [
+      "python3",
+      "<tmp>"
+    ],
+    [
+      "git",
+      "diff",
+      "--check",
+      "--",
+      "plugin.json",
+      ".claude-plugin/plugin.json",
+      ".codex-plugin/plugin.json",
+      ".claude-plugin/marketplace.json"
+    ]
+  ],
+  "tests": [],
+  "domain": "code",
+  "response": "./.chongdae/run-20261030-091750-7101/local/metadata-2.0.0.response.json"
+}

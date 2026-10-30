@@ -1,0 +1,157 @@
+{
+  "artifact-type": "dwitbuk/review@1",
+  "id": "review-20261030-181048-64f0",
+  "since": "e0757d39419999292c1532907f92b41f96e27524",
+  "head": "2e9114a4e3fc84f13d39c5dd055bf4a9f8dd0ac5",
+  "findings": [
+    {
+      "kind": "unreviewed",
+      "where": "hunsu.json resolutions['building a slice']",
+      "text": "applied from the judge's proposal, marked reviewed: false — `hunsu policy` shows the conflict a person judges",
+      "standing": true,
+      "reporter": "hunsu",
+      "layer": "objection",
+      "first-seen": "review-20261030-161758-45ac"
+    },
+    {
+      "kind": "unreviewed",
+      "where": "hunsu.json resolutions['reviewing, disputing or trying a change']",
+      "text": "applied from the judge's proposal, marked reviewed: false — `hunsu policy` shows the conflict a person judges",
+      "standing": true,
+      "reporter": "hunsu",
+      "layer": "objection",
+      "first-seen": "review-20261030-161758-45ac"
+    },
+    {
+      "kind": "unreviewed",
+      "where": "hunsu.json resolutions['a decision waiting on the person']",
+      "text": "applied from the judge's proposal, marked reviewed: false — `hunsu policy` shows the conflict a person judges",
+      "standing": true,
+      "reporter": "hunsu",
+      "layer": "objection",
+      "first-seen": "review-20261030-161758-45ac"
+    },
+    {
+      "kind": "unreviewed",
+      "where": "hunsu.json resolutions['asking what happened or what is open']",
+      "text": "applied from the judge's proposal, marked reviewed: false — `hunsu policy` shows the conflict a person judges",
+      "standing": true,
+      "reporter": "hunsu",
+      "layer": "objection",
+      "first-seen": "review-20261030-161758-45ac"
+    },
+    {
+      "kind": "unreviewed",
+      "where": "hunsu.json resolutions['before a merge']",
+      "text": "applied from the judge's proposal, marked reviewed: false — `hunsu policy` shows the conflict a person judges",
+      "standing": true,
+      "reporter": "hunsu",
+      "layer": "objection",
+      "first-seen": "review-20261030-161758-45ac"
+    },
+    {
+      "kind": "self-performed",
+      "where": "run-20261030-072306-0176/contain-records",
+      "text": "the session did this itself instead of the lock's implementer (decided by the session (claude-code claude-opus-5-5)): Containment, not a build: one key in this machine's ignored overlay (hunsu.local.json settings.chongdae.commit-records: false, the released engine's documented setting, chongdae.py commit_record) so the records the released 1.24.0 engine writes during this repair, which may carry unprojected worker answers, stay on this machine instead of entering git. The owner asked for it under a recorded environment task; no implementer is hired for an overlay edit. It bypasses no guard or permission: records are still written and recovered, only not committed.",
+      "layer": "observation"
+    },
+    {
+      "kind": "verifier-reject",
+      "where": "run-20261030-072306-0176/projection-build attempt 1: contract.P3 vs chongdae.py:7357 (close command lock) with chongdae.py:4859",
+      "text": "plan-vs-code: `state[\"worktree\"][\"main\"]` is the absolute main checkout (`os.path.abspath(args.target)`, line 4859). The worktree's project root is `<main>/.chongdae/wt/<run>`, and the main checkout is not under that root. So save_state now projects `main` in the public state.json to `~/...` or `<tmp>`, and only the raw value goes to the new local/state.json overlay. The close path at 7357 still reads the public state.json with `load()`, not `load_state()`. It gets the projected string, so `os.path.realpath(main) != os.path.realpath(args.target)` is always true, and `CommandLock(main)` locks a path relative to the cwd (`~/...` or `<tmp>`) instead of the destination checkout. The guard that serializes the destination checkout during close now reads the projection, not the raw view. — record: “`validation, result consumption, verifier-quote checks, recovery, task ownership (`added-in`, lease keys) and generation guards keep reading that merged raw view`” — tree: “`main = (load(os.path.join(d, \"state.json\")).get(\"worktree\") or {}).get(\"main\") if d else None`” (a later attempt was accepted by the verifier)",
+      "layer": "observation"
+    },
+    {
+      "kind": "verifier-reject",
+      "where": "run-20261030-072306-0176/projection-build attempt 1: touched / tree: <tmp>/.chongdae/local/command.lock",
+      "text": "anomaly: This is the visible symptom of the finding above. A literal `<tmp>` directory with a `.chongdae/local/command.lock` appeared in the checkout (git status: `?? <tmp>/`). That is what `CommandLock(\"<tmp>\")` creates when a worktree close test, whose main checkout is in a temp directory, reads the projected `worktree.main` from public state.json. The projection broke a consumer of the record and left a stray artifact in the tree. — record: “” — tree: “`+++ <tmp>/.chongdae/local/command.lock (new file)`” (a later attempt was accepted by the verifier)",
+      "layer": "observation"
+    },
+    {
+      "kind": "verifier-reject",
+      "where": "run-20261030-072306-0176/projection-build attempt 1: built.summary",
+      "text": "record-vs-tree: The builder reports a change to chongdae.py only, but the touched set also has a new `<tmp>/.chongdae/local/command.lock` in the checkout. The builder's change caused it (see the first finding), and the report does not mention it. — record: “`Implemented public path projections and exact raw overlays in chongdae.py only, preserving transactional recovery and unchanged legacy records.`” — tree: “`+++ <tmp>/.chongdae/local/command.lock (new file)`” (a later attempt was accepted by the verifier)",
+      "layer": "observation"
+    },
+    {
+      "kind": "self-performed",
+      "where": "run-20261030-072306-0176/projection-fix-rel",
+      "text": "the session did this itself instead of the lock's implementer (decided by the session (claude-code claude-opus-5-5)): The hired builder (hacheong dakdol on codex) wrote P2-rel in chongdae.py in its first attempt and kept it unchanged in the second, then stopped blocked only because its sandbox sets AGENT_WORKER=1, which silences hooks, so seven hook tests of the full suite fail there whatever the change (seen in every build attempt of this run; the same suite passed as chongdae ran it for projection-build). The code in the tree is the builder's; the session writes none. It takes the task only so chongdae runs the task's own checks outside the worker sandbox, followed by the lock's verifier.",
+      "layer": "observation"
+    },
+    {
+      "kind": "session-judged",
+      "where": "run-20261030-072306-0176/projection-fix-rel",
+      "text": "take decided by the session (claude-code claude-opus-5-5), not a person: The hired builder (hacheong dakdol on codex) wrote P2-rel in chongdae.py in its first attempt and kept it unchanged in the second, then stopped blocked only because its sandbox sets AGENT_WORKER=1, which silences hooks, so seven hook tests of the full suite fail there whatever the change (seen in every build attempt of this run; the same suite passed as chongdae ran it for projection-build). The code in the tree is the builder's; the session writes none. It takes the task only so chongdae runs the task's own checks outside the worker sandbox, followed by the lock's verifier.",
+      "layer": "observation"
+    },
+    {
+      "kind": "session-judged",
+      "where": "run-20261030-072306-0176/projection-fix-rel",
+      "text": "retry after attempt 2 decided by the session (claude-code claude-opus-5-5), not a person: The hired builder (hacheong dakdol on codex) wrote P2-rel in chongdae.py in its first attempt and kept it unchanged in the second, then stopped blocked only because its sandbox sets AGENT_WORKER=1, which silences hooks, so seven hook tests of the full suite fail there whatever the change (seen in every build attempt of this run; the same suite passed as chongdae ran it for projection-build). The code in the tree is the builder's; the session writes none. It takes the task only so chongdae runs the task's own checks outside the worker sandbox, followed by the lock's verifier.",
+      "layer": "observation"
+    },
+    {
+      "kind": "seen-non-claims",
+      "where": "run-20261030-065818-2049/selfhosting-doc (2), run-20261030-072306-0176/projection-build (3), run-20261030-072306-0176/projection-tests (7), run-20261030-072306-0176/projection-tests-rel (6)",
+      "text": "18 provider non-claim(s) went to the verifier with the work and it accepted — read there, said here, not charged; each stays in its task's `non-claims`",
+      "layer": "observation"
+    },
+    {
+      "kind": "outside-run",
+      "where": "AGENTS.md, CLAUDE.md, README.md, plugin.json",
+      "text": "4 file(s) changed since e0757d39419999292c1532907f92b41f96e27524; no completed run recorded touching them",
+      "layer": "objection",
+      "first-seen": "review-20261030-161758-45ac"
+    },
+    {
+      "kind": "outside-run",
+      "where": ".claude-plugin/plugin.json",
+      "text": "1 file(s) changed since e0757d39419999292c1532907f92b41f96e27524; no completed run recorded touching them",
+      "layer": "objection",
+      "first-seen": "review-20261030-161758-45ac"
+    },
+    {
+      "kind": "non-claim",
+      "where": "run-20261030-065818-2049",
+      "text": "no session transcript here: what the session did for this task is its word alone  [task adopt-env]",
+      "layer": "objection",
+      "first-seen": "review-20261030-161758-45ac"
+    },
+    {
+      "kind": "non-claim",
+      "where": "run-20261030-065818-2049",
+      "text": "no check decides this task  [tasks: provenance-note (run-20261030-065818-2049); also in other runs: projection-tests (run-20261030-072306-0176), projection-tests-rel (run-20261030-072306-0176)]",
+      "layer": "objection",
+      "first-seen": "review-20261030-161758-45ac"
+    },
+    {
+      "kind": "non-claim",
+      "where": "run-20261030-072306-0176",
+      "text": "no check decides this task  [tasks: projection-tests (run-20261030-072306-0176), projection-tests-rel (run-20261030-072306-0176); also in other runs: provenance-note (run-20261030-065818-2049)]",
+      "layer": "observation"
+    },
+    {
+      "kind": "non-claim",
+      "where": "run-20261030-065818-2049",
+      "text": "provenance-note: done on the session's word by name (`run provenance-note`), with nothing of its own in the tree and no `did`  [task provenance-note]",
+      "layer": "objection",
+      "first-seen": "review-20261030-161758-45ac"
+    },
+    {
+      "kind": "non-claim",
+      "where": "run-20261030-072306-0176",
+      "text": "projection-fix-rel: taken over by the session from implementer: The hired builder (hacheong dakdol on codex) wrote P2-rel in chongdae.py in its first attempt and kept it unchanged in the second, then stopped blocked only because its sandbox sets AGENT_WORKER=1, which silences hooks, so seven hook tests of the full suite fail there whatever the change (seen in every build attempt of this run  [task projection-fix-rel]",
+      "layer": "objection"
+    },
+    {
+      "kind": "unchanged",
+      "layer": "observation",
+      "where": "1 earlier review(s)",
+      "seen-in": [
+        "review-20261030-161758-45ac"
+      ],
+      "text": "3 observation(s) written in full in 1 earlier review(s) and unchanged since (self-performed 1, session-judged 1, verifier-non-claim 1)"
+    }
+  ]
+}

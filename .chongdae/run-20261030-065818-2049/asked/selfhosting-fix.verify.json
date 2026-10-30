@@ -1,0 +1,85 @@
+{
+  "artifact-type": "chongdae/request@1",
+  "written_by": "chongdae 1.24.0",
+  "stage": "verify",
+  "run": "run-20261030-065818-2049",
+  "task": "selfhosting-fix",
+  "role": "verifier",
+  "target": ".",
+  "goal": "Self-host stage (owner-authorized): adopt the environment bootstrapped by session adedcf9a with honest provenance, and have the lock's Codex implementer write a new SELFHOSTING.md maintenance entry, reviewed by the lock's Claude verifier and the close reviewer; prior README/AGENTS/manifest edits stay outside this run; no version bump, push or release.",
+  "brief": "Correct one sentence in SELFHOSTING.md (written by the previous task, selfhosting-doc). The session's review found that line 31, \"All three must agree before the next release under the versioning policy.\", credits README#versioning with a rule it does not state: that policy requires the *version* to be equal in plugin.json, .claude-plugin/plugin.json and .codex-plugin/plugin.json (and the marketplace entries); it says nothing about the `engines.python` field. That requirement came from the session's own brief, not the implementer's, and the wording is the session's error. Reword that sentence so it no longer attributes it to the versioning policy: say plainly that the `engines.python` values in the three source manifests should be aligned before the next release. Keep the preceding facts (HEAD plugin.json and HEAD .claude-plugin/plugin.json say >=3.9; HEAD .codex-plugin/plugin.json says >=3.11). Change nothing else in the file except what that sentence needs; change no other file; do not commit. Doc-only correction: no tests writer.",
+  "closes": [],
+  "contract": {},
+  "checks": [
+    [
+      "python3",
+      "-c",
+      "import sys; t=open(\"SELFHOSTING.md\",encoding=\"utf-8\").read(); assert \"under the versioning policy\" not in t, \"the sentence still credits the versioning policy\"; assert \">=3.9\" in t and \">=3.11\" in t; print(\"engines sentence no longer credits the versioning policy\")"
+    ],
+    [
+      "python3",
+      "-c",
+      "import hashlib,json,os,re,subprocess,sys\np=sys.argv[1] if len(sys.argv)>1 else \"SELFHOSTING.md\"\nt=open(p,encoding=\"utf-8\").read(); L=t.split(\"\\n\"); bad=[]\nif not t.endswith(\"\\n\"): bad.append(\"no final newline\")\nif len(L)-1>90: bad.append(\"longer than 90 lines: %d\"%(len(L)-1))\nbad+=[\"trailing whitespace on line %d\"%(i+1) for i,x in enumerate(L) if x!=x.rstrip()]\nif re.search(r\"/Users/|/home/|~/\\.claude/plugins/cache/\\w\",t): bad.append(\"a machine path\")\ndef slugs(text):\n  out=set(); fence=False\n  for x in text.split(\"\\n\"):\n    if x.startswith(\"```\"): fence=not fence\n    m=None if fence else re.match(r\"#+ (.*)\",x)\n    if m: out.add(re.sub(r\"[^\\w\\- ]\",\"\",m.group(1).strip().lower()).replace(\" \",\"-\"))\n  return out\nfor href in re.findall(r\"\\]\\(([^)\\s]+)\\)\",t):\n  if re.match(r\"[a-z]+:\",href): continue\n  f,_,a=href.partition(\"#\"); f=f or p\n  if not os.path.exists(f): bad.append(\"link target missing: \"+href); continue\n  if a and a not in slugs(open(f,encoding=\"utf-8\").read()): bad.append(\"anchor missing: \"+href); continue\n  head=subprocess.run([\"git\",\"show\",\"HEAD:\"+f],capture_output=True,text=True)\n  if a and head.returncode==0 and a not in slugs(head.stdout): bad.append(\"anchor not in the committed \"+f+\": \"+href)\nfor f in (\"AGENTS.md\",\"README.md\",\"hunsu.json\",\"hunsu.lock.json\",\"skills/run/SKILL.md\"):\n  if \"](\"+f not in t: bad.append(\"no link to \"+f)\nl=json.load(open(\"hunsu.lock.json\"))\nfor n,v in l[\"plugins\"].items():\n  if not re.search(re.escape(n)+r\"\\W{1,6}\"+re.escape(v[\"version\"]),t): bad.append(\"locked version not stated: %s %s\"%(n,v[\"version\"]))\nfor w in (\">=3.11\",\"N+1\",\"AGENT_HOST=claude-code\",\"CODEX_THREAD_ID\",\".codex-marketplace-install.json\",\"init --session\",\"dakdol\",\"teujip\",\"sibi\",\"chojja\",\"eyes_worker\",\"dwitbuk review\",\"mangsang impact\"):\n  if w not in t: bad.append(\"not stated: \"+w)\nH={\"README.md\":\"d01d1749a82bc3c5e7b925675ea93f665228cc088cb023ba4c91e90157143bb4\",\"AGENTS.md\":\"7cfa2f4f340c630b5f9116ce27d538cb171dc40568771e391431c6e4e697ab92\",\"CLAUDE.md\":\"336cc4fbf19beaada7ccf9986414fa91851a8d7a07dfb3ccbe800a69eed0ab49\",\"plugin.json\":\"f8a8278aa60671c5b196c1a14fbed7540a9acf4458fce6777adaecad666aaf5f\",\".claude-plugin/plugin.json\":\"a20161f0e7cc5d29e7ed9192a14af3dee4d6cfa6de3f3dfe4af0a33041d8b52e\",\".codex-plugin/plugin.json\":\"954eed1d9957ce9108dd01d32cb454d7aa6999c560e08336e468d1279556f8f6\",\".claude-plugin/marketplace.json\":\"af3eb1f0517e2721a0bf2a13b33e12539ce2092095d723d2ae65a4c71548bcb9\",\"skills/run/SKILL.md\":\"da92b1d52a3ceecc71188e5356aa8c210475eb7b77f497eb755320422cc028b7\"}\nfor f,h in H.items():\n  if hashlib.sha256(open(f,\"rb\").read()).hexdigest()!=h: bad.append(\"prior work changed: \"+f)\nassert not bad, bad\nprint(\"%s: %d lines; links and anchors resolve (README anchors also in HEAD); locked versions, role members, Codex limits stated; prior edits unchanged\"%(p,len(L)-1))"
+    ]
+  ],
+  "tests": [],
+  "response": "./.chongdae/run-20261030-065818-2049/local/selfhosting-fix.verify.response.json",
+  "touched": [
+    "SELFHOSTING.md"
+  ],
+  "built": {
+    "summary": "Corrected only the requested sentence in SELFHOSTING.md. Both supplied checks passed; no commit made.",
+    "verified": [
+      {
+        "check": "python3 -c 'import sys; t=open(\"SELFHOSTING.md\",encoding=\"utf-8\").read(); assert \"under the versioning policy\" not in t, \"the sentence still credits the versioning policy\"; assert \">=3.9\" in t and \">=3.11\" in t; print(\"engines sentence no longer credits the versioning policy\")'",
+        "exit": 0
+      },
+      {
+        "check": "python3 -c 'import hashlib,json,os,re,subprocess,sys\np=sys.argv[1] if len(sys.argv)>1 else \"SELFHOSTING.md\"\nt=open(p,encoding=\"utf-8\").read(); L=t.split(\"\\n\"); bad=[]\nif not t.endswith(\"\\n\"): bad.append(\"no final newline\")\nif len(L)-1>90: bad.append(\"longer than 90 lines: %d\"%(len(L)-1))\nbad+=[\"trailing whitespace on line %d\"%(i+1) for i,x in enumerate(L) if x!=x.rstrip()]\nif re.search(r\"/Users/|/home/|~/\\.claude/plugins/cache/\\w\",t): bad.append(\"a machine path\")\ndef slugs(text):\n  out=set(); fence=False\n  for x in text.split(\"\\n\"):\n    if x.startswith(\"```\"): fence=not fence\n    m=None if fence else re.match(r\"#+ (.*)\",x)\n    if m: out.add(re.sub(r\"[^\\w\\- ]\",\"\",m.group(1).strip().lower()).replace(\" \",\"-\"))\n  return out\nfor href in re.findall(r\"\\]\\(([^)\\s]+)\\)\",t):\n  if re.match(r\"[a-z]+:\",href): continue\n  f,_,a=href.partition(\"#\"); f=f or p\n  if not os.path.exists(f): bad.append(\"link target missing: \"+href); continue\n  if a and a not in slugs(open(f,encoding=\"utf-8\").read()): bad.append(\"anchor missing: \"+href); continue\n  head=subprocess.run([\"git\",\"show\",\"HEAD:\"+f],capture_output=True,text=True)\n  if a and head.returncode==0 and a not in slugs(head.stdout): bad.append(\"anchor not in the committed \"+f+\": \"+href)\nfor f in (\"AGENTS.md\",\"README.md\",\"hunsu.json\",\"hunsu.lock.json\",\"skills/run/SKILL.md\"):\n  if \"](\"+f not in t: bad.append(\"no link to \"+f)\nl=json.load(open(\"hunsu.lock.json\"))\nfor n,v in l[\"plugins\"].items():\n  if not re.search(re.escape(n)+r\"\\W{1,6}\"+re.escape(v[\"version\"]),t): bad.append(\"locked version not stated: %s %s\"%(n,v[\"version\"]))\nfor w in (\">=3.11\",\"N+1\",\"AGENT_HOST=claude-code\",\"CODEX_THREAD_ID\",\".codex-marketplace-install.json\",\"init --session\",\"dakdol\",\"teujip\",\"sibi\",\"chojja\",\"eyes_worker\",\"dwitbuk review\",\"mangsang impact\"):\n  if w not in t: bad.append(\"not stated: \"+w)\nH={\"README.md\":\"d01d1749a82bc3c5e7b925675ea93f665228cc088cb023ba4c91e90157143bb4\",\"AGENTS.md\":\"7cfa2f4f340c630b5f9116ce27d538cb171dc40568771e391431c6e4e697ab92\",\"CLAUDE.md\":\"336cc4fbf19beaada7ccf9986414fa91851a8d7a07dfb3ccbe800a69eed0ab49\",\"plugin.json\":\"f8a8278aa60671c5b196c1a14fbed7540a9acf4458fce6777adaecad666aaf5f\",\".claude-plugin/plugin.json\":\"a20161f0e7cc5d29e7ed9192a14af3dee4d6cfa6de3f3dfe4af0a33041d8b52e\",\".codex-plugin/plugin.json\":\"954eed1d9957ce9108dd01d32cb454d7aa6999c560e08336e468d1279556f8f6\",\".claude-plugin/marketplace.json\":\"af3eb1f0517e2721a0bf2a13b33e12539ce2092095d723d2ae65a4c71548bcb9\",\"skills/run/SKILL.md\":\"da92b1d52a3ceecc71188e5356aa8c210475eb7b77f497eb755320422cc028b7\"}\nfor f,h in H.items():\n  if hashlib.sha256(open(f,\"rb\").read()).hexdigest()!=h: bad.append(\"prior work changed: \"+f)\nassert not bad, bad\nprint(\"%s: %d lines; links and anchors resolve (README anchors also in HEAD); locked versions, role members, Codex limits stated; prior edits unchanged\"%(p,len(L)-1))'",
+        "exit": 0
+      },
+      {
+        "check": "git diff --check; git diff -- SELFHOSTING.md",
+        "exit": 0
+      }
+    ],
+    "non-claims": []
+  },
+  "excluded": {
+    "record-paths": []
+  },
+  "attribution": {
+    "held-at-start": [
+      ".claude-plugin/plugin.json",
+      "plugin.json"
+    ]
+  },
+  "touched_since": [],
+  "since": {
+    ".": "595b27ae81bcad815311887518e71a1cbfcc595f"
+  },
+  "checked": [
+    {
+      "command": "python3 -c 'import sys; t=open(\"SELFHOSTING.md\",encoding=\"utf-8\").read(); assert \"under the versioning policy\" not in t, \"the sentence still credits the versioning policy\"; assert \">=3.9\" in t and \">=3.11\" in t; print(\"engines sentence no longer credits the versioning policy\")'",
+      "exit": 0,
+      "tail": [
+        "engines sentence no longer credits the versioning policy"
+      ],
+      "at": "2026-10-30T07:07:58+00:00",
+      "chongdae": "chongdae 1.24.0",
+      "source": "the task's checks, run by chongdae to decide it",
+      "changed_since": []
+    },
+    {
+      "command": "python3 -c 'import hashlib,json,os,re,subprocess,sys\np=sys.argv[1] if len(sys.argv)>1 else \"SELFHOSTING.md\"\nt=open(p,encoding=\"utf-8\").read(); L=t.split(\"\\n\"); bad=[]\nif not t.endswith(\"\\n\"): bad.append(\"no final newline\")\nif len(L)-1>90: bad.append(\"longer than 90 lines: %d\"%(len(L)-1))\nbad+=[\"trailing whitespace on line %d\"%(i+1) for i,x in enumerate(L) if x!=x.rstrip()]\nif re.search(r\"/Users/|/home/|~/\\.claude/plugins/cache/\\w\",t): bad.append(\"a machine path\")\ndef slugs(text):\n  out=set(); fence=False\n  for x in text.split(\"\\n\"):\n    if x.startswith(\"```\"): fence=not fence\n    m=None if fence else re.match(r\"#+ (.*)\",x)\n    if m: out.add(re.sub(r\"[^\\w\\- ]\",\"\",m.group(1).strip().lower()).replace(\" \",\"-\"))\n  return out\nfor href in re.findall(r\"\\]\\(([^)\\s]+)\\)\",t):\n  if re.match(r\"[a-z]+:\",href): continue\n  f,_,a=href.partition(\"#\"); f=f or p\n  if not os.path.exists(f): bad.append(\"link target missing: \"+href); continue\n  if a and a not in slugs(open(f,encoding=\"utf-8\").read()): bad.append(\"anchor missing: \"+href); continue\n  head=subprocess.run([\"git\",\"show\",\"HEAD:\"+f],capture_output=True,text=True)\n  if a and head.returncode==0 and a not in slugs(head.stdout): bad.append(\"anchor not in the committed \"+f+\": \"+href)\nfor f in (\"AGENTS.md\",\"README.md\",\"hunsu.json\",\"hunsu.lock.json\",\"skills/run/SKILL.md\"):\n  if \"](\"+f not in t: bad.append(\"no link to \"+f)\nl=json.load(open(\"hunsu.lock.json\"))\nfor n,v in l[\"plugins\"].items():\n  if not re.search(re.escape(n)+r\"\\W{1,6}\"+re.escape(v[\"version\"]),t): bad.append(\"locked version not stated: %s %s\"%(n,v[\"version\"]))\nfor w in (\">=3.11\",\"N+1\",\"AGENT_HOST=claude-code\",\"CODEX_THREAD_ID\",\".codex-marketplace-install.json\",\"init --session\",\"dakdol\",\"teujip\",\"sibi\",\"chojja\",\"eyes_worker\",\"dwitbuk review\",\"mangsang impact\"):\n  if w not in t: bad.append(\"not stated: \"+w)\nH={\"README.md\":\"d01d1749a82bc3c5e7b925675ea93f665228cc088cb023ba4c91e90157143bb4\",\"AGENTS.md\":\"7cfa2f4f340c630b5f9116ce27d538cb171dc40568771e391431c6e4e697ab92\",\"CLAUDE.md\":\"336cc4fbf19beaada7ccf9986414fa91851a8d7a07dfb3ccbe800a69eed0ab49\",\"plugin.json\":\"f8a8278aa60671c5b196c1a14fbed7540a9acf4458fce6777adaecad666aaf5f\",\".claude-plugin/plugin.json\":\"a20161f0e7cc5d29e7ed9192a14af3dee4d6cfa6de3f3dfe4af0a33041d8b52e\",\".codex-plugin/plugin.json\":\"954eed1d9957ce9108dd01d32cb454d7aa6999c560e08336e468d1279556f8f6\",\".claude-plugin/marketplace.json\":\"af3eb1f0517e2721a0bf2a13b33e12539ce2092095d723d2ae65a4c71548bcb9\",\"skills/run/SKILL.md\":\"da92b1d52a3ceecc71188e5356aa8c210475eb7b77f497eb755320422cc028b7\"}\nfor f,h in H.items():\n  if hashlib.sha256(open(f,\"rb\").read()).hexdigest()!=h: bad.append(\"prior work changed: \"+f)\nassert not bad, bad\nprint(\"%s: %d lines; links and anchors resolve (README anchors also in HEAD); locked versions, role members, Codex limits stated; prior edits unchanged\"%(p,len(L)-1))'",
+      "exit": 0,
+      "tail": [
+        "SELFHOSTING.md: 83 lines; links and anchors resolve (README anchors also in HEAD); locked versions, role members, Codex limits stated; prior edits unchanged"
+      ],
+      "at": "2026-10-30T07:07:58+00:00",
+      "chongdae": "chongdae 1.24.0",
+      "source": "the task's checks, run by chongdae to decide it",
+      "changed_since": []
+    }
+  ]
+}

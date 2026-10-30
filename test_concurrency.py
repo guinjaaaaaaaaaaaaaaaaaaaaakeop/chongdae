@@ -16,6 +16,8 @@ import unittest
 
 
 ENGINE = Path(__file__).resolve().with_name("chongdae.py")
+sys.path.insert(0, str(ENGINE.parent))
+import chongdae  # noqa: E402
 
 
 class CommandFixture(unittest.TestCase):
@@ -123,7 +125,12 @@ class ConcurrentCommands(CommandFixture):
         release.touch()
         self.finish(proc)
         self.call("add", "b", "--check", check, code=0)
-        self.assertEqual(self.task("b")["def"]["checks"], [[sys.executable, "-c", "pass"]])
+        # R6: the public record projects a check like every public string; the exact portable argv stays local.
+        portable = chongdae.portable_argv([sys.executable, "-c", "pass"])
+        public = chongdae.public_projection(portable, str(self.project))[0]
+        self.assertEqual(self.task("b")["def"]["checks"], [public])
+        run = next((self.project / ".chongdae").glob("run-*/tasks/b.json")).parent.parent
+        self.assertEqual(chongdae.load_state(str(run))["tasks"]["b"]["def"]["checks"], [portable])
 
     def test_second_run_does_not_start_a_second_verifier(self):
         ready, release, calls = (self.base / n for n in ("eyes-ready", "eyes-release", "eyes-calls"))

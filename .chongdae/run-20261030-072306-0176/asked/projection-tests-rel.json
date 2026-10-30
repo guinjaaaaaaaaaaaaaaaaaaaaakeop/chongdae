@@ -1,0 +1,84 @@
+{
+  "artifact-type": "chongdae/request@1",
+  "written_by": "chongdae 1.24.0",
+  "stage": "build",
+  "run": "run-20261030-072306-0176",
+  "task": "projection-tests-rel",
+  "role": "nitpick",
+  "target": ".",
+  "goal": "Privacy repair (owner-authorized, new work, not retroactive): chongdae's public task records leak this machine's absolute paths (jokbo run-20261030-063525-2d81: stages.newbie.response.tried[].command). Contain first with machine-local commit-records:false in a recorded environment task; then the lock's Claude tests writer and Codex builder make save_state write a path-normalized public projection while exact raw values stay in ignored local state for validation, recovery and ownership; the lock's Claude verifier checks it. No version bump, push, cache change or history rewrite; prior README/AGENTS/manifest edits and SELFHOSTING.md stay as they are.",
+  "brief": "Add tests to test_public_projection.py (only that file) that decide contract P2-rel below: name them test_P2_rel_..., cover every example in it — the relative ones unchanged and the absolute ones still <tmp> — both in a public tasks/<id>.json written by c.save_state in a <project>/.chongdae/run-<id> directory (raw values exact after c.load_state) and through c.public_projection. They must fail against the current chongdae.py (which turns src<tmp> into src<tmp>) and pass once P2-rel is built. Keep the existing 14 tests as they are.\n\nContract P2-rel (amends P2 of contract P, which says relative paths are \"unchanged byte for byte\"). The session found, after projection-build was accepted, that the narrow projection still rewrites a relative path whose segment is named like a temporary directory: `src<tmp>` becomes `src<tmp>`, `.<tmp>` becomes `.<tmp>`, `build<tmp>` becomes `build<tmp>` (the temp rules have no left boundary). P2-rel: in the public projection (public files save_state writes, and public_projection), a temporary-directory prefix — tempfile.gettempdir() and its realpath, `/tmp`, `/private/tmp`, `/var/folders` — is replaced by `<tmp>` only where it begins a path: at the start of the string, or right after whitespace, a quote, a backtick, or one of = ( [ , : ; | & >. Everywhere else it is part of another path and stays unchanged: `src<tmp>`, `.<tmp>`, `tests/fixtures<tmp>`, `build<tmp>`, `a<tmp>`. Absolute temp paths at a path start still become `<tmp>`: `<tmp>`, `see <tmp>`, `--out=<tmp>`, `('<tmp>')`, `PATH=/usr/bin:<tmp>`. Raws stay exact in the overlay as P3 says. neutral_path itself (its existing callers: portable, asked/) is not changed by P2-rel.\n\nContract P: chongdae's public run records are a path-normalized projection; the exact raw values stay in ignored local state.\n\nContext (verified by the session on this checkout, chongdae.py as released in 1.24.0): `save_state(d, state)` writes a run directory `d` (normally `<project>/.chongdae/run-<id>`): `tasks/<id>.json` (the public record, committed by `commit_record`), `local/tasks/<id>.json` (this machine's overlay of PRIVATE_KEYS; `local/` is git-ignored through `.chongdae/.gitignore`) and `state.json` (the run's own fields), all through one journal `local/state-transaction.json` (`recover_state(d)` replays a prepared generation). `load_state(d)` merges each public task with its overlay (`merge_private`). `split_private` moves only PRIVATE_KEYS (`session`, `transcript`, `commands`, `read`, ...) to the overlay, so every other string goes to the public file verbatim: a hired role's answer saved as `ts[\"stages\"][role] = {\"response\": {...}, \"by\": {...}, \"when\": \"after\"}`, a failed one as `ts[\"stages\"][role][\"failed\"] = [{\"response\": {...}, \"by\": {...}, \"when\": ...}]`, a builder's `ts[\"response\"]`, earlier answers in `ts[\"attempts\"]` (a list of response-shaped dicts), the verifier's review, `summary`, findings (`{\"kind\", \"where\", \"quote\", \"why\"}`), `non-claims`. Observed leak: jokbo's committed record run-20261030-063525-2d81 tasks/environment.json holds `stages.newbie.response.tried[0].command` = \"mktemp -d <absolute project root>/newbie-environment.XXXXXX\". `neutral_path(text, target)` already states the machine-path policy that `asked/` files use (through `portable`).\n\nP1 Public files are projections. Every public JSON file save_state writes in a run directory — `tasks/<id>.json` and `state.json` — holds, for each string value at any depth (dict values and list items alike, including inside `response`, `attempts[]`, `stages.<role>.response`, `stages.<role>.failed[].response`, the review, findings, `summary`, `non-claims`), the string with this machine's path prefixes replaced: the project root (its abspath and its realpath) -> `.` (`<root>/x` -> `./x`), the home directory -> `~` (`<home>/x` -> `~/x`), a temporary directory (`tempfile.gettempdir()` and its realpath, `/tmp`, `/private/tmp`, `<tmp>`) -> `<tmp>` as neutral_path does it, and a host plugin cache path -> `<plugin:NAME@VERSION>` as neutral_path does it. The project root is the parent of the `.chongdae` directory that holds the run directory; a run directory not inside a directory named `.chongdae` has no project root, and only the other prefixes are replaced. The project root is replaced before the home and temp prefixes (a project under the home or under a temp directory becomes `.`, not `~/...` or `<tmp>`).\n\nP2 Narrow: path prefixes only. The project root and the home are replaced only where they are a whole path prefix: followed by `/`, or ending the path (end of string, whitespace, a quote, or one of ` ; | & ) , :). `<home>-old/x` and `<root>2/x` are not under the home or the root and stay unchanged. neutral_path's bare account-name rule (`<user>`) is not applied: a string that holds the account name only as a word — a `--by` signature, an author line — is unchanged. Dict keys, non-string values, relative paths (`src/a.py`, `./x`, `README.md#versioning`), quotes with no absolute machine path, and actor metadata (`host`, `model`, `agent`, `by`, `effort`, `at`) are unchanged byte for byte. PRIVATE_KEYS keep going to the overlay unprojected, as today.\n\nP3 Exact raw values stay local, in the same transaction. For every string P1 changed, the exact original stays in the run's ignored local state: the task's `local/tasks/<id>.json` overlay (for `state.json`: `local/state.json`), as a mirror `merge_private` restores, list items included (a raw string at a list index). The public file and its overlay are written in one `local/state-transaction.json` generation, so a process death between the two writes recovers both (recover_state) or neither. `load_state(d)` returns exactly what was given to `save_state` (apart from the `artifact-type`/`written_by` stamps save_state adds) — every string at any depth equal to its raw original — in this process and in a new process after a restart; validation, result consumption, verifier-quote checks, recovery, task ownership (`added-in`, lease keys) and generation guards keep reading that merged raw view.\n\nP4 Originals untouched. Files under `local/` written by or for providers — the request as sent, `<tag>.response.json`, transcripts, logs — are never rewritten or reformatted by the projection: a response file's bytes (sha256) are the same before and after its answer is consumed into the task and saved. No answer's quote, finding or field is changed to pass validation.\n\nP5 No projection-only rewrite of existing records. A public file whose raw content (the public file merged with its overlay) is unchanged by a save is not rewritten: a run written before this change, whose public task files hold absolute paths and have no raw overlay, keeps those files byte for byte when its state is loaded and saved without a change to that task. A save that changes a task writes that task's public file projected and its raws to the overlay. Old overlays (PRIVATE_KEYS only) load as before.\n\nP6 Record commits carry only the projection. With `settings.chongdae.commit-records` not false, a record commit (`commit_record(target, run_name, message)`) after a save whose task holds absolute home/project/temp paths contains the projected public file (`git show HEAD:<run>/tasks/<id>.json` holds none of those absolute paths) and nothing under `local/`.\n\nP7 A pure function for derived exports. `public_projection(obj, target)` returns `(public, raws)`: `public` is a copy of `obj` with P1/P2 applied to every string (`target` None: no project root), `raws` the mirror such that `merge_private(public, raws)` equals `obj`; it writes nothing and does not modify `obj`. save_state uses it. No CLI command, setting or record key is added.\n\nP8 Suites. `python3 test_chongdae.py` exits 0: the existing suites (test_concurrency, test_review_freshness, test_record_transactions, test_launch_recovery, test_state_recovery, test_completion_recovery, test_mutation_ownership, test_operation_recovery, test_operation_handover) unchanged and passing, and the new suite `test_public_projection` in its `loadTestsFromNames` list.",
+  "closes": [],
+  "contract": {},
+  "checks": [
+    [
+      "python3",
+      "test_public_projection.py"
+    ],
+    [
+      "python3",
+      "test_state_recovery.py"
+    ],
+    [
+      "python3",
+      "test_record_transactions.py"
+    ],
+    [
+      "python3",
+      "test_chongdae.py"
+    ],
+    [
+      "python3",
+      "-c",
+      "import hashlib,sys; H={\"README.md\":\"d01d1749a82bc3c5e7b925675ea93f665228cc088cb023ba4c91e90157143bb4\",\"AGENTS.md\":\"7cfa2f4f340c630b5f9116ce27d538cb171dc40568771e391431c6e4e697ab92\",\"CLAUDE.md\":\"336cc4fbf19beaada7ccf9986414fa91851a8d7a07dfb3ccbe800a69eed0ab49\",\"plugin.json\":\"f8a8278aa60671c5b196c1a14fbed7540a9acf4458fce6777adaecad666aaf5f\",\".claude-plugin/plugin.json\":\"a20161f0e7cc5d29e7ed9192a14af3dee4d6cfa6de3f3dfe4af0a33041d8b52e\",\".codex-plugin/plugin.json\":\"954eed1d9957ce9108dd01d32cb454d7aa6999c560e08336e468d1279556f8f6\",\"SELFHOSTING.md\":\"bc58e3494f962630a5cd4023d3031fb89edefea1ff608477e5542df4c0e412a0\",\"hunsu.json\":\"211f973d66a7d9fdbf7a1de40513e264b08e433e5bcadb6a5363f8856bf6d416\",\"hunsu.lock.json\":\"5df640ca4e855dfd8a186f3526abe8935823d252e280b204feafdfde72b60553\",}; bad=[f for f,h in H.items() if hashlib.sha256(open(f,\"rb\").read()).hexdigest()!=h]; assert not bad, \"prior work changed: %s\" % bad; print(\"prior work unchanged:\", *sorted(H))"
+    ]
+  ],
+  "tests": [
+    "test_public_projection.py"
+  ],
+  "domain": "code",
+  "response": "./.chongdae/run-20261030-072306-0176/local/projection-tests-rel.response.json",
+  "attempts": [
+    {
+      "status": "done",
+      "summary": "I added 5 test_P2_rel_* tests to test_public_projection.py and left the existing 14 unchanged. All 5 new tests fail against the current chongdae.py for the expected reason: src<tmp> comes out as 'src<tmp>'. The 14 existing tests still pass.\n\nWhat the new tests check:\n- **All 5 relative examples stay unchanged** (src<tmp> .<tmp> tests/fixtures<tmp> build<tmp> a<tmp>).\n- **All 5 absolute examples still become <tmp>** (<tmp> see <tmp> --out=<tmp> ('<tmp>'), PATH=/usr/bin:<tmp>).\n\nWhere they are checked:\n- **Saved files:** both kinds of example are checked in tasks/a.json and state.json written by save_state into <project>/.chongdae/run-<id>. They appear at many depths: summary, touched[], stages.newbie.response.tried[].command, stages.verifier.failed[].response.findings[], response.non-claims, attempts[].touched and the state goal. After load_state, every value is still exactly the original.\n- **public_projection:** checked with target None and with a project root (root + /src<tmp> -> ./src<tmp>). These tests also check that the input object is not modified, that merge_private(public, raws) gives the input back, and a mixed string 'cp src<tmp> <tmp>'.\n- **neutral_path stays as it is:** one test confirms it still gives '<tmp>' for <tmp> and 'src<tmp>' for src<tmp>",
+      "verified": null,
+      "decisions": null,
+      "non-claims": [
+        "For the absolute examples, the tests check that the text before the path start is kept, that the result continues with '<tmp>', that no /tmp, /private/tmp or /var/folders is left, and that a closing \"')\" is kept. They do not pin down exactly what follows <tmp>, because the contract only says the prefix is \"replaced by `<tmp>`\" the way neutral_path does it.",
+        "Not every path-start character in the list (\"whitespace, a quote, a backtick, or one of = ( [ , : ; | & >\") gets its own test. Only the contract's own examples are covered: start of string, a space, '=', \"('\" and ':'.",
+        "The neutral_path test fixes the current behaviour (neutral_path('src<tmp>') == 'src<tmp>') because of the sentence \"neutral_path itself (its existing callers: portable, asked/) is not changed by P2-rel\". If that function's behaviour is ever changed on purpose, this test has to change too."
+      ],
+      "retried": null,
+      "review": null,
+      "disputed-tests": [
+        {
+          "test": "test_public_projection.py::Projection.test_P2_rel_public_projection_relative_unchanged_absolute_tmp",
+          "contract_quote": "Everywhere else it is part of another path and stays unchanged: `src<tmp>`, `.<tmp>`, `tests/fixtures<tmp>`, `build<tmp>`, `a<tmp>`.",
+          "why": "Line 464 passes the correctly projected string 'cp src<tmp> <tmp>' to assertTmpProjected. That helper requires the prefix 'cp src<tmp> ' but at line 396 also forbids '/tmp' anywhere in the string. Preserving the required relative path necessarily violates that assertion."
+        }
+      ],
+      "reopened": {
+        "by": "chongdae",
+        "auto": "tests disputed by projection-fix-rel",
+        "at": "2026-10-30T08:46:25+00:00",
+        "chongdae": "chongdae 1.24.0"
+      }
+    }
+  ],
+  "touched": [
+    ".claude-plugin/plugin.json",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "README.md",
+    "chongdae.py",
+    "plugin.json"
+  ],
+  "amending": [
+    {
+      "test": "test_public_projection.py::Projection.test_P2_rel_public_projection_relative_unchanged_absolute_tmp",
+      "contract_quote": "Everywhere else it is part of another path and stays unchanged: `src<tmp>`, `.<tmp>`, `tests/fixtures<tmp>`, `build<tmp>`, `a<tmp>`.",
+      "why": "Line 464 passes the correctly projected string 'cp src<tmp> <tmp>' to assertTmpProjected. That helper requires the prefix 'cp src<tmp> ' but at line 396 also forbids '/tmp' anywhere in the string. Preserving the required relative path necessarily violates that assertion."
+    }
+  ]
+}

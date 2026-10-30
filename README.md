@@ -4,7 +4,13 @@ The orchestrator for an era where development is split into parts done by agents
 checks in code and human gates in between — and records the run apart from commit history: what was decided, by whom,
 and what was not verified.
 
+Start with [host entry points](#shared-instructions-and-host-entry-points) and [run types](#runs).
+See [commands](#commands) for the CLI, [providers](#providers) for worker lifecycle,
+[files](#files-in-your-project) for records, and [versioning](#versioning) for releases and updates.
+
 ## Install
+
+Python 3.11 or newer is required on both hosts. Ensure `python3` on the host's PATH selects that interpreter.
 
 ```
 claude plugin marketplace add guinjaaaaaaaaaaaaaaaaaaaaakeop/chongdae
@@ -13,6 +19,24 @@ claude plugin install chongdae@chongdae
 
 Codex: `codex plugin marketplace add guinjaaaaaaaaaaaaaaaaaaaaakeop/chongdae`, `codex plugin add chongdae@chongdae`
 (the skill is `$chongdae:run`).
+
+## Shared instructions and host entry points
+
+[AGENTS.md](AGENTS.md) is the common guidance for maintaining this source checkout;
+[CLAUDE.md](CLAUDE.md) imports it for Claude Code compatibility. Plugin installation does not automatically
+load these repository instructions into the consuming project.
+
+For installed use, both hosts share [skills/run/SKILL.md](skills/run/SKILL.md) and `chongdae.py`.
+The `.claude-plugin/plugin.json` and `.codex-plugin/plugin.json` manifests expose host-specific packaging;
+`commands/` contains Claude entry points for individual engine actions, not a second run workflow.
+Either host can call `python3 <plugin-root>/chongdae.py <command> --target <project>` directly;
+replace the angle-bracket placeholders with actual values and quote paths containing spaces.
+For Codex, set `AGENT_HOST=codex` when calling the engine from a shell to identify the session host and select
+the host argument for native role adapters. This does not switch plugin-path lookup to the Codex registry:
+`plugin_root()` checks project-local links, recognizes its own chongdae root, then uses Claude's installation and
+marketplace records. For other plugins installed only in Codex, provide their actual roots through
+`hunsu.local.json` links before resolving `{plugin:NAME}` arguments.
+Use explicit task names when advancing parallel host workers, as the shared run skill describes.
 
 ## Runs
 
@@ -532,7 +556,7 @@ does not create an undiscoverable duplicate worker.
 Completed worker answers and check results remain bound to that launch until the task durably acknowledges applying
 them. An interrupted caller consumes the retained result on resume; cleanup cannot cause a completed worker to run again.
 Changed source still invalidates the retained result and requires fresh verification.
-Task records, their private overlays, and run state are saved through one local transaction journal. Readers see a
+Task records, run state, the plan, and their private overlays are saved through one local transaction journal. Readers see a
 complete generation even when a writer stops between files; the next mutation or record commit finishes applying it.
 The journal and source witnesses remain local and git-ignored.
 Landing a worktree also acquires the destination project's lock before changing either run. Record commits use their own
@@ -605,6 +629,23 @@ the same empty `touched` only gets the same reject
 Re-run every completed run's checks on this tree (the merge plan's first check); exit 1 if any is red now
 
 ## Files in your project
+
+The engine-owned `plan.json`, `state.json` and `tasks/<id>.json` are public projections. This machine's project root,
+home, temporary directories and plugin-cache paths become `.`, `~`, `<tmp>` and `<plugin:NAME@VERSION>` only where
+a path begins (including a `**`-wrapped path at a path start); a relative path merely containing such a segment is kept.
+Exact raw strings live in ignored `local/plan.json`, `local/state.json` and `local/tasks/<id>.json`; the engine reloads
+them for CLI use. Raw provider requests, responses and transcripts stay exact in ignored `local/` storage.
+A public dict key that would hold a machine path is refused (`MachinePathKey`), never renamed.
+
+Supported worktree landing (`close`'s merge-back) writes into the main checkout's local overlays only raw strings
+whose public value is their projection, for that run's state, task and plan files. It transfers no private state,
+journal, leases, acknowledgements or worker artifacts. A run merged by hand, or read on another machine, has only
+its public projection there; a check whose argv named machine-specific paths may not rerun there.
+
+`asked/`, `contract/`, `delegations/`, `reviews/` and report output are outside this normalization. Only `**` emphasis
+is recognized: other Markdown, HTML and ANSI markup is not parsed, so a machine path behind it can stay public.
+Backslash (Windows-style) handling is tested only with mocked strings, not on a live Windows host; drive-letter
+or case variants and UNC paths are not recognized.
 
 ### `.chongdae/run-<id>/plan.json`
 
@@ -803,8 +844,8 @@ cannot call a host's subagent tool (it has no brain and no host API), so it writ
 fresh subagent of its host (Claude Code: the Agent tool; Codex: `spawn_agent`), writes the subagent's final JSON
 answer verbatim where a worker would have, and `run` consumes it like any provider's. Attributed `performed_by:
 {provider: native, argv, relayed_by: <the session's own author line>, …}` plus a non-claim: the answer was written by
-the session on the subagent's behalf; chongdae did not observe the subagent. What you gain: no nested host process (a
-sandboxed Codex session cannot start one), the host's own concurrency and permissions. What you lose: chongdae's own
+the session on the subagent's behalf; chongdae did not observe the subagent. What you gain: no nested host process
+(which has failed in tested sandboxed Codex sessions), the host's own concurrency and permissions. What you lose: chongdae's own
 record of the call (turns, cost, transcript) unless the subagent's answer carries a `worker` block — the relay is on
 the record so the loss is named, not hidden.
 
@@ -863,9 +904,9 @@ they finished). Checks that passed on this tree are not run again when a later c
 one call ran the suite (~4.5 minutes), the verifier (~1 minute), resent the build and waited 240 s more — 8m35s; and a backgrounded
 `run` said "still working" on a `decision:` line, the wrapper around it exited 0, and it read as done
 (guin-site, 2026-10-12: at eight minutes `run` came close enough that the session wrapped it in polling loops of its own); the pending record lets the next `run` resume
-waiting for the same work, so a session whose tool calls have their own timeout never has to background `run` — a
-backgrounded `run` outlives the session that started it only on paper; the provider is that session's child and dies
-with it.
+waiting for the same work. Keep `run` in the foreground and resume it with the same task selection;
+its tracked workers run detached. Detachment is not a guarantee that workers survive host-session cleanup,
+as described above, and a shell wrapper must not hide the command's exit status.
 
 A provider call that stops (`blocked`, `failed` — out of budget, say — or no response) is not retried on its own: a
 human `retry`s it. The stopped attempt moves to the task's `attempts` and its files move aside under the attempt's
@@ -880,8 +921,9 @@ the role again only when it changed.
   decided.
 - Names no product: every provider — the bootstrap's `session`, a builder, a verifier, the merge's coherence check —
   comes from the plan's `providers` or the lock's `roles`. chongdae names only itself (`recheck`).
-- Checks and providers are argv that must exit 0. `{plugin:NAME}` in an argv resolves on each machine (a local link in
-  `hunsu.local.json`, else the host's installed plugin) — a plan never carries a machine path. A check that measures
+- Checks and providers are argv that must exit 0. `{plugin:NAME}` uses local links, chongdae's own root, or the
+  Claude installation registry; Codex-only installations need local links as described in
+  [host entry points](#shared-instructions-and-host-entry-points). A plan never carries a machine path. A check that measures
   nothing passes; name what a check covers (a test runner that fails when a key selects no tests).
 - Not built yet: re-planning on failure, the ideation branch when the goal is under-shaped.
 - Leases: the git backend has no server clock — a lapse is the machines' clocks, so keep `lease-ttl` generous or declare a
@@ -904,9 +946,27 @@ so an unbumped edit is a copy nobody can tell from the old one. **patch**: behav
 unchanged.
 **minor**: a new command, skill, field, hook or artifact key; what exists keeps working. **major**: an artifact type,
 lock or
-record that other products read changes shape. hunsu's `check` fails a linked plugin whose source differs from the
+record that other products read changes shape. Dropping a supported Python version or host version is also a major
+change: raising `engines.python`, or requiring a newer Claude Code or Codex. See [Install](#install) for the current floor.
+hunsu's `check` fails a linked plugin whose source differs from the
 installed
-copy under one version; `hunsu install --refresh <plugin>` recopies after the bump.
+copy under one version; for a locally linked plugin, `hunsu install --refresh <plugin>` re-snapshots after the bump.
+
+### Release and adoption
+
+Documentation and shared instruction edits also need a patch bump when interfaces stay unchanged.
+Keep the version equal in `plugin.json`, `.claude-plugin/plugin.json`, `.codex-plugin/plugin.json`,
+and `.claude-plugin/marketplace.json` (both `metadata.version` and this product's `plugins[].version`).
+`.agents/plugins/marketplace.json` currently has no version field; verify its product name and source path,
+but do not invent a version field there.
+
+Before publication, run the relevant checks in **Self-check** for behavior changes; for documentation-only
+changes, verify links, command examples, imports and manifest consistency, plus `git diff --check`.
+Publish the checked commit using this repository's existing release convention. Publication does not update
+consumer installations: update the plugin through the host's supported workflow, reconcile the consuming
+project's declared environment and lock if managed, and start a new host session to apply the installation.
+Report publication, project adoption and live-host verification separately. Refreshing a locally linked
+plugin is not an update procedure for every remote installation.
 
 ## Self-check
 
@@ -918,3 +978,4 @@ or `python test_launch_recovery.py` (fault injection around detached process cre
 It also includes `test_state_recovery.py`, `test_completion_recovery.py`, `test_mutation_ownership.py`,
 `test_operation_recovery.py`, and `test_operation_handover.py` for interrupted state saves, result consumption,
 task mutation authority, operations, and recovery in a replacement session.
+`test_public_projection.py` also runs through this entry point, covering public records and their local overlays.

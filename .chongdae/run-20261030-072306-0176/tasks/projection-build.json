@@ -1,0 +1,473 @@
+{
+  "artifact-type": "chongdae/task@1",
+  "written_by": "chongdae 1.24.0",
+  "status": "done",
+  "def": {
+    "id": "projection-build",
+    "role": "implementer",
+    "brief": "Build contract P (below) in chongdae.py only. The tests that decide it are written and protected: test_public_projection.py and the one-line suite entry in test_chongdae.py — do not change either. Do not touch README.md, AGENTS.md, CLAUDE.md, plugin.json, .claude-plugin/plugin.json, .codex-plugin/plugin.json, SELFHOSTING.md, hunsu.json or hunsu.lock.json: they carry other work (a check hashes them). No version bump, no README change (documenting this behavior is a later task, after the README's pending edits land), no new CLI command, setting or record key. Do not commit.\n\nHow (constraints, not a design): reuse neutral_path's policy narrowly — for example, factor its prefix rules into a helper both use — while neutral_path's own behavior for its existing callers (`portable`, `asked/`) stays exactly as it is, its `<user>` rule included. Keep PRIVATE_KEYS semantics, the single state transaction (public files and overlays in one `local/state-transaction.json` generation, applied through save_changed as today), completion acks, and task generation/lease guards. merge_private must restore a raw string at a list index. Decide \"unchanged\" on the raw merged view (P5), so existing records are never rewritten only to project them. The original response, request, transcript and log files under local/ are never rewritten. Run the request's checks yourself once your change is done; the full suite (`python3 test_chongdae.py`) took 9m27s on this machine before the change.\n\nContract P: chongdae's public run records are a path-normalized projection; the exact raw values stay in ignored local state.\n\nContext (verified by the session on this checkout, chongdae.py as released in 1.24.0): `save_state(d, state)` writes a run directory `d` (normally `<project>/.chongdae/run-<id>`): `tasks/<id>.json` (the public record, committed by `commit_record`), `local/tasks/<id>.json` (this machine's overlay of PRIVATE_KEYS; `local/` is git-ignored through `.chongdae/.gitignore`) and `state.json` (the run's own fields), all through one journal `local/state-transaction.json` (`recover_state(d)` replays a prepared generation). `load_state(d)` merges each public task with its overlay (`merge_private`). `split_private` moves only PRIVATE_KEYS (`session`, `transcript`, `commands`, `read`, ...) to the overlay, so every other string goes to the public file verbatim: a hired role's answer saved as `ts[\"stages\"][role] = {\"response\": {...}, \"by\": {...}, \"when\": \"after\"}`, a failed one as `ts[\"stages\"][role][\"failed\"] = [{\"response\": {...}, \"by\": {...}, \"when\": ...}]`, a builder's `ts[\"response\"]`, earlier answers in `ts[\"attempts\"]` (a list of response-shaped dicts), the verifier's review, `summary`, findings (`{\"kind\", \"where\", \"quote\", \"why\"}`), `non-claims`. Observed leak: jokbo's committed record run-20261030-063525-2d81 tasks/environment.json holds `stages.newbie.response.tried[0].command` = \"mktemp -d <absolute project root>/newbie-environment.XXXXXX\". `neutral_path(text, target)` already states the machine-path policy that `asked/` files use (through `portable`).\n\nP1 Public files are projections. Every public JSON file save_state writes in a run directory — `tasks/<id>.json` and `state.json` — holds, for each string value at any depth (dict values and list items alike, including inside `response`, `attempts[]`, `stages.<role>.response`, `stages.<role>.failed[].response`, the review, findings, `summary`, `non-claims`), the string with this machine's path prefixes replaced: the project root (its abspath and its realpath) -> `.` (`<root>/x` -> `./x`), the home directory -> `~` (`<home>/x` -> `~/x`), a temporary directory (`tempfile.gettempdir()` and its realpath, `/tmp`, `/private/tmp`, `/var/folders/...`) -> `<tmp>` as neutral_path does it, and a host plugin cache path -> `<plugin:NAME@VERSION>` as neutral_path does it. The project root is the parent of the `.chongdae` directory that holds the run directory; a run directory not inside a directory named `.chongdae` has no project root, and only the other prefixes are replaced. The project root is replaced before the home and temp prefixes (a project under the home or under a temp directory becomes `.`, not `~/...` or `<tmp>`).\n\nP2 Narrow: path prefixes only. The project root and the home are replaced only where they are a whole path prefix: followed by `/`, or ending the path (end of string, whitespace, a quote, or one of ` ; | & ) , :). `<home>-old/x` and `<root>2/x` are not under the home or the root and stay unchanged. neutral_path's bare account-name rule (`<user>`) is not applied: a string that holds the account name only as a word — a `--by` signature, an author line — is unchanged. Dict keys, non-string values, relative paths (`src/a.py`, `./x`, `README.md#versioning`), quotes with no absolute machine path, and actor metadata (`host`, `model`, `agent`, `by`, `effort`, `at`) are unchanged byte for byte. PRIVATE_KEYS keep going to the overlay unprojected, as today.\n\nP3 Exact raw values stay local, in the same transaction. For every string P1 changed, the exact original stays in the run's ignored local state: the task's `local/tasks/<id>.json` overlay (for `state.json`: `local/state.json`), as a mirror `merge_private` restores, list items included (a raw string at a list index). The public file and its overlay are written in one `local/state-transaction.json` generation, so a process death between the two writes recovers both (recover_state) or neither. `load_state(d)` returns exactly what was given to `save_state` (apart from the `artifact-type`/`written_by` stamps save_state adds) — every string at any depth equal to its raw original — in this process and in a new process after a restart; validation, result consumption, verifier-quote checks, recovery, task ownership (`added-in`, lease keys) and generation guards keep reading that merged raw view.\n\nP4 Originals untouched. Files under `local/` written by or for providers — the request as sent, `<tag>.response.json`, transcripts, logs — are never rewritten or reformatted by the projection: a response file's bytes (sha256) are the same before and after its answer is consumed into the task and saved. No answer's quote, finding or field is changed to pass validation.\n\nP5 No projection-only rewrite of existing records. A public file whose raw content (the public file merged with its overlay) is unchanged by a save is not rewritten: a run written before this change, whose public task files hold absolute paths and have no raw overlay, keeps those files byte for byte when its state is loaded and saved without a change to that task. A save that changes a task writes that task's public file projected and its raws to the overlay. Old overlays (PRIVATE_KEYS only) load as before.\n\nP6 Record commits carry only the projection. With `settings.chongdae.commit-records` not false, a record commit (`commit_record(target, run_name, message)`) after a save whose task holds absolute home/project/temp paths contains the projected public file (`git show HEAD:<run>/tasks/<id>.json` holds none of those absolute paths) and nothing under `local/`.\n\nP7 A pure function for derived exports. `public_projection(obj, target)` returns `(public, raws)`: `public` is a copy of `obj` with P1/P2 applied to every string (`target` None: no project root), `raws` the mirror such that `merge_private(public, raws)` equals `obj`; it writes nothing and does not modify `obj`. save_state uses it. No CLI command, setting or record key is added.\n\nP8 Suites. `python3 test_chongdae.py` exits 0: the existing suites (test_concurrency, test_review_freshness, test_record_transactions, test_launch_recovery, test_state_recovery, test_completion_recovery, test_mutation_ownership, test_operation_recovery, test_operation_handover) unchanged and passing, and the new suite `test_public_projection` in its `loadTestsFromNames` list.",
+    "closes": [],
+    "needs": [],
+    "checks": [
+      [
+        "python3",
+        "test_public_projection.py"
+      ],
+      [
+        "python3",
+        "test_state_recovery.py"
+      ],
+      [
+        "python3",
+        "test_record_transactions.py"
+      ],
+      [
+        "python3",
+        "test_chongdae.py"
+      ],
+      [
+        "python3",
+        "-c",
+        "import hashlib,sys; H={\"README.md\":\"d01d1749a82bc3c5e7b925675ea93f665228cc088cb023ba4c91e90157143bb4\",\"AGENTS.md\":\"7cfa2f4f340c630b5f9116ce27d538cb171dc40568771e391431c6e4e697ab92\",\"CLAUDE.md\":\"336cc4fbf19beaada7ccf9986414fa91851a8d7a07dfb3ccbe800a69eed0ab49\",\"plugin.json\":\"f8a8278aa60671c5b196c1a14fbed7540a9acf4458fce6777adaecad666aaf5f\",\".claude-plugin/plugin.json\":\"a20161f0e7cc5d29e7ed9192a14af3dee4d6cfa6de3f3dfe4af0a33041d8b52e\",\".codex-plugin/plugin.json\":\"954eed1d9957ce9108dd01d32cb454d7aa6999c560e08336e468d1279556f8f6\",\"SELFHOSTING.md\":\"bc58e3494f962630a5cd4023d3031fb89edefea1ff608477e5542df4c0e412a0\",\"hunsu.json\":\"211f973d66a7d9fdbf7a1de40513e264b08e433e5bcadb6a5363f8856bf6d416\",\"hunsu.lock.json\":\"5df640ca4e855dfd8a186f3526abe8935823d252e280b204feafdfde72b60553\",}; bad=[f for f,h in H.items() if hashlib.sha256(open(f,\"rb\").read()).hexdigest()!=h]; assert not bad, \"prior work changed: %s\" % bad; print(\"prior work unchanged:\", *sorted(H))"
+      ]
+    ],
+    "tests": [
+      "test_public_projection.py",
+      "test_chongdae.py"
+    ],
+    "gate": null,
+    "domain": "code",
+    "scope": [
+      "chongdae.py"
+    ]
+  },
+  "seq": 3,
+  "added": "2026-10-30T07:38:26+00:00",
+  "touched_by_provider": [
+    "<tmp>/.chongdae/local/command.lock",
+    "chongdae.py"
+  ],
+  "performed_by": {
+    "provider": "command",
+    "argv": [
+      "python3",
+      "{plugin:hacheong}/worker.py",
+      "--member",
+      "dakdol",
+      "--request",
+      "{request}",
+      "--response",
+      "{response}",
+      "--host",
+      "codex"
+    ],
+    "host": "codex",
+    "model": "gpt-6-astra",
+    "effort": "medium",
+    "versions": {
+      "used": {
+        "hacheong": "1.12.1",
+        "chongdae": "1.24.0"
+      }
+    },
+    "trace": {
+      "changed": [
+        "update ./chongdae.py"
+      ],
+      "commands-run": 18,
+      "commands-failed": 1
+    }
+  },
+  "non-claims": [
+    "(provider) The exact full-suite command failed seven hook-related tests under inherited AGENT_WORKER=1. Unsetting only that variable made the entire suite pass.",
+    "(provider) Corrected the previous attempt’s missed raw-state consumer and removed its stray <tmp>/.chongdae/local/command.lock artifact and empty parent directories.",
+    "(provider) Protected tests and prior project edits were not changed. No commit, version bump, or run-record edit was made."
+  ],
+  "verified_by": {
+    "provider": "command",
+    "argv": [
+      "python3",
+      "{plugin:dwitbuk}/eyes_worker.py",
+      "--request",
+      "{request}",
+      "--response",
+      "{response}",
+      "--host",
+      "claude"
+    ],
+    "host": "claude-code",
+    "model": "claude-opus-5-5",
+    "turns": 6,
+    "cost_usd": 0.1832644,
+    "versions": {
+      "used": {
+        "dwitbuk": "1.16.0",
+        "chongdae": "1.24.0"
+      }
+    },
+    "trace": {
+      "changed": [],
+      "commands-run": 0,
+      "commands-failed": 0
+    }
+  },
+  "attempts": [
+    {
+      "status": "done",
+      "summary": "Implemented public path projections and exact raw overlays in chongdae.py only, preserving transactional recovery and unchanged legacy records. Targeted checks passed; the full suite passed with AGENT_WORKER unset.",
+      "verified": [
+        {
+          "check": "python3 test_public_projection.py",
+          "exit": 0
+        },
+        {
+          "check": "python3 test_state_recovery.py",
+          "exit": 0
+        },
+        {
+          "check": "python3 test_record_transactions.py",
+          "exit": 0
+        },
+        {
+          "check": "python3 test_chongdae.py",
+          "exit": 1
+        },
+        {
+          "check": "env -u AGENT_WORKER python3 test_chongdae.py",
+          "exit": 0
+        },
+        {
+          "check": "python3 -c 'import hashlib,sys; H={\"README.md\":\"d01d1749a82bc3c5e7b925675ea93f665228cc088cb023ba4c91e90157143bb4\",\"AGENTS.md\":\"7cfa2f4f340c630b5f9116ce27d538cb171dc40568771e391431c6e4e697ab92\",\"CLAUDE.md\":\"336cc4fbf19beaada7ccf9986414fa91851a8d7a07dfb3ccbe800a69eed0ab49\",\"plugin.json\":\"f8a8278aa60671c5b196c1a14fbed7540a9acf4458fce6777adaecad666aaf5f\",\".claude-plugin/plugin.json\":\"a20161f0e7cc5d29e7ed9192a14af3dee4d6cfa6de3f3dfe4af0a33041d8b52e\",\".codex-plugin/plugin.json\":\"954eed1d9957ce9108dd01d32cb454d7aa6999c560e08336e468d1279556f8f6\",\"SELFHOSTING.md\":\"bc58e3494f962630a5cd4023d3031fb89edefea1ff608477e5542df4c0e412a0\",\"hunsu.json\":\"211f973d66a7d9fdbf7a1de40513e264b08e433e5bcadb6a5363f8856bf6d416\",\"hunsu.lock.json\":\"5df640ca4e855dfd8a186f3526abe8935823d252e280b204feafdfde72b60553\",}; bad=[f for f,h in H.items() if hashlib.sha256(open(f,\"rb\").read()).hexdigest()!=h]; assert not bad, \"prior work changed: %s\" % bad; print(\"prior work unchanged:\", *sorted(H))'",
+          "exit": 0
+        },
+        {
+          "check": "git diff --check",
+          "exit": 0
+        }
+      ],
+      "decisions": [],
+      "non-claims": [
+        "The unmodified full-suite command failed seven hook-related tests because this worker inherited AGENT_WORKER=1, which intentionally silences hooks. Removing only that environment variable made the entire suite pass.",
+        "Protected tests and prior project edits were not changed. No commit, version bump, or run-record edit was made."
+      ],
+      "disputed-tests": [],
+      "worker": {
+        "host": "codex",
+        "model": "gpt-6-astra",
+        "effort": "medium"
+      },
+      "retried": {
+        "by": "chongdae",
+        "auto": "the verifier rejected: 3 finding(s)",
+        "at": "2026-10-30T08:11:42+00:00",
+        "chongdae": "chongdae 1.24.0"
+      },
+      "trace": {
+        "changed": [
+          "update ./chongdae.py"
+        ],
+        "commands-run": 32,
+        "commands-failed": 4
+      },
+      "review": {
+        "artifact-type": "dwitbuk/review@1",
+        "verdict": "reject",
+        "findings": [
+          {
+            "kind": "plan-vs-code",
+            "where": "contract.P3 vs chongdae.py:7357 (close command lock) with chongdae.py:4859",
+            "record_quote": "`validation, result consumption, verifier-quote checks, recovery, task ownership (`added-in`, lease keys) and generation guards keep reading that merged raw view`",
+            "tree_quote": "`main = (load(os.path.join(d, \"state.json\")).get(\"worktree\") or {}).get(\"main\") if d else None`",
+            "why": "`state[\"worktree\"][\"main\"]` is the absolute main checkout (`os.path.abspath(args.target)`, line 4859). The worktree's project root is `<main>/.chongdae/wt/<run>`, and the main checkout is not under that root. So save_state now projects `main` in the public state.json to `~/...` or `<tmp>`, and only the raw value goes to the new local/state.json overlay. The close path at 7357 still reads the public state.json with `load()`, not `load_state()`. It gets the projected string, so `os.path.realpath(main) != os.path.realpath(args.target)` is always true, and `CommandLock(main)` locks a path relative to the cwd (`~/...` or `<tmp>`) instead of the destination checkout. The guard that serializes the destination checkout during close now reads the projection, not the raw view."
+          },
+          {
+            "kind": "anomaly",
+            "where": "touched / tree: <tmp>/.chongdae/local/command.lock",
+            "record_quote": "",
+            "tree_quote": "`+++ <tmp>/.chongdae/local/command.lock (new file)`",
+            "why": "This is the visible symptom of the finding above. A literal `<tmp>` directory with a `.chongdae/local/command.lock` appeared in the checkout (git status: `?? <tmp>/`). That is what `CommandLock(\"<tmp>\")` creates when a worktree close test, whose main checkout is in a temp directory, reads the projected `worktree.main` from public state.json. The projection broke a consumer of the record and left a stray artifact in the tree."
+          },
+          {
+            "kind": "record-vs-tree",
+            "where": "built.summary",
+            "record_quote": "`Implemented public path projections and exact raw overlays in chongdae.py only, preserving transactional recovery and unchanged legacy records.`",
+            "tree_quote": "`+++ <tmp>/.chongdae/local/command.lock (new file)`",
+            "why": "The builder reports a change to chongdae.py only, but the touched set also has a new `<tmp>/.chongdae/local/command.lock` in the checkout. The builder's change caused it (see the first finding), and the report does not mention it."
+          }
+        ],
+        "worker": {
+          "host": "claude-code",
+          "model": "claude-opus-5-5",
+          "turns": 14,
+          "cost_usd": 0.434818
+        }
+      },
+      "rejected": {
+        "by": "verifier",
+        "why": "3 finding(s)"
+      },
+      "reviewed_tree": {
+        ".claude-plugin/plugin.json": "e243a5d51f82b623e35d38417fd2213ad6d5640e",
+        "README.md": "484314d80a83fa4f3c426ded2ee89eebf0a74a5b",
+        "chongdae.py": "0a667367d4351dfc21341e3c3d406ffd68d14e7f",
+        "plugin.json": "0199d8e4d2227357de77c5cc2adbcf5d198bd285",
+        "test_chongdae.py": "3039220b65943ce511242d5a0a632694529e2dcf",
+        "<tmp>/.chongdae/local/command.lock": "da39a3ee5e6b4b0d3255bfef95601890afd80709",
+        "AGENTS.md": "356bfb71a61076f443ebfd64eb93886bbbad4383",
+        "CLAUDE.md": "c140473a3a5fbe89301c99d9d0d1b76c5971f2c3",
+        "test_public_projection.py": "7aec1b64195534621960f0068a2609aeb6c8d027"
+      },
+      "answered": {
+        "at": "2026-10-30T08:00:36+00:00",
+        "chongdae": "chongdae 1.24.0"
+      },
+      "verdict-given": {
+        "at": "2026-10-30T08:11:42+00:00",
+        "chongdae": "chongdae 1.24.0"
+      },
+      "checks-passed": {
+        "ran": [
+          {
+            "command": "python3 test_public_projection.py",
+            "exit": 0,
+            "tail": [
+              "Ran 14 tests in 2.026s",
+              "OK"
+            ],
+            "at": "2026-10-30T08:00:38+00:00",
+            "chongdae": "chongdae 1.24.0"
+          },
+          {
+            "command": "python3 test_state_recovery.py",
+            "exit": 0,
+            "tail": [
+              "Ran 6 tests in 0.382s",
+              "OK"
+            ],
+            "at": "2026-10-30T08:00:39+00:00",
+            "chongdae": "chongdae 1.24.0"
+          },
+          {
+            "command": "python3 test_record_transactions.py",
+            "exit": 0,
+            "tail": [
+              "test_record_commit_does_not_replace_a_newer_source_commit (__main__.RecordTransactions.test_record_commit_does_not_replace_a_newer_source_commit) ... ok",
+              "test_subprojects_sharing_git_do_not_share_a_scratch_index (__main__.RecordTransactions.test_subprojects_sharing_git_do_not_share_a_scratch_index) ... ok",
+              "test_worktree_close_waits_for_destination_before_changing_child (__main__.RecordTransactions.test_worktree_close_waits_for_destination_before_changing_child) ... ok",
+              "Ran 3 tests in 0.568s",
+              "OK"
+            ],
+            "at": "2026-10-30T08:00:39+00:00",
+            "chongdae": "chongdae 1.24.0"
+          },
+          {
+            "command": "python3 test_chongdae.py",
+            "exit": 0,
+            "tail": [
+              "test_P6_record_commit_holds_only_the_projection (test_public_projection.Projection.test_P6_record_commit_holds_only_the_projection) ... ok",
+              "test_P7_public_projection_is_pure_and_merges_back (test_public_projection.Projection.test_P7_public_projection_is_pure_and_merges_back) ... ok",
+              "test_P7_public_projection_without_target_has_no_root (test_public_projection.Projection.test_P7_public_projection_without_target_has_no_root) ... ok",
+              "test_P7_save_state_uses_public_projection (test_public_projection.Projection.test_P7_save_state_uses_public_projection) ... ok",
+              "Ran 71 tests in 117.352s",
+              "OK"
+            ],
+            "at": "2026-10-30T08:10:20+00:00",
+            "chongdae": "chongdae 1.24.0"
+          },
+          {
+            "command": "python3 -c 'import hashlib,sys; H={\"README.md\":\"d01d1749a82bc3c5e7b925675ea93f665228cc088cb023ba4c91e90157143bb4\",\"AGENTS.md\":\"7cfa2f4f340c630b5f9116ce27d538cb171dc40568771e391431c6e4e697ab92\",\"CLAUDE.md\":\"336cc4fbf19beaada7ccf9986414fa91851a8d7a07dfb3ccbe800a69eed0ab49\",\"plugin.json\":\"f8a8278aa60671c5b196c1a14fbed7540a9acf4458fce6777adaecad666aaf5f\",\".claude-plugin/plugin.json\":\"a20161f0e7cc5d29e7ed9192a14af3dee4d6cfa6de3f3dfe4af0a33041d8b52e\",\".codex-plugin/plugin.json\":\"954eed1d9957ce9108dd01d32cb454d7aa6999c560e08336e468d1279556f8f6\",\"SELFHOSTING.md\":\"bc58e3494f962630a5cd4023d3031fb89edefea1ff608477e5542df4c0e412a0\",\"hunsu.json\":\"211f973d66a7d9fdbf7a1de40513e264b08e433e5bcadb6a5363f8856bf6d416\",\"hunsu.lock.json\":\"5df640ca4e855dfd8a186f3526abe8935823d252e280b204feafdfde72b60553\",}; bad=[f for f,h in H.items() if hashlib.sha256(open(f,\"rb\").read()).hexdigest()!=h]; assert not bad, \"prior work changed: %s\" % bad; print(\"prior work unchanged:\", *sorted(H))'",
+            "exit": 0,
+            "tail": [
+              "prior work unchanged: .claude-plugin/plugin.json .codex-plugin/plugin.json AGENTS.md CLAUDE.md README.md SELFHOSTING.md hunsu.json hunsu.lock.json plugin.json"
+            ],
+            "at": "2026-10-30T08:10:20+00:00",
+            "chongdae": "chongdae 1.24.0"
+          }
+        ],
+        "at": "2026-10-30T08:10:21+00:00",
+        "chongdae": "chongdae 1.24.0"
+      }
+    }
+  ],
+  "response": {
+    "status": "done",
+    "summary": "Preserved the existing projection implementation and fixed close to read the raw worktree destination through load_state. Removed the previous attempt’s stray <tmp> lock directory; it did not recur. Full suite passes with AGENT_WORKER unset.",
+    "verified": [
+      {
+        "check": "python3 test_public_projection.py",
+        "exit": 0
+      },
+      {
+        "check": "python3 test_state_recovery.py",
+        "exit": 0
+      },
+      {
+        "check": "python3 test_record_transactions.py",
+        "exit": 0
+      },
+      {
+        "check": "python3 test_chongdae.py",
+        "exit": 1
+      },
+      {
+        "check": "env -u AGENT_WORKER python3 test_chongdae.py",
+        "exit": 0
+      },
+      {
+        "check": "python3 -c 'import hashlib,sys; H={\"README.md\":\"d01d1749a82bc3c5e7b925675ea93f665228cc088cb023ba4c91e90157143bb4\",\"AGENTS.md\":\"7cfa2f4f340c630b5f9116ce27d538cb171dc40568771e391431c6e4e697ab92\",\"CLAUDE.md\":\"336cc4fbf19beaada7ccf9986414fa91851a8d7a07dfb3ccbe800a69eed0ab49\",\"plugin.json\":\"f8a8278aa60671c5b196c1a14fbed7540a9acf4458fce6777adaecad666aaf5f\",\".claude-plugin/plugin.json\":\"a20161f0e7cc5d29e7ed9192a14af3dee4d6cfa6de3f3dfe4af0a33041d8b52e\",\".codex-plugin/plugin.json\":\"954eed1d9957ce9108dd01d32cb454d7aa6999c560e08336e468d1279556f8f6\",\"SELFHOSTING.md\":\"bc58e3494f962630a5cd4023d3031fb89edefea1ff608477e5542df4c0e412a0\",\"hunsu.json\":\"211f973d66a7d9fdbf7a1de40513e264b08e433e5bcadb6a5363f8856bf6d416\",\"hunsu.lock.json\":\"5df640ca4e855dfd8a186f3526abe8935823d252e280b204feafdfde72b60553\",}; bad=[f for f,h in H.items() if hashlib.sha256(open(f,\"rb\").read()).hexdigest()!=h]; assert not bad, \"prior work changed: %s\" % bad; print(\"prior work unchanged:\", *sorted(H))'",
+        "exit": 0
+      },
+      {
+        "check": "python3 -c 'from pathlib import Path; assert not Path(\"<tmp>\").exists(); print(\"stray projection lock directory absent\")'",
+        "exit": 0
+      },
+      {
+        "check": "git diff --check",
+        "exit": 0
+      }
+    ],
+    "decisions": [],
+    "non-claims": [
+      "The exact full-suite command failed seven hook-related tests under inherited AGENT_WORKER=1. Unsetting only that variable made the entire suite pass.",
+      "Corrected the previous attempt’s missed raw-state consumer and removed its stray <tmp>/.chongdae/local/command.lock artifact and empty parent directories.",
+      "Protected tests and prior project edits were not changed. No commit, version bump, or run-record edit was made."
+    ],
+    "disputed-tests": [],
+    "worker": {
+      "host": "codex",
+      "model": "gpt-6-astra",
+      "effort": "medium"
+    }
+  },
+  "answered": {
+    "at": "2026-10-30T08:23:00+00:00",
+    "chongdae": "chongdae 1.24.0"
+  },
+  "checks-passed": {
+    "ran": [
+      {
+        "command": "python3 test_public_projection.py",
+        "exit": 0,
+        "tail": [
+          "Ran 14 tests in 2.273s",
+          "OK"
+        ],
+        "at": "2026-10-30T08:23:02+00:00",
+        "chongdae": "chongdae 1.24.0"
+      },
+      {
+        "command": "python3 test_state_recovery.py",
+        "exit": 0,
+        "tail": [
+          "Ran 6 tests in 0.454s",
+          "OK"
+        ],
+        "at": "2026-10-30T08:23:03+00:00",
+        "chongdae": "chongdae 1.24.0"
+      },
+      {
+        "command": "python3 test_record_transactions.py",
+        "exit": 0,
+        "tail": [
+          "test_record_commit_does_not_replace_a_newer_source_commit (__main__.RecordTransactions.test_record_commit_does_not_replace_a_newer_source_commit) ... ok",
+          "test_subprojects_sharing_git_do_not_share_a_scratch_index (__main__.RecordTransactions.test_subprojects_sharing_git_do_not_share_a_scratch_index) ... ok",
+          "test_worktree_close_waits_for_destination_before_changing_child (__main__.RecordTransactions.test_worktree_close_waits_for_destination_before_changing_child) ... ok",
+          "Ran 3 tests in 0.689s",
+          "OK"
+        ],
+        "at": "2026-10-30T08:23:04+00:00",
+        "chongdae": "chongdae 1.24.0"
+      },
+      {
+        "command": "python3 test_chongdae.py",
+        "exit": 0,
+        "tail": [
+          "test_P6_record_commit_holds_only_the_projection (test_public_projection.Projection.test_P6_record_commit_holds_only_the_projection) ... ok",
+          "test_P7_public_projection_is_pure_and_merges_back (test_public_projection.Projection.test_P7_public_projection_is_pure_and_merges_back) ... ok",
+          "test_P7_public_projection_without_target_has_no_root (test_public_projection.Projection.test_P7_public_projection_without_target_has_no_root) ... ok",
+          "test_P7_save_state_uses_public_projection (test_public_projection.Projection.test_P7_save_state_uses_public_projection) ... ok",
+          "Ran 71 tests in 120.105s",
+          "OK"
+        ],
+        "at": "2026-10-30T08:32:41+00:00",
+        "chongdae": "chongdae 1.24.0"
+      },
+      {
+        "command": "python3 -c 'import hashlib,sys; H={\"README.md\":\"d01d1749a82bc3c5e7b925675ea93f665228cc088cb023ba4c91e90157143bb4\",\"AGENTS.md\":\"7cfa2f4f340c630b5f9116ce27d538cb171dc40568771e391431c6e4e697ab92\",\"CLAUDE.md\":\"336cc4fbf19beaada7ccf9986414fa91851a8d7a07dfb3ccbe800a69eed0ab49\",\"plugin.json\":\"f8a8278aa60671c5b196c1a14fbed7540a9acf4458fce6777adaecad666aaf5f\",\".claude-plugin/plugin.json\":\"a20161f0e7cc5d29e7ed9192a14af3dee4d6cfa6de3f3dfe4af0a33041d8b52e\",\".codex-plugin/plugin.json\":\"954eed1d9957ce9108dd01d32cb454d7aa6999c560e08336e468d1279556f8f6\",\"SELFHOSTING.md\":\"bc58e3494f962630a5cd4023d3031fb89edefea1ff608477e5542df4c0e412a0\",\"hunsu.json\":\"211f973d66a7d9fdbf7a1de40513e264b08e433e5bcadb6a5363f8856bf6d416\",\"hunsu.lock.json\":\"5df640ca4e855dfd8a186f3526abe8935823d252e280b204feafdfde72b60553\",}; bad=[f for f,h in H.items() if hashlib.sha256(open(f,\"rb\").read()).hexdigest()!=h]; assert not bad, \"prior work changed: %s\" % bad; print(\"prior work unchanged:\", *sorted(H))'",
+        "exit": 0,
+        "tail": [
+          "prior work unchanged: .claude-plugin/plugin.json .codex-plugin/plugin.json AGENTS.md CLAUDE.md README.md SELFHOSTING.md hunsu.json hunsu.lock.json plugin.json"
+        ],
+        "at": "2026-10-30T08:32:41+00:00",
+        "chongdae": "chongdae 1.24.0"
+      }
+    ],
+    "at": "2026-10-30T08:32:42+00:00",
+    "chongdae": "chongdae 1.24.0"
+  },
+  "review": {
+    "artifact-type": "dwitbuk/review@1",
+    "verdict": "accept",
+    "findings": [],
+    "worker": {
+      "host": "claude-code",
+      "model": "claude-opus-5-5",
+      "turns": 6,
+      "cost_usd": 0.1832644
+    }
+  },
+  "verdict-given": {
+    "at": "2026-10-30T08:32:56+00:00",
+    "chongdae": "chongdae 1.24.0"
+  },
+  "reviewed_tree": {
+    ".claude-plugin/plugin.json": "e243a5d51f82b623e35d38417fd2213ad6d5640e",
+    "README.md": "484314d80a83fa4f3c426ded2ee89eebf0a74a5b",
+    "chongdae.py": "b81f9b981fcd1c8ca4f72b3a7e5c13f775e85fc9",
+    "plugin.json": "0199d8e4d2227357de77c5cc2adbcf5d198bd285",
+    "test_chongdae.py": "3039220b65943ce511242d5a0a632694529e2dcf",
+    "AGENTS.md": "356bfb71a61076f443ebfd64eb93886bbbad4383",
+    "CLAUDE.md": "c140473a3a5fbe89301c99d9d0d1b76c5971f2c3",
+    "test_public_projection.py": "7aec1b64195534621960f0068a2609aeb6c8d027"
+  },
+  "seen-non-claims": {
+    "by": "verifier of projection-build",
+    "texts": [
+      "(provider) The exact full-suite command failed seven hook-related tests under inherited AGENT_WORKER=1. Unsetting only that variable made the entire suite pass.",
+      "(provider) Corrected the previous attempt’s missed raw-state consumer and removed its stray <tmp>/.chongdae/local/command.lock artifact and empty parent directories.",
+      "(provider) Protected tests and prior project edits were not changed. No commit, version bump, or run-record edit was made."
+    ],
+    "at": "2026-10-30T08:32:56+00:00",
+    "chongdae": "chongdae 1.24.0"
+  },
+  "checks": [
+    [
+      "python3",
+      "test_public_projection.py"
+    ],
+    [
+      "python3",
+      "test_state_recovery.py"
+    ],
+    [
+      "python3",
+      "test_record_transactions.py"
+    ],
+    [
+      "python3",
+      "test_chongdae.py"
+    ],
+    [
+      "python3",
+      "-c",
+      "import hashlib,sys; H={\"README.md\":\"d01d1749a82bc3c5e7b925675ea93f665228cc088cb023ba4c91e90157143bb4\",\"AGENTS.md\":\"7cfa2f4f340c630b5f9116ce27d538cb171dc40568771e391431c6e4e697ab92\",\"CLAUDE.md\":\"336cc4fbf19beaada7ccf9986414fa91851a8d7a07dfb3ccbe800a69eed0ab49\",\"plugin.json\":\"f8a8278aa60671c5b196c1a14fbed7540a9acf4458fce6777adaecad666aaf5f\",\".claude-plugin/plugin.json\":\"a20161f0e7cc5d29e7ed9192a14af3dee4d6cfa6de3f3dfe4af0a33041d8b52e\",\".codex-plugin/plugin.json\":\"954eed1d9957ce9108dd01d32cb454d7aa6999c560e08336e468d1279556f8f6\",\"SELFHOSTING.md\":\"bc58e3494f962630a5cd4023d3031fb89edefea1ff608477e5542df4c0e412a0\",\"hunsu.json\":\"211f973d66a7d9fdbf7a1de40513e264b08e433e5bcadb6a5363f8856bf6d416\",\"hunsu.lock.json\":\"5df640ca4e855dfd8a186f3526abe8935823d252e280b204feafdfde72b60553\",}; bad=[f for f,h in H.items() if hashlib.sha256(open(f,\"rb\").read()).hexdigest()!=h]; assert not bad, \"prior work changed: %s\" % bad; print(\"prior work unchanged:\", *sorted(H))"
+    ]
+  ],
+  "touched": [
+    "chongdae.py"
+  ],
+  "done": {
+    "at": "2026-10-30T08:32:57+00:00",
+    "chongdae": "chongdae 1.24.0"
+  }
+}

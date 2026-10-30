@@ -1,0 +1,213 @@
+{
+  "artifact-type": "chongdae/task@1",
+  "written_by": "chongdae 1.24.0",
+  "status": "done",
+  "def": {
+    "id": "metadata-2.0.0",
+    "role": "implementer",
+    "brief": "Prepare the UNPUBLISHED 2.0.0 candidate metadata (owner-authorized; no push, install or release). Set version to exactly \"2.0.0\" in the existing five fields and nowhere else: plugin.json version, .claude-plugin/plugin.json version, .codex-plugin/plugin.json version, and in .claude-plugin/marketplace.json both metadata.version and the chongdae entry's plugins[].version. Major because the Python floor rises to >=3.11 (dropping 3.9/3.10; README's versioning now classifies dropping a Python or host version as major). Keep engines.python \">=3.11\" in all three manifests. .agents/plugins/marketplace.json has no version field: do not add one; leave it unchanged (it names chongdae with local source ./). Change nothing else in these files (no reformatting) and no other file: runtime, tests and docs are frozen at the current commit (a check compares them). Do not commit.",
+    "closes": [],
+    "needs": [],
+    "checks": [
+      [
+        "python3",
+        "<tmp>/cd-selfhost/metadata.check.py"
+      ],
+      [
+        "git",
+        "diff",
+        "--check",
+        "--",
+        "plugin.json",
+        ".claude-plugin/plugin.json",
+        ".codex-plugin/plugin.json",
+        ".claude-plugin/marketplace.json"
+      ]
+    ],
+    "tests": [],
+    "gate": null,
+    "domain": "code",
+    "scope": [
+      ".claude-plugin/marketplace.json",
+      ".claude-plugin/plugin.json",
+      ".codex-plugin/plugin.json",
+      "plugin.json"
+    ]
+  },
+  "seq": 15,
+  "added": "2026-10-30T11:41:27+00:00",
+  "response": {
+    "status": "done",
+    "summary": "Updated exactly five version fields to 2.0.0 across the four specified files, preserving formatting and Python >=3.11. Both checks passed. No commit, installation, or release.",
+    "verified": [
+      {
+        "check": "python3 <tmp>/cd-selfhost/metadata.check.py",
+        "exit": 0
+      },
+      {
+        "check": "git diff --check -- plugin.json .claude-plugin/plugin.json .codex-plugin/plugin.json .claude-plugin/marketplace.json",
+        "exit": 0
+      }
+    ],
+    "decisions": [],
+    "non-claims": [
+      "The pre-existing .chongdae state.json change was left untouched."
+    ],
+    "disputed-tests": [],
+    "worker": {
+      "host": "codex",
+      "model": "gpt-6-astra",
+      "effort": "medium"
+    }
+  },
+  "answered": {
+    "at": "2026-10-30T11:41:45+00:00",
+    "chongdae": "chongdae 1.24.0"
+  },
+  "touched_by_provider": [
+    ".claude-plugin/marketplace.json",
+    ".claude-plugin/plugin.json",
+    ".codex-plugin/plugin.json",
+    "plugin.json"
+  ],
+  "performed_by": {
+    "provider": "command",
+    "argv": [
+      "python3",
+      "{plugin:hacheong}/worker.py",
+      "--member",
+      "dakdol",
+      "--request",
+      "{request}",
+      "--response",
+      "{response}",
+      "--host",
+      "codex"
+    ],
+    "host": "codex",
+    "model": "gpt-6-astra",
+    "effort": "medium",
+    "versions": {
+      "used": {
+        "hacheong": "1.12.1",
+        "chongdae": "1.24.0"
+      }
+    },
+    "trace": {
+      "changed": [],
+      "commands-run": 6,
+      "commands-failed": 0
+    }
+  },
+  "non-claims": [
+    "(provider) The pre-existing .chongdae state.json change was left untouched."
+  ],
+  "checks-passed": {
+    "ran": [
+      {
+        "command": "python3 <tmp>/cd-selfhost/metadata.check.py",
+        "exit": 0,
+        "tail": [
+          "five version fields 2.0.0: ['.claude-plugin/plugin.json version', '.codex-plugin/plugin.json version', 'marketplace metadata.version', 'marketplace plugins[chongdae].version', 'plugin.json version']",
+          "engines.python >=3.11 x3; .agents marketplace: chongdae, local ./, no version field; README floor 3.11; runtime/tests == 852b852; import: chongdae 2.0.0+g0061142-dirty"
+        ],
+        "at": "2026-10-30T11:41:46+00:00",
+        "chongdae": "chongdae 1.24.0"
+      },
+      {
+        "command": "git diff --check -- plugin.json .claude-plugin/plugin.json .codex-plugin/plugin.json .claude-plugin/marketplace.json",
+        "exit": 0,
+        "tail": [
+          ""
+        ],
+        "at": "2026-10-30T11:41:46+00:00",
+        "chongdae": "chongdae 1.24.0"
+      }
+    ],
+    "at": "2026-10-30T11:41:46+00:00",
+    "chongdae": "chongdae 1.24.0"
+  },
+  "review": {
+    "artifact-type": "dwitbuk/review@1",
+    "verdict": "accept",
+    "findings": [],
+    "worker": {
+      "host": "claude-code",
+      "model": "claude-opus-5-5",
+      "turns": 3,
+      "cost_usd": 0.049575
+    }
+  },
+  "verdict-given": {
+    "at": "2026-10-30T11:41:54+00:00",
+    "chongdae": "chongdae 1.24.0"
+  },
+  "reviewed_tree": {
+    ".claude-plugin/marketplace.json": "bda8c863119747f5c42d5b6ad4da6ec7c9740798",
+    ".claude-plugin/plugin.json": "3466c71852010d53617a453b18723ffd095f0828",
+    ".codex-plugin/plugin.json": "54af51f1c92f60d4a22173acbff8d5f5be7151a1",
+    "plugin.json": "246b60e0b26e47043830d3e6dbaea9d0bac37168"
+  },
+  "verified_by": {
+    "provider": "command",
+    "argv": [
+      "python3",
+      "{plugin:dwitbuk}/eyes_worker.py",
+      "--request",
+      "{request}",
+      "--response",
+      "{response}",
+      "--host",
+      "claude"
+    ],
+    "host": "claude-code",
+    "model": "claude-opus-5-5",
+    "turns": 3,
+    "cost_usd": 0.049575,
+    "versions": {
+      "used": {
+        "dwitbuk": "1.16.0",
+        "chongdae": "1.24.0"
+      }
+    },
+    "trace": {
+      "changed": [],
+      "commands-run": 0,
+      "commands-failed": 0
+    }
+  },
+  "seen-non-claims": {
+    "by": "verifier of metadata-2.0.0",
+    "texts": [
+      "(provider) The pre-existing .chongdae state.json change was left untouched."
+    ],
+    "at": "2026-10-30T11:41:54+00:00",
+    "chongdae": "chongdae 1.24.0"
+  },
+  "checks": [
+    [
+      "python3",
+      "<tmp>/cd-selfhost/metadata.check.py"
+    ],
+    [
+      "git",
+      "diff",
+      "--check",
+      "--",
+      "plugin.json",
+      ".claude-plugin/plugin.json",
+      ".codex-plugin/plugin.json",
+      ".claude-plugin/marketplace.json"
+    ]
+  ],
+  "touched": [
+    ".claude-plugin/marketplace.json",
+    ".claude-plugin/plugin.json",
+    ".codex-plugin/plugin.json",
+    "plugin.json"
+  ],
+  "done": {
+    "at": "2026-10-30T11:41:55+00:00",
+    "chongdae": "chongdae 1.24.0"
+  }
+}

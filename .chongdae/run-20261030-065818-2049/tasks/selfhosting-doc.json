@@ -1,0 +1,182 @@
+{
+  "artifact-type": "chongdae/task@1",
+  "written_by": "chongdae 1.24.0",
+  "status": "done",
+  "def": {
+    "id": "selfhosting-doc",
+    "role": "implementer",
+    "brief": "Write ONE new file, SELFHOSTING.md at the repository root: brief source-maintainer guidance for future sessions that change this chongdae checkout with its own released toolchain. It is real guidance, not a code change. Change no other file: README.md, AGENTS.md, CLAUDE.md, plugin.json, .claude-plugin/plugin.json and .codex-plugin/plugin.json carry someone else's uncommitted edits and must stay byte-identical (the check hashes them). Do not commit. Link, do not duplicate: point to AGENTS.md, README.md (only anchors present in both HEAD and the working tree, e.g. #versioning, #self-check, #providers, #limits), skills/run/SKILL.md, hunsu.json and hunsu.lock.json; never restate the run workflow. At most 90 lines. No machine paths (no /Users/...): call a plugin root `<root>` and say it comes from the SessionStart line. Every sentence must be true of this checkout; verify each against the file named below and leave out anything you cannot verify.\n\nFacts to cover (verified by the session; sources in parentheses):\n1. Declared roles (hunsu.json `roles`, identical in hunsu.lock.json): planner = session; implementer = hacheong member dakdol on host codex; nitpick = teujip on claude; quibble = sibi on claude; newbie = chojja on codex; verifier = dwitbuk eyes_worker.py on claude; reviewer = `dwitbuk review --target .`, which chongdae runs at close; coherence = `mangsang impact --target .`. No role passes --model, so each host's default model answers. Reporters: hunsu `check --findings`, chongdae `report --since {since}`, mangsang `impact --findings`, all with `--target .`. `capabilities`: loopback and network are both `session`. The five `resolutions` are all `reviewed: false` (`hunsu policy` prints them).\n2. Released versions locked (hunsu.lock.json `plugins`): hunsu 1.15.1, chongdae 1.24.0, mangsang 1.19.3, jokbo 1.8.1, hacheong 1.12.1, dwitbuk 1.16.0, installed at project scope for Claude Code. The SessionStart hook line names each locked root; call engines at those roots, never through a glob over the plugin cache.\n3. Python: hunsu.json `engines` requires python >=3.11 (and claude-code >=2.1). The released 1.24.0 manifests disagree: HEAD `plugin.json` and HEAD `.claude-plugin/plugin.json` say >=3.9, HEAD `.codex-plugin/plugin.json` says >=3.11 (`git show HEAD:<file>`); the three must agree before the next release (README#versioning).\n4. A prospective run: before any write, `python3 \"<chongdae root>/chongdae.py\" init --session --goal \"...\" --target .` with the locked root; the chongdae PreToolUse hook refuses Edit/Write until a run is open. Add a task before its work; work that predates its task is `adopt`ed with a --why naming who wrote it. Commit only a task's own paths, subject `run-<id>/<task> (session): ...`, never `git add -A`; edits made outside a run stay unstaged as someone's prior work. A documentation-only change needs no tests writer: say so on the task and decide it by link/manifest checks. `close` runs the reviewer. Version bump, push and release are separate steps (README#versioning).\n5. Source vs installed: this checkout is the source of the next chongdae; the orchestrator is the installed locked release, never this checkout's ./chongdae.py. An engine run from a working source names its version `+g<sha>[-dirty]` (chongdae.py `source_revision`), and a run's `.chongdae/run-*/state.json` `written_by` shows which engine wrote it. Testing the working source (`python3 test_chongdae.py`, AGENTS.md) is not orchestration.\n6. N manages N+1: the locked release N (now chongdae 1.24.0) orchestrates every change to this source, which becomes N+1. N+1 manages nothing, not even the change after it, until it is bumped in every manifest, published, installed, re-locked by hunsu and loaded by a new session.\n7. Codex limitations, each observed on this machine:\n a. A Claude Code session started from a Codex parent inherits CODEX_THREAD_ID; chongdae 1.24.0 then records that session as host codex with the parent thread's model (chongdae.py `performer`: AGENT_HOST decides, else codex whenever CODEX_THREAD_ID is set). Export AGENT_HOST=claude-code in such a session before calling the engines. Seen in run-20261030-065818-2049, task adopt-env (its record names `codex gpt-6-astra`; commit 4de6d33's message carries the correction).\n b. `AGENT_HOST=codex hunsu check` exits 1 with \"content differs\" for hunsu, mangsang and jokbo: Codex's installs of those three carry a root `.codex-marketplace-install.json` that hunsu 1.15.1 counts in its content fingerprint. Pending a hunsu repair; do not `--take-content` past it. The Claude-host `hunsu check` passes.\n c. Codex project hooks (`.codex/hooks.json`) are written only by `hunsu lock` run from a Codex session; this project has none. `{plugin:NAME}` resolves through Claude's install records; Codex-only installs need hunsu.local.json links (README#limits).\n8. mangsang has no model here yet: no concepts, nothing registered, so `mangsang impact` reporting 0 unresolved means nothing is watched, not coverage.\n\nThe check additionally requires these literal strings somewhere in the file: >=3.11, N+1, AGENT_HOST=claude-code, CODEX_THREAD_ID, .codex-marketplace-install.json, init --session, dakdol, teujip, sibi, chojja, eyes_worker, dwitbuk review, mangsang impact; each locked plugin name followed closely by its version; links to AGENTS.md, README.md, hunsu.json, hunsu.lock.json, skills/run/SKILL.md; no trailing whitespace; a final newline.",
+    "closes": [],
+    "needs": [],
+    "checks": [
+      [
+        "python3",
+        "-c",
+        "import hashlib,json,os,re,subprocess,sys\np=sys.argv[1] if len(sys.argv)>1 else \"SELFHOSTING.md\"\nt=open(p,encoding=\"utf-8\").read(); L=t.split(\"\\n\"); bad=[]\nif not t.endswith(\"\\n\"): bad.append(\"no final newline\")\nif len(L)-1>90: bad.append(\"longer than 90 lines: %d\"%(len(L)-1))\nbad+=[\"trailing whitespace on line %d\"%(i+1) for i,x in enumerate(L) if x!=x.rstrip()]\nif re.search(r\"/Users/|/home/|~/\\.claude/plugins/cache/\\w\",t): bad.append(\"a machine path\")\ndef slugs(text):\n  out=set(); fence=False\n  for x in text.split(\"\\n\"):\n    if x.startswith(\"```\"): fence=not fence\n    m=None if fence else re.match(r\"#+ (.*)\",x)\n    if m: out.add(re.sub(r\"[^\\w\\- ]\",\"\",m.group(1).strip().lower()).replace(\" \",\"-\"))\n  return out\nfor href in re.findall(r\"\\]\\(([^)\\s]+)\\)\",t):\n  if re.match(r\"[a-z]+:\",href): continue\n  f,_,a=href.partition(\"#\"); f=f or p\n  if not os.path.exists(f): bad.append(\"link target missing: \"+href); continue\n  if a and a not in slugs(open(f,encoding=\"utf-8\").read()): bad.append(\"anchor missing: \"+href); continue\n  head=subprocess.run([\"git\",\"show\",\"HEAD:\"+f],capture_output=True,text=True)\n  if a and head.returncode==0 and a not in slugs(head.stdout): bad.append(\"anchor not in the committed \"+f+\": \"+href)\nfor f in (\"AGENTS.md\",\"README.md\",\"hunsu.json\",\"hunsu.lock.json\",\"skills/run/SKILL.md\"):\n  if \"](\"+f not in t: bad.append(\"no link to \"+f)\nl=json.load(open(\"hunsu.lock.json\"))\nfor n,v in l[\"plugins\"].items():\n  if not re.search(re.escape(n)+r\"\\W{1,6}\"+re.escape(v[\"version\"]),t): bad.append(\"locked version not stated: %s %s\"%(n,v[\"version\"]))\nfor w in (\">=3.11\",\"N+1\",\"AGENT_HOST=claude-code\",\"CODEX_THREAD_ID\",\".codex-marketplace-install.json\",\"init --session\",\"dakdol\",\"teujip\",\"sibi\",\"chojja\",\"eyes_worker\",\"dwitbuk review\",\"mangsang impact\"):\n  if w not in t: bad.append(\"not stated: \"+w)\nH={\"README.md\":\"d01d1749a82bc3c5e7b925675ea93f665228cc088cb023ba4c91e90157143bb4\",\"AGENTS.md\":\"7cfa2f4f340c630b5f9116ce27d538cb171dc40568771e391431c6e4e697ab92\",\"CLAUDE.md\":\"336cc4fbf19beaada7ccf9986414fa91851a8d7a07dfb3ccbe800a69eed0ab49\",\"plugin.json\":\"f8a8278aa60671c5b196c1a14fbed7540a9acf4458fce6777adaecad666aaf5f\",\".claude-plugin/plugin.json\":\"a20161f0e7cc5d29e7ed9192a14af3dee4d6cfa6de3f3dfe4af0a33041d8b52e\",\".codex-plugin/plugin.json\":\"954eed1d9957ce9108dd01d32cb454d7aa6999c560e08336e468d1279556f8f6\",\".claude-plugin/marketplace.json\":\"af3eb1f0517e2721a0bf2a13b33e12539ce2092095d723d2ae65a4c71548bcb9\",\"skills/run/SKILL.md\":\"da92b1d52a3ceecc71188e5356aa8c210475eb7b77f497eb755320422cc028b7\"}\nfor f,h in H.items():\n  if hashlib.sha256(open(f,\"rb\").read()).hexdigest()!=h: bad.append(\"prior work changed: \"+f)\nassert not bad, bad\nprint(\"%s: %d lines; links and anchors resolve (README anchors also in HEAD); locked versions, role members, Codex limits stated; prior edits unchanged\"%(p,len(L)-1))"
+      ]
+    ],
+    "tests": [],
+    "gate": null,
+    "scope": [
+      "SELFHOSTING.md"
+    ]
+  },
+  "seq": 2,
+  "added": "2026-10-30T07:03:21+00:00",
+  "response": {
+    "status": "done",
+    "summary": "Created only SELFHOSTING.md: 83 lines covering the locked environment, maintenance guidance, provenance, and Codex limitations. Required check passed; prior edits unchanged.",
+    "verified": [
+      {
+        "check": "python3 -c 'import hashlib,json,os,re,subprocess,sys\np=sys.argv[1] if len(sys.argv)>1 else \"SELFHOSTING.md\"\nt=open(p,encoding=\"utf-8\").read(); L=t.split(\"\\n\"); bad=[]\nif not t.endswith(\"\\n\"): bad.append(\"no final newline\")\nif len(L)-1>90: bad.append(\"longer than 90 lines: %d\"%(len(L)-1))\nbad+=[\"trailing whitespace on line %d\"%(i+1) for i,x in enumerate(L) if x!=x.rstrip()]\nif re.search(r\"/Users/|/home/|~/\\.claude/plugins/cache/\\w\",t): bad.append(\"a machine path\")\ndef slugs(text):\n  out=set(); fence=False\n  for x in text.split(\"\\n\"):\n    if x.startswith(\"```\"): fence=not fence\n    m=None if fence else re.match(r\"#+ (.*)\",x)\n    if m: out.add(re.sub(r\"[^\\w\\- ]\",\"\",m.group(1).strip().lower()).replace(\" \",\"-\"))\n  return out\nfor href in re.findall(r\"\\]\\(([^)\\s]+)\\)\",t):\n  if re.match(r\"[a-z]+:\",href): continue\n  f,_,a=href.partition(\"#\"); f=f or p\n  if not os.path.exists(f): bad.append(\"link target missing: \"+href); continue\n  if a and a not in slugs(open(f,encoding=\"utf-8\").read()): bad.append(\"anchor missing: \"+href); continue\n  head=subprocess.run([\"git\",\"show\",\"HEAD:\"+f],capture_output=True,text=True)\n  if a and head.returncode==0 and a not in slugs(head.stdout): bad.append(\"anchor not in the committed \"+f+\": \"+href)\nfor f in (\"AGENTS.md\",\"README.md\",\"hunsu.json\",\"hunsu.lock.json\",\"skills/run/SKILL.md\"):\n  if \"](\"+f not in t: bad.append(\"no link to \"+f)\nl=json.load(open(\"hunsu.lock.json\"))\nfor n,v in l[\"plugins\"].items():\n  if not re.search(re.escape(n)+r\"\\W{1,6}\"+re.escape(v[\"version\"]),t): bad.append(\"locked version not stated: %s %s\"%(n,v[\"version\"]))\nfor w in (\">=3.11\",\"N+1\",\"AGENT_HOST=claude-code\",\"CODEX_THREAD_ID\",\".codex-marketplace-install.json\",\"init --session\",\"dakdol\",\"teujip\",\"sibi\",\"chojja\",\"eyes_worker\",\"dwitbuk review\",\"mangsang impact\"):\n  if w not in t: bad.append(\"not stated: \"+w)\nH={\"README.md\":\"d01d1749a82bc3c5e7b925675ea93f665228cc088cb023ba4c91e90157143bb4\",\"AGENTS.md\":\"7cfa2f4f340c630b5f9116ce27d538cb171dc40568771e391431c6e4e697ab92\",\"CLAUDE.md\":\"336cc4fbf19beaada7ccf9986414fa91851a8d7a07dfb3ccbe800a69eed0ab49\",\"plugin.json\":\"f8a8278aa60671c5b196c1a14fbed7540a9acf4458fce6777adaecad666aaf5f\",\".claude-plugin/plugin.json\":\"a20161f0e7cc5d29e7ed9192a14af3dee4d6cfa6de3f3dfe4af0a33041d8b52e\",\".codex-plugin/plugin.json\":\"954eed1d9957ce9108dd01d32cb454d7aa6999c560e08336e468d1279556f8f6\",\".claude-plugin/marketplace.json\":\"af3eb1f0517e2721a0bf2a13b33e12539ce2092095d723d2ae65a4c71548bcb9\",\"skills/run/SKILL.md\":\"da92b1d52a3ceecc71188e5356aa8c210475eb7b77f497eb755320422cc028b7\"}\nfor f,h in H.items():\n  if hashlib.sha256(open(f,\"rb\").read()).hexdigest()!=h: bad.append(\"prior work changed: \"+f)\nassert not bad, bad\nprint(\"%s: %d lines; links and anchors resolve (README anchors also in HEAD); locked versions, role members, Codex limits stated; prior edits unchanged\"%(p,len(L)-1))'",
+        "exit": 0
+      },
+      {
+        "check": "git diff --check",
+        "exit": 0
+      }
+    ],
+    "decisions": [],
+    "non-claims": [
+      "Historical host-check results were verified from existing records, not rerun.",
+      "Documentation-only change; no behavior test suite, commit, version bump, push, or release performed."
+    ],
+    "disputed-tests": [],
+    "worker": {
+      "host": "codex",
+      "model": "gpt-6-astra",
+      "effort": "medium"
+    }
+  },
+  "answered": {
+    "at": "2026-10-30T07:05:21+00:00",
+    "chongdae": "chongdae 1.24.0"
+  },
+  "touched_by_provider": [
+    "SELFHOSTING.md"
+  ],
+  "performed_by": {
+    "provider": "command",
+    "argv": [
+      "python3",
+      "{plugin:hacheong}/worker.py",
+      "--member",
+      "dakdol",
+      "--request",
+      "{request}",
+      "--response",
+      "{response}",
+      "--host",
+      "codex"
+    ],
+    "host": "codex",
+    "model": "gpt-6-astra",
+    "effort": "medium",
+    "versions": {
+      "used": {
+        "hacheong": "1.12.1",
+        "chongdae": "1.24.0"
+      }
+    },
+    "trace": {
+      "changed": [
+        "add ./SELFHOSTING.md"
+      ],
+      "commands-run": 21,
+      "commands-failed": 1
+    }
+  },
+  "non-claims": [
+    "(provider) Historical host-check results were verified from existing records, not rerun.",
+    "(provider) Documentation-only change; no behavior test suite, commit, version bump, push, or release performed."
+  ],
+  "checks-passed": {
+    "ran": [
+      {
+        "command": "python3 -c 'import hashlib,json,os,re,subprocess,sys\np=sys.argv[1] if len(sys.argv)>1 else \"SELFHOSTING.md\"\nt=open(p,encoding=\"utf-8\").read(); L=t.split(\"\\n\"); bad=[]\nif not t.endswith(\"\\n\"): bad.append(\"no final newline\")\nif len(L)-1>90: bad.append(\"longer than 90 lines: %d\"%(len(L)-1))\nbad+=[\"trailing whitespace on line %d\"%(i+1) for i,x in enumerate(L) if x!=x.rstrip()]\nif re.search(r\"/Users/|/home/|~/\\.claude/plugins/cache/\\w\",t): bad.append(\"a machine path\")\ndef slugs(text):\n  out=set(); fence=False\n  for x in text.split(\"\\n\"):\n    if x.startswith(\"```\"): fence=not fence\n    m=None if fence else re.match(r\"#+ (.*)\",x)\n    if m: out.add(re.sub(r\"[^\\w\\- ]\",\"\",m.group(1).strip().lower()).replace(\" \",\"-\"))\n  return out\nfor href in re.findall(r\"\\]\\(([^)\\s]+)\\)\",t):\n  if re.match(r\"[a-z]+:\",href): continue\n  f,_,a=href.partition(\"#\"); f=f or p\n  if not os.path.exists(f): bad.append(\"link target missing: \"+href); continue\n  if a and a not in slugs(open(f,encoding=\"utf-8\").read()): bad.append(\"anchor missing: \"+href); continue\n  head=subprocess.run([\"git\",\"show\",\"HEAD:\"+f],capture_output=True,text=True)\n  if a and head.returncode==0 and a not in slugs(head.stdout): bad.append(\"anchor not in the committed \"+f+\": \"+href)\nfor f in (\"AGENTS.md\",\"README.md\",\"hunsu.json\",\"hunsu.lock.json\",\"skills/run/SKILL.md\"):\n  if \"](\"+f not in t: bad.append(\"no link to \"+f)\nl=json.load(open(\"hunsu.lock.json\"))\nfor n,v in l[\"plugins\"].items():\n  if not re.search(re.escape(n)+r\"\\W{1,6}\"+re.escape(v[\"version\"]),t): bad.append(\"locked version not stated: %s %s\"%(n,v[\"version\"]))\nfor w in (\">=3.11\",\"N+1\",\"AGENT_HOST=claude-code\",\"CODEX_THREAD_ID\",\".codex-marketplace-install.json\",\"init --session\",\"dakdol\",\"teujip\",\"sibi\",\"chojja\",\"eyes_worker\",\"dwitbuk review\",\"mangsang impact\"):\n  if w not in t: bad.append(\"not stated: \"+w)\nH={\"README.md\":\"d01d1749a82bc3c5e7b925675ea93f665228cc088cb023ba4c91e90157143bb4\",\"AGENTS.md\":\"7cfa2f4f340c630b5f9116ce27d538cb171dc40568771e391431c6e4e697ab92\",\"CLAUDE.md\":\"336cc4fbf19beaada7ccf9986414fa91851a8d7a07dfb3ccbe800a69eed0ab49\",\"plugin.json\":\"f8a8278aa60671c5b196c1a14fbed7540a9acf4458fce6777adaecad666aaf5f\",\".claude-plugin/plugin.json\":\"a20161f0e7cc5d29e7ed9192a14af3dee4d6cfa6de3f3dfe4af0a33041d8b52e\",\".codex-plugin/plugin.json\":\"954eed1d9957ce9108dd01d32cb454d7aa6999c560e08336e468d1279556f8f6\",\".claude-plugin/marketplace.json\":\"af3eb1f0517e2721a0bf2a13b33e12539ce2092095d723d2ae65a4c71548bcb9\",\"skills/run/SKILL.md\":\"da92b1d52a3ceecc71188e5356aa8c210475eb7b77f497eb755320422cc028b7\"}\nfor f,h in H.items():\n  if hashlib.sha256(open(f,\"rb\").read()).hexdigest()!=h: bad.append(\"prior work changed: \"+f)\nassert not bad, bad\nprint(\"%s: %d lines; links and anchors resolve (README anchors also in HEAD); locked versions, role members, Codex limits stated; prior edits unchanged\"%(p,len(L)-1))'",
+        "exit": 0,
+        "tail": [
+          "SELFHOSTING.md: 83 lines; links and anchors resolve (README anchors also in HEAD); locked versions, role members, Codex limits stated; prior edits unchanged"
+        ],
+        "at": "2026-10-30T07:05:22+00:00",
+        "chongdae": "chongdae 1.24.0"
+      }
+    ],
+    "at": "2026-10-30T07:05:22+00:00",
+    "chongdae": "chongdae 1.24.0"
+  },
+  "review": {
+    "artifact-type": "dwitbuk/review@1",
+    "verdict": "accept",
+    "findings": [],
+    "worker": {
+      "host": "claude-code",
+      "model": "claude-opus-5-5",
+      "turns": 4,
+      "cost_usd": 0.135745
+    }
+  },
+  "verdict-given": {
+    "at": "2026-10-30T07:05:30+00:00",
+    "chongdae": "chongdae 1.24.0"
+  },
+  "reviewed_tree": {
+    ".claude-plugin/plugin.json": "e243a5d51f82b623e35d38417fd2213ad6d5640e",
+    "README.md": "484314d80a83fa4f3c426ded2ee89eebf0a74a5b",
+    "plugin.json": "0199d8e4d2227357de77c5cc2adbcf5d198bd285",
+    "AGENTS.md": "356bfb71a61076f443ebfd64eb93886bbbad4383",
+    "CLAUDE.md": "c140473a3a5fbe89301c99d9d0d1b76c5971f2c3",
+    "SELFHOSTING.md": "9ac820b4b341098c76f6254bbff1132a253fe01b"
+  },
+  "verified_by": {
+    "provider": "command",
+    "argv": [
+      "python3",
+      "{plugin:dwitbuk}/eyes_worker.py",
+      "--request",
+      "{request}",
+      "--response",
+      "{response}",
+      "--host",
+      "claude"
+    ],
+    "host": "claude-code",
+    "model": "claude-opus-5-5",
+    "turns": 4,
+    "cost_usd": 0.135745,
+    "versions": {
+      "used": {
+        "dwitbuk": "1.16.0",
+        "chongdae": "1.24.0"
+      }
+    },
+    "trace": {
+      "changed": [],
+      "commands-run": 0,
+      "commands-failed": 0
+    }
+  },
+  "seen-non-claims": {
+    "by": "verifier of selfhosting-doc",
+    "texts": [
+      "(provider) Historical host-check results were verified from existing records, not rerun.",
+      "(provider) Documentation-only change; no behavior test suite, commit, version bump, push, or release performed."
+    ],
+    "at": "2026-10-30T07:05:30+00:00",
+    "chongdae": "chongdae 1.24.0"
+  },
+  "checks": [
+    [
+      "python3",
+      "-c",
+      "import hashlib,json,os,re,subprocess,sys\np=sys.argv[1] if len(sys.argv)>1 else \"SELFHOSTING.md\"\nt=open(p,encoding=\"utf-8\").read(); L=t.split(\"\\n\"); bad=[]\nif not t.endswith(\"\\n\"): bad.append(\"no final newline\")\nif len(L)-1>90: bad.append(\"longer than 90 lines: %d\"%(len(L)-1))\nbad+=[\"trailing whitespace on line %d\"%(i+1) for i,x in enumerate(L) if x!=x.rstrip()]\nif re.search(r\"/Users/|/home/|~/\\.claude/plugins/cache/\\w\",t): bad.append(\"a machine path\")\ndef slugs(text):\n  out=set(); fence=False\n  for x in text.split(\"\\n\"):\n    if x.startswith(\"```\"): fence=not fence\n    m=None if fence else re.match(r\"#+ (.*)\",x)\n    if m: out.add(re.sub(r\"[^\\w\\- ]\",\"\",m.group(1).strip().lower()).replace(\" \",\"-\"))\n  return out\nfor href in re.findall(r\"\\]\\(([^)\\s]+)\\)\",t):\n  if re.match(r\"[a-z]+:\",href): continue\n  f,_,a=href.partition(\"#\"); f=f or p\n  if not os.path.exists(f): bad.append(\"link target missing: \"+href); continue\n  if a and a not in slugs(open(f,encoding=\"utf-8\").read()): bad.append(\"anchor missing: \"+href); continue\n  head=subprocess.run([\"git\",\"show\",\"HEAD:\"+f],capture_output=True,text=True)\n  if a and head.returncode==0 and a not in slugs(head.stdout): bad.append(\"anchor not in the committed \"+f+\": \"+href)\nfor f in (\"AGENTS.md\",\"README.md\",\"hunsu.json\",\"hunsu.lock.json\",\"skills/run/SKILL.md\"):\n  if \"](\"+f not in t: bad.append(\"no link to \"+f)\nl=json.load(open(\"hunsu.lock.json\"))\nfor n,v in l[\"plugins\"].items():\n  if not re.search(re.escape(n)+r\"\\W{1,6}\"+re.escape(v[\"version\"]),t): bad.append(\"locked version not stated: %s %s\"%(n,v[\"version\"]))\nfor w in (\">=3.11\",\"N+1\",\"AGENT_HOST=claude-code\",\"CODEX_THREAD_ID\",\".codex-marketplace-install.json\",\"init --session\",\"dakdol\",\"teujip\",\"sibi\",\"chojja\",\"eyes_worker\",\"dwitbuk review\",\"mangsang impact\"):\n  if w not in t: bad.append(\"not stated: \"+w)\nH={\"README.md\":\"d01d1749a82bc3c5e7b925675ea93f665228cc088cb023ba4c91e90157143bb4\",\"AGENTS.md\":\"7cfa2f4f340c630b5f9116ce27d538cb171dc40568771e391431c6e4e697ab92\",\"CLAUDE.md\":\"336cc4fbf19beaada7ccf9986414fa91851a8d7a07dfb3ccbe800a69eed0ab49\",\"plugin.json\":\"f8a8278aa60671c5b196c1a14fbed7540a9acf4458fce6777adaecad666aaf5f\",\".claude-plugin/plugin.json\":\"a20161f0e7cc5d29e7ed9192a14af3dee4d6cfa6de3f3dfe4af0a33041d8b52e\",\".codex-plugin/plugin.json\":\"954eed1d9957ce9108dd01d32cb454d7aa6999c560e08336e468d1279556f8f6\",\".claude-plugin/marketplace.json\":\"af3eb1f0517e2721a0bf2a13b33e12539ce2092095d723d2ae65a4c71548bcb9\",\"skills/run/SKILL.md\":\"da92b1d52a3ceecc71188e5356aa8c210475eb7b77f497eb755320422cc028b7\"}\nfor f,h in H.items():\n  if hashlib.sha256(open(f,\"rb\").read()).hexdigest()!=h: bad.append(\"prior work changed: \"+f)\nassert not bad, bad\nprint(\"%s: %d lines; links and anchors resolve (README anchors also in HEAD); locked versions, role members, Codex limits stated; prior edits unchanged\"%(p,len(L)-1))"
+    ]
+  ],
+  "touched": [
+    "SELFHOSTING.md"
+  ],
+  "done": {
+    "at": "2026-10-30T07:05:31+00:00",
+    "chongdae": "chongdae 1.24.0"
+  }
+}

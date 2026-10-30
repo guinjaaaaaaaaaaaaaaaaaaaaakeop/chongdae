@@ -327,9 +327,27 @@ def test_verifier_before_the_gate_protected_tests_and_delegation_policy():
         assert run("confirm", "S3", "--by", "kim", "--target", pj.dir)[0] == 0
 
 
+def session_env(**env):
+    """The env of the session a hook or engine subprocess means: this process's, with `env` set and a None unset."""
+    out = dict(os.environ, **{k: v for k, v in env.items() if v is not None})
+    for k in [k for k, v in env.items() if v is None]:
+        out.pop(k, None)
+    return out
+
+
+# a normal (parent) session: no AGENT_WORKER, even when the test process itself runs inside a hired worker
+NORMAL_SESSION = {"AGENT_WORKER": None}
+
+
+def did_command(argv, target):
+    """A `did` command as the public record keeps it: each word written portably (the project `.`, the home `~`, a temp
+    directory `<tmp>`), joined, then projected for the record — never this machine's raw interpreter path."""
+    return chongdae.public_projection(chongdae.shlex.join(chongdae.neutral_path(a, target) for a in argv), target)[0]
+
+
 def hook(name, payload, **env):
     done = subprocess.run([sys.executable, os.path.join(HERE, "hooks", name)], input=json.dumps(payload), capture_output=True, text=True, encoding="utf-8",
-                          env=dict(os.environ, **env))
+                          env=session_env(**env))
     return done.returncode, done.stdout + done.stderr
 
 
@@ -456,7 +474,7 @@ def test_performed_by_is_recorded_like_an_author_line():
             transcript = os.path.join(pj.dir, "host-transcript.jsonl")
             hook = os.path.join(HERE, "hooks", "session_start.py")
             done = subprocess.run([sys.executable, hook], input=json.dumps({"cwd": pj.dir, "session_id": "sess-123", "transcript_path": transcript, "source": "startup"}),
-                                  capture_output=True, text=True, encoding="utf-8")
+                                  capture_output=True, text=True, encoding="utf-8", env=session_env(**NORMAL_SESSION))
             assert done.returncode == 0 and os.path.exists(os.path.join(pj.dir, ".chongdae", "sessions", "sess-123.json")), done.stderr
             assert io.open(os.path.join(pj.dir, ".chongdae", "sessions", ".gitignore")).read() == "*\n"   # machine-local: ignores itself
             assert run("add", "T1", "--check", sys.executable + " -c 'raise SystemExit(0)'", "--target", pj.dir)[0] == 0
@@ -904,7 +922,7 @@ def test_a_disputed_contract_test_goes_back_to_its_writer_and_the_build_goes_out
         st = pj.state()["tasks"]
         assert st["tests"]["status"] == "done" and st["tests"]["attempts"][0]["disputed-tests"][0]["why"] == "fixture breaks Q", st["tests"]
         assert json.load(open(os.path.join(rd, "local", "tests.request.json")))["amending"][0]["test"] == "test_a.py::test_x"
-        assert json.load(open(os.path.join(rd, "local", "tests.request.1.json")))["checks"] == [[sys.executable, "-c", "raise SystemExit(0)"]], "the writer's request carries the build's check"
+        assert json.load(open(os.path.join(rd, "local", "tests.request.1.json")))["checks"] == [chongdae.portable_argv([sys.executable, "-c", "raise SystemExit(0)"])], "the writer's request carries the build's check"
         assert st["build"]["status"] == "done" and st["build"]["rebaselined"][0]["tests"] == ["test_a.py"], st["build"]
         assert str(st["build"]["attempts"][0]["retried"]["auto"]).startswith("tests disputed"), st["build"]["attempts"]
         assert open(os.path.join(pj.dir, "test_a.py")).read() == "# amended\n"
@@ -1641,20 +1659,20 @@ def test_session_run_tasks_added_as_the_work_goes_claims_and_the_write_hook():
         os.environ["CHONGDAE_USER"] = "alice"
         try:
             # no run: the write hook refuses project files, allows the record and files elsewhere
-            code, out = hook("pre_write.py", {"cwd": pj.dir, "tool_name": "Write", "tool_input": {"file_path": os.path.join(pj.dir, "a.py")}})
+            code, out = hook("pre_write.py", {"cwd": pj.dir, "tool_name": "Write", "tool_input": {"file_path": os.path.join(pj.dir, "a.py")}}, **NORMAL_SESSION)
             assert code == 2 and "no run in progress" in out, out
-            assert hook("pre_write.py", {"cwd": pj.dir, "tool_name": "Write", "tool_input": {"file_path": os.path.join(pj.dir, ".chongdae", "x.json")}})[0] == 0
-            assert hook("pre_write.py", {"cwd": pj.dir, "tool_name": "Write", "tool_input": {"file_path": os.path.join(pj.dir, "hunsu.json")}})[0] == 0
-            assert hook("pre_write.py", {"cwd": pj.dir, "tool_name": "Write", "tool_input": {"file_path": "C:/elsewhere/a.py" if os.name == "nt" else "/elsewhere/a.py"}})[0] == 0
-            code, out = hook("session_start.py", {"cwd": pj.dir})
+            assert hook("pre_write.py", {"cwd": pj.dir, "tool_name": "Write", "tool_input": {"file_path": os.path.join(pj.dir, ".chongdae", "x.json")}}, **NORMAL_SESSION)[0] == 0
+            assert hook("pre_write.py", {"cwd": pj.dir, "tool_name": "Write", "tool_input": {"file_path": os.path.join(pj.dir, "hunsu.json")}}, **NORMAL_SESSION)[0] == 0
+            assert hook("pre_write.py", {"cwd": pj.dir, "tool_name": "Write", "tool_input": {"file_path": "C:/elsewhere/a.py" if os.name == "nt" else "/elsewhere/a.py"}}, **NORMAL_SESSION)[0] == 0
+            code, out = hook("session_start.py", {"cwd": pj.dir}, **NORMAL_SESSION)
             assert code == 0 and "no run in progress" in out, out
             assert run("add", "T1", "--target", pj.dir)[0] != 0, "no run to add to"
             code, out = run("status", "--target", pj.dir)
             assert code == 0 and out.startswith("no run"), out
             # a session run: tasks are added as the work goes; each takes its start snapshot at add time
             assert run("init", "--session", "--goal", "tidy", "--target", pj.dir)[0] == 0
-            assert hook("pre_write.py", {"cwd": pj.dir, "tool_name": "Edit", "tool_input": {"file_path": os.path.join(pj.dir, "a.py")}})[0] == 0
-            assert "run %s in progress" % os.path.basename(chongdae.run_dir(pj.dir)) in hook("session_start.py", {"cwd": pj.dir})[1]
+            assert hook("pre_write.py", {"cwd": pj.dir, "tool_name": "Edit", "tool_input": {"file_path": os.path.join(pj.dir, "a.py")}}, **NORMAL_SESSION)[0] == 0
+            assert "run %s in progress" % os.path.basename(chongdae.run_dir(pj.dir)) in hook("session_start.py", {"cwd": pj.dir}, **NORMAL_SESSION)[1]
             assert hook("session_start.py", {"cwd": pj.dir}, AGENT_WORKER="1") == (0, ""), "a worker session: the run is the hiring session's"
             write(os.path.join(pj.dir, "old.py"), "x = 0\n")   # dirt before the task: not the task's
             assert run("add", "T1", "--brief", "fix a typo", "--target", pj.dir)[0] == 0
@@ -2329,12 +2347,12 @@ def test_hooks_and_engine_anchor_to_the_project_not_the_shells_directory():
         subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "base"], cwd=pj.dir, check=True)
         sub = os.path.join(pj.dir, "tests")
         os.makedirs(sub)
-        write_hook = lambda cwd, *parts: hook("pre_write.py", {"cwd": cwd, "tool_name": "Write", "tool_input": {"file_path": os.path.join(*parts)}})[0]
+        write_hook = lambda cwd, *parts: hook("pre_write.py", {"cwd": cwd, "tool_name": "Write", "tool_input": {"file_path": os.path.join(*parts)}}, **NORMAL_SESSION)[0]
         assert write_hook(sub, sub, "test_x.py") == 2, "no run: refused from a subdirectory too"
         assert chongdae.project_root(sub) == pj.dir, "no record yet: git's top level"
         assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
         assert write_hook(sub, sub, "test_x.py") == 0 and write_hook(sub, pj.dir, "a.py") == 0, "a running run, seen from tests/"
-        out = hook("session_start.py", {"cwd": sub, "session_id": "s1", "transcript_path": "/x/s1.jsonl"})[1]
+        out = hook("session_start.py", {"cwd": sub, "session_id": "s1", "transcript_path": "/x/s1.jsonl"}, **NORMAL_SESSION)[1]
         assert "in progress" in out, out
         assert os.path.exists(os.path.join(pj.dir, chongdae.SESSIONS, "s1.json")) and not os.path.exists(os.path.join(sub, chongdae.RUNS))
         here = os.getcwd()
@@ -2787,7 +2805,7 @@ def test_did_runs_one_operation_records_it_whatever_the_exit_and_report_lists_it
         assert len(did) == 2, did
         first = dict(did[0])
         assert first.pop("at").endswith("+00:00") and first.pop("chongdae") == chongdae.engine()
-        assert first == {"command": chongdae.shlex.join([sys.executable, "-c", "import sys; print('deployed ' + sys.argv[1])", "--why"]), "exit": 0,
+        assert first == {"command": did_command([sys.executable, "-c", "import sys; print('deployed ' + sys.argv[1])", "--why"], pj.dir), "exit": 0,
                          "tail": ["deployed --why"], "why": "deploy the site", "approved-in": "source:at-63", "signer": agent}, first
         assert did[1]["exit"] == 3 and did[1]["signer"] == "kim" and "approved-in" not in did[1]
         log = subprocess.run(["git", "log", "--format=%s"], cwd=pj.dir, capture_output=True, text=True).stdout
@@ -2838,7 +2856,7 @@ def test_the_session_start_line_counts_open_tasks_by_the_rule_run_uses():
         assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
         assert run("add", "a", "--target", pj.dir)[0] == 0 and run("add", "b", "--target", pj.dir)[0] == 0
         assert run("drop", "a", "--why", "superseded", "--target", pj.dir)[0] == 0
-        out = hook("session_start.py", {"cwd": pj.dir})[1]
+        out = hook("session_start.py", {"cwd": pj.dir}, **NORMAL_SESSION)[1]
         assert "1 task(s) open: b." in out, out
         assert "1 open: b" in run("status", "--target", pj.dir)[1]
 
@@ -3381,7 +3399,7 @@ def test_a_verifier_finding_whose_quote_is_not_where_it_says_is_overruled_and_th
         assert code == 0 and "unfounded, overruled" in out and "going on as accepted" in out and "sent back" not in out, out
         req = json.load(open(glob.glob(os.path.join(chongdae.run_dir(pj.dir), "local", "build.verify*request*.seen"))[0]))
         own = [c for c in req["checked"] if c["source"].startswith("the task's checks")]
-        assert own and own[0]["command"] == chongdae.shlex.join(chongdae.shlex.split(check)) and own[0]["exit"] == 0 and own[0]["tail"] == ["all groups passed"] \
+        assert own and own[0]["command"] == chongdae.shlex.join(chongdae.portable_argv(chongdae.shlex.split(check))) and own[0]["exit"] == 0 and own[0]["tail"] == ["all groups passed"] \
             and own[0]["changed_since"] == [] and own[0]["at"], req["checked"]
         ts = pj.state()["tasks"]["build"]
         assert ts["status"] == "done" and not ts.get("attempts") and "rejected" not in ts, ts
@@ -3480,7 +3498,7 @@ def test_a_quibble_task_is_sent_a_review_shaped_request_not_its_own_empty_checks
         assert run("add", "q2", "--role", "quibble", "--closes", "Q-a", "--target", pj.dir)[0] == 0
         run("run", "--target", pj.dir)
         req = json.load(open(os.path.join(chongdae.run_dir(pj.dir), "local", "q2.request.json.seen")))
-        assert req["stage"] == "quibble" and req["checks"] == [[sys.executable, "-c", "pass"]] and req["checks-are"].startswith("planned: the checks of b"), req
+        assert req["stage"] == "quibble" and req["checks"] == [chongdae.portable_argv([sys.executable, "-c", "pass"])] and req["checks-are"].startswith("planned: the checks of b"), req
 
 
 def test_a_record_file_is_written_only_when_what_it_says_changed():
@@ -3524,7 +3542,7 @@ def test_did_keeps_a_script_outside_the_project_a_sensible_subject_a_meaningful_
             code, out = run("did", "ops", "--why", "empty the bucket", "--target", pj.dir, "--", sys.executable, script)
             assert code == 0 and "the program it ran (empty_r2.py) is outside the project: sha256" in out and "its content kept in the record" in out, out
             rec = pj.state()["tasks"]["ops"]["did"][0]
-            assert rec["command"] == chongdae.shlex.join([sys.executable, "<outside:empty_r2.py>"]) and scratch not in json.dumps(rec), rec
+            assert rec["command"] == did_command([sys.executable, "<outside:empty_r2.py>"], pj.dir) and scratch not in json.dumps(rec), rec
             import hashlib
             o = rec["outside"][0]
             assert o["arg"] == 1 and o["sha256"] == hashlib.sha256(body.encode("utf-8")).hexdigest() and o["content"] == body and o["size"] == len(body.encode("utf-8")), o
@@ -3716,7 +3734,7 @@ def test_session_start_under_hunsus_probe_says_its_standing_text_not_one_state()
             if step == "running":
                 assert run("init", "--session", "--goal", "the live goal", "--target", pj.dir)[0] == 0
                 assert run("add", "live-task", "--brief", "b", "--target", pj.dir)[0] == 0
-            code, out = hook("session_start.py", {"cwd": pj.dir, "session_id": "probe1", "transcript_path": "/x/probe1.jsonl"}, HUNSU_SURVEY="1")
+            code, out = hook("session_start.py", {"cwd": pj.dir, "session_id": "probe1", "transcript_path": "/x/probe1.jsonl"}, HUNSU_SURVEY="1", **NORMAL_SESSION)
             assert code == 0, out
             texts.append(json.loads(out)["hookSpecificOutput"]["additionalContext"])
         assert texts[0] == texts[1], texts
@@ -3728,7 +3746,7 @@ def test_session_start_under_hunsus_probe_says_its_standing_text_not_one_state()
             assert live not in t, (live, t)
         assert not os.path.exists(os.path.join(pj.dir, chongdae.SESSIONS, "probe1.json")), "the probe wrote nothing"
         # and the hook's live line is the template filled
-        live = json.loads(hook("session_start.py", {"cwd": pj.dir})[1])["hookSpecificOutput"]["additionalContext"]
+        live = json.loads(hook("session_start.py", {"cwd": pj.dir}, **NORMAL_SESSION)[1])["hookSpecificOutput"]["additionalContext"]
         assert "in progress (session: 'the live goal') — 1 task(s) open: live-task. Writes go through this run" in live, live
 
 
@@ -4055,31 +4073,31 @@ def test_operation_words_are_report_hints_and_a_bash_operation_gets_a_did_nudge(
     with Project() as pj:   # the Bash hook: a line of context while a run is running, never a refusal
         _git(pj.dir, "commit", "-q", "--allow-empty", "-m", "base")
         payload = lambda c: {"cwd": pj.dir, "tool_name": "Bash", "tool_input": {"command": c}}
-        assert hook("pre_bash.py", payload("git push origin main")) == (0, ""), "no run: silent"
+        assert hook("pre_bash.py", payload("git push origin main"), **NORMAL_SESSION) == (0, ""), "no run: silent"
         assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
         assert run("add", "ops", "--brief", "b", "--target", pj.dir)[0] == 0
-        code, out = hook("pre_bash.py", payload("npm run deploy 2>&1 | grep -E 'Version'; git push 2>&1 | tail -1"))
+        code, out = hook("pre_bash.py", payload("npm run deploy 2>&1 | grep -E 'Version'; git push 2>&1 | tail -1"), **NORMAL_SESSION)
         said = json.loads(out)["hookSpecificOutput"]
         assert code == 0 and said["hookEventName"] == "PreToolUse" and "permissionDecision" not in said, out
         assert "record it:" in said["additionalContext"] and "did TASK" in said["additionalContext"] and "ops" in said["additionalContext"], out
-        assert hook("pre_bash.py", payload("git status && ls")) == (0, "")
-        assert hook("pre_bash.py", payload('python3 "/x/chongdae.py" did ops --why w -- git push')) == (0, ""), "did itself is the record"
+        assert hook("pre_bash.py", payload("git status && ls"), **NORMAL_SESSION) == (0, "")
+        assert hook("pre_bash.py", payload('python3 "/x/chongdae.py" did ops --why w -- git push'), **NORMAL_SESSION) == (0, ""), "did itself is the record"
         assert hook("pre_bash.py", payload("git push"), AGENT_WORKER="1") == (0, ""), "a worker session: silent"
         # guin-site 10-15: `…run; git commit; close; git push` — told "record it", the push ran after the run had closed
         line = 'python3 "/x/chongdae.py" run --target .; git commit -qm w -- a.py; python3 "/x/chongdae.py" close --target .; git push'
-        ctx = json.loads(hook("pre_bash.py", payload(line))[1])["hookSpecificOutput"]["additionalContext"]
+        ctx = json.loads(hook("pre_bash.py", payload(line), **NORMAL_SESSION)[1])["hookSpecificOutput"]["additionalContext"]
         assert "this `git push` runs after `close`, outside any run — move it before close as" in ctx and "did TASK" in ctx and "-- git push`" in ctx, ctx
         assert chongdae.after_close(pj.dir, 'python3 chongdae.py --target . close && git push') and not chongdae.after_close(pj.dir, 'git push; python3 chongdae.py close')
         assert not chongdae.after_close(pj.dir, 'python3 chongdae.py run --target .; git push') and not chongdae.after_close(pj.dir, 'python3 chongdae.py close')
         # sagoforce 10-26: the engine kept in a variable — `did` with a push as its argument was told "record it", and a push
         # after `$C close` was told the same instead of "after close"; a `;` inside a quoted --why is not a command boundary
-        assert hook("pre_bash.py", payload('C=/x/chongdae.py && python3 $C did ops --why "a; b" -- git push -u origin main')) == (0, "")
+        assert hook("pre_bash.py", payload('C=/x/chongdae.py && python3 $C did ops --why "a; b" -- git push -u origin main'), **NORMAL_SESSION) == (0, "")
         assert chongdae.after_close(pj.dir, 'python3 $C run ops && python3 $C close 2>&1 | tail -3; git push -q origin main')
         assert not chongdae.after_close(pj.dir, 'git push && python3 "$C" close')
-        ctx = json.loads(hook("pre_bash.py", payload('git push; python3 "/x/chongdae.py" close'))[1])["hookSpecificOutput"]["additionalContext"]
+        ctx = json.loads(hook("pre_bash.py", payload('git push; python3 "/x/chongdae.py" close'), **NORMAL_SESSION)[1])["hookSpecificOutput"]["additionalContext"]
         assert "record it:" in ctx and "after `close`" not in ctx, ctx
         write(os.path.join(pj.dir, "hunsu.json"), {"settings": {"chongdae": {"ops-patterns": [r"\bmake\s+release\b"]}}})
-        assert hook("pre_bash.py", payload("git push")) == (0, "") and "make release" in hook("pre_bash.py", payload("make release"))[1]
+        assert hook("pre_bash.py", payload("git push"), **NORMAL_SESSION) == (0, "") and "make release" in hook("pre_bash.py", payload("make release"), **NORMAL_SESSION)[1]
         hooks = json.load(open(os.path.join(HERE, "hooks", "hooks.json"), encoding="utf-8"))["hooks"]["PreToolUse"]
         assert any(h["matcher"] == "Bash" and "pre_bash.py" in h["hooks"][0]["command"] for h in hooks), hooks
 
@@ -4123,14 +4141,14 @@ def test_the_session_start_and_close_say_unpushed_commits_and_no_upstream():
             subprocess.run(["git", "init", "-q", "--bare", bare], check=True)
             _git(pj.dir, "remote", "add", "origin", bare)
             assert chongdae.upstream_line(pj.dir) == "%s: no upstream" % branch
-            code, out = hook("session_start.py", {"cwd": pj.dir})
+            code, out = hook("session_start.py", {"cwd": pj.dir}, **NORMAL_SESSION)
             assert "%s: no upstream." % branch in json.loads(out)["hookSpecificOutput"]["additionalContext"], out
             assert _git(pj.dir, "push", "-q", "-u", "origin", branch).returncode == 0
             assert chongdae.upstream_line(pj.dir) is None, "level: silent"
             assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0   # a record commit, not pushed (remote absent)
             code, out = run("close", "--target", pj.dir)
             assert code == 0 and "%s: 2 commits not on origin/%s (as of the last fetch)" % (branch, branch) in out, out
-            code, out = hook("session_start.py", {"cwd": pj.dir})
+            code, out = hook("session_start.py", {"cwd": pj.dir}, **NORMAL_SESSION)
             assert "commits not on origin/%s" % branch in json.loads(out)["hookSpecificOutput"]["additionalContext"], out
         finally:
             shutil.rmtree(bare, ignore_errors=True)
@@ -4340,6 +4358,7 @@ if __name__ == "__main__":
         "test_concurrency", "test_review_freshness", "test_record_transactions", "test_launch_recovery",
         "test_state_recovery", "test_completion_recovery", "test_mutation_ownership", "test_operation_recovery",
         "test_operation_handover",
+        "test_public_projection",
     ])
     concurrent = unittest.TextTestRunner(verbosity=2).run(suite)
     failed += len(concurrent.failures) + len(concurrent.errors)

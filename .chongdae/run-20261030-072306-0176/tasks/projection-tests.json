@@ -1,0 +1,172 @@
+{
+  "artifact-type": "chongdae/task@1",
+  "written_by": "chongdae 1.24.0",
+  "status": "done",
+  "def": {
+    "id": "projection-tests",
+    "role": "nitpick",
+    "brief": "Write the tests that decide contract P (below) before it is built. Files: a NEW test_public_projection.py at the repository root (unittest; `import chongdae as c`; temporary directories; no model calls; in the style of test_state_recovery.py, with `if __name__ == \"__main__\": unittest.main()`), and ONE line in test_chongdae.py: add \"test_public_projection\" to the `unittest.defaultTestLoader.loadTestsFromNames([...])` list near its end. Change nothing else in test_chongdae.py, no other test file, and no non-test file. Name each test after the section it decides (test_P1_..., test_P3_...). The new tests must fail against the current chongdae.py and pass once P is built.\n\nCases the owner requires (each in at least one test):\n(a) P1: in a run directory `<project>/.chongdae/run-<id>`, a task holding `stages.newbie.response.tried[].command` with the absolute project root, a `summary` with the home directory, findings (`quote`/`why`) with a temporary-directory path, a `stages.<role>.failed[].response`, and an `attempts[]` entry — after c.save_state(d, state) the PUBLIC tasks/<id>.json is projected and holds no absolute home, project-root or temp path anywhere.\n(b) P3/P4: the ignored overlay under local/ holds the exact originals; a `local/<tag>.response.json` file's bytes (sha256) are unchanged after its answer is read with c.load, stored in the task (`ts[\"response\"]` or a stage's `response`) and saved.\n(c) P3: c.load_state(d) after the save — and in a new Python process (a restart) — returns the exact raw values, including `added-in` and a lease key (`lease-held`), and a raw string inside a list item.\n(d) P2: relative quotes (`src/a.py:3`), `host`/`model`/`agent`, and a `by` signature equal to the account name (os.path.basename of the home) are unchanged in the public file; `<home>-old/x` and `<root>2/x` stay unchanged.\n(e) P5: a run directory written in the old shape (a public task file with absolute paths, no raw overlay) keeps its bytes after c.load_state + c.save_state with no change to that task; changing that task then writes it projected.\n(f) P6: in a temporary git repository (set user.name/user.email in that repository's own config), c.commit_record(target, run_name, message) after such a save commits a tasks/<id>.json whose `git show HEAD:...` holds no absolute home/project/temp path, and nothing under local/.\n(g) P3: a process death between the public write and the overlay write (pattern: test_state_recovery.py's crash through c.save_changed) recovers both through c.recover_state, and load_state then returns the raw values.\n(h) P7: c.public_projection(obj, target) returns (public, raws) with c.merge_private(public, raws) equal to obj, obj unmodified, nothing written.\n\nMake the home directory deterministic (for example: run the engine in a subprocess with a HOME you choose, or build paths from os.path.expanduser(\"~\") exactly as the engine does). Use only the names the contract and this brief give: c.save_state(d, state), c.load_state(d), c.recover_state(d), c.save_changed, c.merge_private, c.split_private, c.PRIVATE_KEYS, c.LOCAL, c.RUNS, c.commit_record(target, run_name, message), c.load, and the new c.public_projection(obj, target). Doc-and-test only: no change to chongdae.py.\n\nContract P: chongdae's public run records are a path-normalized projection; the exact raw values stay in ignored local state.\n\nContext (verified by the session on this checkout, chongdae.py as released in 1.24.0): `save_state(d, state)` writes a run directory `d` (normally `<project>/.chongdae/run-<id>`): `tasks/<id>.json` (the public record, committed by `commit_record`), `local/tasks/<id>.json` (this machine's overlay of PRIVATE_KEYS; `local/` is git-ignored through `.chongdae/.gitignore`) and `state.json` (the run's own fields), all through one journal `local/state-transaction.json` (`recover_state(d)` replays a prepared generation). `load_state(d)` merges each public task with its overlay (`merge_private`). `split_private` moves only PRIVATE_KEYS (`session`, `transcript`, `commands`, `read`, ...) to the overlay, so every other string goes to the public file verbatim: a hired role's answer saved as `ts[\"stages\"][role] = {\"response\": {...}, \"by\": {...}, \"when\": \"after\"}`, a failed one as `ts[\"stages\"][role][\"failed\"] = [{\"response\": {...}, \"by\": {...}, \"when\": ...}]`, a builder's `ts[\"response\"]`, earlier answers in `ts[\"attempts\"]` (a list of response-shaped dicts), the verifier's review, `summary`, findings (`{\"kind\", \"where\", \"quote\", \"why\"}`), `non-claims`. Observed leak: jokbo's committed record run-20261030-063525-2d81 tasks/environment.json holds `stages.newbie.response.tried[0].command` = \"mktemp -d <absolute project root>/newbie-environment.XXXXXX\". `neutral_path(text, target)` already states the machine-path policy that `asked/` files use (through `portable`).\n\nP1 Public files are projections. Every public JSON file save_state writes in a run directory — `tasks/<id>.json` and `state.json` — holds, for each string value at any depth (dict values and list items alike, including inside `response`, `attempts[]`, `stages.<role>.response`, `stages.<role>.failed[].response`, the review, findings, `summary`, `non-claims`), the string with this machine's path prefixes replaced: the project root (its abspath and its realpath) -> `.` (`<root>/x` -> `./x`), the home directory -> `~` (`<home>/x` -> `~/x`), a temporary directory (`tempfile.gettempdir()` and its realpath, `/tmp`, `/private/tmp`, `/var/folders/...`) -> `<tmp>` as neutral_path does it, and a host plugin cache path -> `<plugin:NAME@VERSION>` as neutral_path does it. The project root is the parent of the `.chongdae` directory that holds the run directory; a run directory not inside a directory named `.chongdae` has no project root, and only the other prefixes are replaced. The project root is replaced before the home and temp prefixes (a project under the home or under a temp directory becomes `.`, not `~/...` or `<tmp>`).\n\nP2 Narrow: path prefixes only. The project root and the home are replaced only where they are a whole path prefix: followed by `/`, or ending the path (end of string, whitespace, a quote, or one of ` ; | & ) , :). `<home>-old/x` and `<root>2/x` are not under the home or the root and stay unchanged. neutral_path's bare account-name rule (`<user>`) is not applied: a string that holds the account name only as a word — a `--by` signature, an author line — is unchanged. Dict keys, non-string values, relative paths (`src/a.py`, `./x`, `README.md#versioning`), quotes with no absolute machine path, and actor metadata (`host`, `model`, `agent`, `by`, `effort`, `at`) are unchanged byte for byte. PRIVATE_KEYS keep going to the overlay unprojected, as today.\n\nP3 Exact raw values stay local, in the same transaction. For every string P1 changed, the exact original stays in the run's ignored local state: the task's `local/tasks/<id>.json` overlay (for `state.json`: `local/state.json`), as a mirror `merge_private` restores, list items included (a raw string at a list index). The public file and its overlay are written in one `local/state-transaction.json` generation, so a process death between the two writes recovers both (recover_state) or neither. `load_state(d)` returns exactly what was given to `save_state` (apart from the `artifact-type`/`written_by` stamps save_state adds) — every string at any depth equal to its raw original — in this process and in a new process after a restart; validation, result consumption, verifier-quote checks, recovery, task ownership (`added-in`, lease keys) and generation guards keep reading that merged raw view.\n\nP4 Originals untouched. Files under `local/` written by or for providers — the request as sent, `<tag>.response.json`, transcripts, logs — are never rewritten or reformatted by the projection: a response file's bytes (sha256) are the same before and after its answer is consumed into the task and saved. No answer's quote, finding or field is changed to pass validation.\n\nP5 No projection-only rewrite of existing records. A public file whose raw content (the public file merged with its overlay) is unchanged by a save is not rewritten: a run written before this change, whose public task files hold absolute paths and have no raw overlay, keeps those files byte for byte when its state is loaded and saved without a change to that task. A save that changes a task writes that task's public file projected and its raws to the overlay. Old overlays (PRIVATE_KEYS only) load as before.\n\nP6 Record commits carry only the projection. With `settings.chongdae.commit-records` not false, a record commit (`commit_record(target, run_name, message)`) after a save whose task holds absolute home/project/temp paths contains the projected public file (`git show HEAD:<run>/tasks/<id>.json` holds none of those absolute paths) and nothing under `local/`.\n\nP7 A pure function for derived exports. `public_projection(obj, target)` returns `(public, raws)`: `public` is a copy of `obj` with P1/P2 applied to every string (`target` None: no project root), `raws` the mirror such that `merge_private(public, raws)` equals `obj`; it writes nothing and does not modify `obj`. save_state uses it. No CLI command, setting or record key is added.\n\nP8 Suites. `python3 test_chongdae.py` exits 0: the existing suites (test_concurrency, test_review_freshness, test_record_transactions, test_launch_recovery, test_state_recovery, test_completion_recovery, test_mutation_ownership, test_operation_recovery, test_operation_handover) unchanged and passing, and the new suite `test_public_projection` in its `loadTestsFromNames` list.",
+    "closes": [],
+    "needs": [],
+    "checks": [],
+    "tests": [
+      "test_public_projection.py",
+      "test_chongdae.py"
+    ],
+    "gate": null,
+    "domain": "code",
+    "scope": [
+      "test_chongdae.py",
+      "test_public_projection.py"
+    ]
+  },
+  "seq": 2,
+  "added": "2026-10-30T07:33:26+00:00",
+  "non-claims": [
+    "no check decides this task; done means the agent said so",
+    "(provider) P8 has no test_P8 method. Its check is `python3 test_chongdae.py` exiting 0. A test that ran that command from inside the suite would call itself forever, and a test that only searched the file for the new list entry would already pass, because I added that entry. The entry itself is the one line I added to test_chongdae.py.",
+    "(provider) P3: \"validation, result consumption, verifier-quote checks, recovery, task ownership (`added-in`, lease keys) and generation guards keep reading that merged raw view\". Only part of this is tested: load_state returning raw values (including added-in and lease-held) and recovery. No test drives validation, result consumption or the verifier-quote checks through the CLI against projected records.",
+    "(provider) P3: \"recovers both (recover_state) or neither\". The \"neither\" half is not tested separately. The crash test interrupts the write of local/tasks/<id>.json through c.save_changed (the pattern in test_state_recovery.py) and requires the process to exit with 77. If the build writes the overlay some other way than save_changed, that test fails. Today it fails because the overlay never changes, so the crash point is never reached.",
+    "(provider) P4: \"No answer's quote, finding or field is changed to pass validation\" is not tested. No validation path is exercised.",
+    "(provider) P7: \"No CLI command, setting or record key is added\" is not tested. No test can list everything that was not added.",
+    "(provider) P1: the realpath of a temporary directory, and `/var/folders/...` paths, are checked only by being absent from the public file and by `<tmp>` appearing in it. The exact `<tmp>` form follows neutral_path and is not pinned to a literal string.",
+    "(provider) test_P2_only_whole_path_prefixes_and_metadata_unchanged briefly creates and removes a hidden `.teujip-projection-*` folder in the checkout. A temp directory cannot be the project there, because then `<root>2/x` would itself be a temp path."
+  ],
+  "response": {
+    "status": "done",
+    "summary": "I wrote test_public_projection.py, a new unittest suite with 14 tests named after contract P's sections P1 to P7. I also added one line to test_chongdae.py: \"test_public_projection\" in its loadTestsFromNames list. Run against the current chongdae.py, all 14 fail for the right reason: 3 errors because c.public_projection does not exist yet, and 11 failures because public files still hold absolute paths, or because the crash point is never reached. Nothing else changed and nothing was committed.\n\nHow the tests work: each one saves through c.save_state in a separate Python process with HOME set to \"/home/teujipfixture\". That keeps the home directory predictable, and it is not inside the project or a temp directory.\n\nThe P2 test needs a project that is neither under the home nor under a temp directory, so the `<root>2/x` case is meaningful. It creates a hidden temporary folder `.teujip-projection-*` inside the checkout and deletes it afterwards. It skips itself if the checkout sits in a temp directory.\n\nThe owner's required cases map like this:\n- (a) is test_P1_public_task_and_state_files_hold_no_machine_path\n- (b) is test_P4_consumed_response_file_keeps_its_bytes\n- (c) is test_P3_overlay_mirrors_raw_and_load_state_returns_it and test_P3_raw_values_survive_a_restart\n- (d) is test_P2_only_whole_path_prefixes_and_metadata_unchanged\n- (e) is test_P5_old_shape_records_are_not_rewritten_until_changed\n- (f) is test_P6_record_commit_holds_only_the_projection\n- (g) is test_P3_process_death_between_public_and_overlay_writes_recovers_both\n- (h) is test_P7_public_projection_is_pure_and_merges_back\n\nExtra tests cover:\n- the project root being replaced before the home and temp prefixes\n- a run directory outside `.chongdae`, which has no project root\n- where a path ends (`;`, `|`, `&`, `)`, `,`, `:`, quotes, backtick, whitespace, end of string)\n- public_projection with no target (None)\n- save_state actually calling c.public_projection (the \"save_state uses it\" part)",
+    "tests": [
+      "test_public_projection.py",
+      "test_chongdae.py"
+    ],
+    "covers": [
+      {
+        "section": "P1",
+        "tests": [
+          "test_public_projection.Projection.test_P1_public_task_and_state_files_hold_no_machine_path",
+          "test_public_projection.Projection.test_P1_project_under_home_or_temp_becomes_dot",
+          "test_public_projection.Projection.test_P1_run_outside_chongdae_dir_has_no_project_root"
+        ]
+      },
+      {
+        "section": "P2",
+        "tests": [
+          "test_public_projection.Projection.test_P2_only_whole_path_prefixes_and_metadata_unchanged",
+          "test_public_projection.Projection.test_P2_root_and_home_end_at_path_boundaries"
+        ]
+      },
+      {
+        "section": "P3",
+        "tests": [
+          "test_public_projection.Projection.test_P3_overlay_mirrors_raw_and_load_state_returns_it",
+          "test_public_projection.Projection.test_P3_raw_values_survive_a_restart",
+          "test_public_projection.Projection.test_P3_process_death_between_public_and_overlay_writes_recovers_both"
+        ]
+      },
+      {
+        "section": "P4",
+        "tests": [
+          "test_public_projection.Projection.test_P4_consumed_response_file_keeps_its_bytes"
+        ]
+      },
+      {
+        "section": "P5",
+        "tests": [
+          "test_public_projection.Projection.test_P5_old_shape_records_are_not_rewritten_until_changed"
+        ]
+      },
+      {
+        "section": "P6",
+        "tests": [
+          "test_public_projection.Projection.test_P6_record_commit_holds_only_the_projection"
+        ]
+      },
+      {
+        "section": "P7",
+        "tests": [
+          "test_public_projection.Projection.test_P7_public_projection_is_pure_and_merges_back",
+          "test_public_projection.Projection.test_P7_public_projection_without_target_has_no_root",
+          "test_public_projection.Projection.test_P7_save_state_uses_public_projection"
+        ]
+      }
+    ],
+    "non-claims": [
+      "P8 has no test_P8 method. Its check is `python3 test_chongdae.py` exiting 0. A test that ran that command from inside the suite would call itself forever, and a test that only searched the file for the new list entry would already pass, because I added that entry. The entry itself is the one line I added to test_chongdae.py.",
+      "P3: \"validation, result consumption, verifier-quote checks, recovery, task ownership (`added-in`, lease keys) and generation guards keep reading that merged raw view\". Only part of this is tested: load_state returning raw values (including added-in and lease-held) and recovery. No test drives validation, result consumption or the verifier-quote checks through the CLI against projected records.",
+      "P3: \"recovers both (recover_state) or neither\". The \"neither\" half is not tested separately. The crash test interrupts the write of local/tasks/<id>.json through c.save_changed (the pattern in test_state_recovery.py) and requires the process to exit with 77. If the build writes the overlay some other way than save_changed, that test fails. Today it fails because the overlay never changes, so the crash point is never reached.",
+      "P4: \"No answer's quote, finding or field is changed to pass validation\" is not tested. No validation path is exercised.",
+      "P7: \"No CLI command, setting or record key is added\" is not tested. No test can list everything that was not added.",
+      "P1: the realpath of a temporary directory, and `/var/folders/...` paths, are checked only by being absent from the public file and by `<tmp>` appearing in it. The exact `<tmp>` form follows neutral_path and is not pinned to a literal string.",
+      "test_P2_only_whole_path_prefixes_and_metadata_unchanged briefly creates and removes a hidden `.teujip-projection-*` folder in the checkout. A temp directory cannot be the project there, because then `<root>2/x` would itself be a temp path."
+    ],
+    "worker": {
+      "host": "claude-code",
+      "model": "claude-opus-5-5",
+      "turns": 10,
+      "cost_usd": 0.9564546
+    }
+  },
+  "answered": {
+    "at": "2026-10-30T07:37:26+00:00",
+    "chongdae": "chongdae 1.24.0"
+  },
+  "touched_by_provider": [
+    "test_chongdae.py",
+    "test_public_projection.py"
+  ],
+  "performed_by": {
+    "provider": "command",
+    "argv": [
+      "python3",
+      "{plugin:hacheong}/worker.py",
+      "--member",
+      "teujip",
+      "--request",
+      "{request}",
+      "--response",
+      "{response}",
+      "--host",
+      "claude"
+    ],
+    "host": "claude-code",
+    "model": "claude-opus-5-5",
+    "turns": 10,
+    "cost_usd": 0.9564546,
+    "versions": {
+      "used": {
+        "hacheong": "1.12.1",
+        "chongdae": "1.24.0"
+      }
+    },
+    "trace": {
+      "changed": [
+        "write ./test_public_projection.py"
+      ],
+      "commands-run": 7,
+      "commands-failed": 0
+    }
+  },
+  "checks": [],
+  "touched": [
+    "test_chongdae.py",
+    "test_public_projection.py"
+  ],
+  "done": {
+    "at": "2026-10-30T07:37:27+00:00",
+    "chongdae": "chongdae 1.24.0"
+  },
+  "seen-non-claims": {
+    "by": "verifier of projection-fix-rel",
+    "texts": [
+      "(provider) P8 has no test_P8 method. Its check is `python3 test_chongdae.py` exiting 0. A test that ran that command from inside the suite would call itself forever, and a test that only searched the file for the new list entry would already pass, because I added that entry. The entry itself is the one line I added to test_chongdae.py.",
+      "(provider) P3: \"validation, result consumption, verifier-quote checks, recovery, task ownership (`added-in`, lease keys) and generation guards keep reading that merged raw view\". Only part of this is tested: load_state returning raw values (including added-in and lease-held) and recovery. No test drives validation, result consumption or the verifier-quote checks through the CLI against projected records.",
+      "(provider) P3: \"recovers both (recover_state) or neither\". The \"neither\" half is not tested separately. The crash test interrupts the write of local/tasks/<id>.json through c.save_changed (the pattern in test_state_recovery.py) and requires the process to exit with 77. If the build writes the overlay some other way than save_changed, that test fails. Today it fails because the overlay never changes, so the crash point is never reached.",
+      "(provider) P4: \"No answer's quote, finding or field is changed to pass validation\" is not tested. No validation path is exercised.",
+      "(provider) P7: \"No CLI command, setting or record key is added\" is not tested. No test can list everything that was not added.",
+      "(provider) P1: the realpath of a temporary directory, and `/var/folders/...` paths, are checked only by being absent from the public file and by `<tmp>` appearing in it. The exact `<tmp>` form follows neutral_path and is not pinned to a literal string.",
+      "(provider) test_P2_only_whole_path_prefixes_and_metadata_unchanged briefly creates and removes a hidden `.teujip-projection-*` folder in the checkout. A temp directory cannot be the project there, because then `<root>2/x` would itself be a temp path."
+    ],
+    "at": "2026-10-30T09:07:39+00:00",
+    "chongdae": "chongdae 1.24.0"
+  }
+}

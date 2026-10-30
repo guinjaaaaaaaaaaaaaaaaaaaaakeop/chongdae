@@ -1,0 +1,185 @@
+{
+  "artifact-type": "chongdae/task@1",
+  "written_by": "chongdae 1.24.0",
+  "status": "done",
+  "def": {
+    "id": "final-suite",
+    "role": "session",
+    "brief": "Final verification of commits 6431d3f..0ae52cf on python3.11 (3.11.16, the HOME interpreter ~/.local/bin/python3.11). Check 1: the full test_chongdae.py once in a worker-fixture context (AGENT_WORKER=1 set only for the suite process; subprocess python/python3 pinned to python3.11 through <tmp>/cd-py311/bin), complete output kept in <tmp>/cd-selfhost/final-full.log, counts printed, the suite's own exit code. Check 2: in this session's normal-parent context (no AGENT_WORKER), the 13 amended fixtures and test_a_landed_worktree_run_records_the_merge_commit, targeted, with the HOME interpreter. Not repeated: earlier unchanged full suites (baseline 9m27s green on 3.12; the fixture writer's three diagnostic runs, <tmp>/teujip-full.log: 119 function PASS, 1 FAIL, 76 unittest PASS, no skips) are evidence of their own moments, not this one.",
+    "closes": [],
+    "needs": [],
+    "checks": [
+      [
+        "~/.local/bin/python3.11",
+        "<tmp>/cd-selfhost/final_full.py"
+      ],
+      [
+        "~/.local/bin/python3.11",
+        "<tmp>/cd-selfhost/run_selected.py",
+        "test_hooks_and_engine_anchor_to_the_project_not_the_shells_directory",
+        "test_operation_words_are_report_hints_and_a_bash_operation_gets_a_did_nudge",
+        "test_performed_by_is_recorded_like_an_author_line",
+        "test_session_run_tasks_added_as_the_work_goes_claims_and_the_write_hook",
+        "test_session_start_under_hunsus_probe_says_its_standing_text_not_one_state",
+        "test_the_session_start_and_close_say_unpushed_commits_and_no_upstream",
+        "test_the_session_start_line_counts_open_tasks_by_the_rule_run_uses",
+        "test_a_disputed_contract_test_goes_back_to_its_writer_and_the_build_goes_out_again",
+        "test_a_quibble_task_is_sent_a_review_shaped_request_not_its_own_empty_checks",
+        "test_a_verifier_finding_whose_quote_is_not_where_it_says_is_overruled_and_the_work_is_not_resent",
+        "test_did_keeps_a_script_outside_the_project_a_sensible_subject_a_meaningful_tail_and_a_batch_as_one_judgment",
+        "test_did_runs_one_operation_records_it_whatever_the_exit_and_report_lists_it",
+        "test_concurrency.ConcurrentCommands.test_check_attachment_is_not_lost_during_another_run",
+        "test_a_landed_worktree_run_records_the_merge_commit"
+      ]
+    ],
+    "tests": [],
+    "gate": null
+  },
+  "seq": 10,
+  "added": "2026-10-30T11:03:46+00:00",
+  "self-performed": {
+    "instead-of": "implementer",
+    "why": "Verification only, no build: the one final full test_chongdae.py the owner asked for, after the corrected runtime was accepted by a fresh verifier, run by chongdae itself so its exit and counts are in the record; plus the changed fixtures targeted in a normal-parent context. Nothing in the tree is written by it.",
+    "by": {
+      "agent": "claude-code claude-opus-5-5"
+    },
+    "at": "2026-10-30T11:03:46+00:00",
+    "chongdae": "chongdae 1.24.0"
+  },
+  "checks-passed": {
+    "ran": [
+      {
+        "command": "'~/.local/bin/python3.11' <tmp>/cd-selfhost/final_full.py",
+        "exit": 0,
+        "tail": [
+          "interpreter ~/.local/bin/python3.11 3.11.16; AGENT_WORKER=1; subprocess python3 -> ~/.local/share/uv/python/cpython-3.11.16-macos-aarch64-none/bin/python3.11",
+          "functions: 120 PASS, 0 FAIL, 0 SKIP",
+          "unittest: Ran 100 in 178.978s | OK",
+          "last line: all passed",
+          "exit 0, 638s, full output in <tmp>"
+        ],
+        "at": "2026-10-30T11:14:30+00:00",
+        "chongdae": "chongdae 1.24.0"
+      },
+      {
+        "command": "'~/.local/bin/python3.11' <tmp>/cd-selfhost/run_selected.py test_hooks_and_engine_anchor_to_the_project_not_the_shells_directory test_operation_words_are_report_hints_and_a_bash_operation_gets_a_did_nudge test_performed_by_is_recorded_like_an_author_line test_session_run_tasks_added_as_the_work_goes_claims_and_the_write_hook test_session_start_under_hunsus_probe_says_its_standing_text_not_one_state test_the_session_start_and_close_say_unpushed_commits_and_no_upstream test_the_session_start_line_counts_open_tasks_by_the_rule_run_uses test_a_disputed_contract_test_goes_back_to_its_writer_and_the_build_goes_out_again test_a_quibble_task_is_sent_a_review_shaped_request_not_its_own_empty_checks test_a_verifier_finding_whose_quote_is_not_where_it_says_is_overruled_and_the_work_is_not_resent test_did_keeps_a_script_outside_the_project_a_sensible_subject_a_meaningful_tail_and_a_batch_as_one_judgment test_did_runs_one_operation_records_it_whatever_the_exit_and_report_lists_it test_concurrency.ConcurrentCommands.test_check_attachment_is_not_lost_during_another_run test_a_landed_worktree_run_records_the_merge_commit",
+        "exit": 0,
+        "tail": [
+          "PASS test_a_verifier_finding_whose_quote_is_not_where_it_says_is_overruled_and_the_work_is_not_resent",
+          "PASS test_did_keeps_a_script_outside_the_project_a_sensible_subject_a_meaningful_tail_and_a_batch_as_one_judgment",
+          "PASS test_did_runs_one_operation_records_it_whatever_the_exit_and_report_lists_it",
+          "PASS test_concurrency.ConcurrentCommands.test_check_attachment_is_not_lost_during_another_run",
+          "PASS test_a_landed_worktree_run_records_the_merge_commit",
+          "selected: 14 passed, 0 failed (python 3.11.16, sys.executable ~/.local/bin/python3.11, AGENT_WORKER=None)"
+        ],
+        "at": "2026-10-30T11:15:32+00:00",
+        "chongdae": "chongdae 1.24.0"
+      }
+    ],
+    "at": "2026-10-30T11:15:33+00:00",
+    "chongdae": "chongdae 1.24.0"
+  },
+  "review": {
+    "artifact-type": "dwitbuk/review@1",
+    "verdict": "accept",
+    "findings": [],
+    "worker": {
+      "host": "claude-code",
+      "model": "claude-opus-5-5",
+      "turns": 2,
+      "cost_usd": 0.040827199999999994
+    },
+    "non-claims": [
+      "accepted without reading the tree: the eyes opened no file and ran no command — the verdict rests on the packet alone"
+    ]
+  },
+  "verdict-given": {
+    "at": "2026-10-30T11:15:39+00:00",
+    "chongdae": "chongdae 1.24.0"
+  },
+  "reviewed_tree": {
+    ".claude-plugin/plugin.json": "e243a5d51f82b623e35d38417fd2213ad6d5640e",
+    "README.md": "484314d80a83fa4f3c426ded2ee89eebf0a74a5b",
+    "plugin.json": "0199d8e4d2227357de77c5cc2adbcf5d198bd285",
+    "AGENTS.md": "356bfb71a61076f443ebfd64eb93886bbbad4383",
+    "CLAUDE.md": "c140473a3a5fbe89301c99d9d0d1b76c5971f2c3"
+  },
+  "non-claims": [
+    "(verifier) accepted without reading the tree: the eyes opened no file and ran no command — the verdict rests on the packet alone"
+  ],
+  "verified_by": {
+    "provider": "command",
+    "argv": [
+      "python3",
+      "{plugin:dwitbuk}/eyes_worker.py",
+      "--request",
+      "{request}",
+      "--response",
+      "{response}",
+      "--host",
+      "claude"
+    ],
+    "host": "claude-code",
+    "model": "claude-opus-5-5",
+    "turns": 2,
+    "cost_usd": 0.040827199999999994,
+    "versions": {
+      "used": {
+        "dwitbuk": "1.16.0",
+        "chongdae": "1.24.0"
+      }
+    },
+    "trace": {
+      "changed": [],
+      "commands-run": 0,
+      "commands-failed": 0
+    }
+  },
+  "checks": [
+    [
+      "~/.local/bin/python3.11",
+      "<tmp>/cd-selfhost/final_full.py"
+    ],
+    [
+      "~/.local/bin/python3.11",
+      "<tmp>/cd-selfhost/run_selected.py",
+      "test_hooks_and_engine_anchor_to_the_project_not_the_shells_directory",
+      "test_operation_words_are_report_hints_and_a_bash_operation_gets_a_did_nudge",
+      "test_performed_by_is_recorded_like_an_author_line",
+      "test_session_run_tasks_added_as_the_work_goes_claims_and_the_write_hook",
+      "test_session_start_under_hunsus_probe_says_its_standing_text_not_one_state",
+      "test_the_session_start_and_close_say_unpushed_commits_and_no_upstream",
+      "test_the_session_start_line_counts_open_tasks_by_the_rule_run_uses",
+      "test_a_disputed_contract_test_goes_back_to_its_writer_and_the_build_goes_out_again",
+      "test_a_quibble_task_is_sent_a_review_shaped_request_not_its_own_empty_checks",
+      "test_a_verifier_finding_whose_quote_is_not_where_it_says_is_overruled_and_the_work_is_not_resent",
+      "test_did_keeps_a_script_outside_the_project_a_sensible_subject_a_meaningful_tail_and_a_batch_as_one_judgment",
+      "test_did_runs_one_operation_records_it_whatever_the_exit_and_report_lists_it",
+      "test_concurrency.ConcurrentCommands.test_check_attachment_is_not_lost_during_another_run",
+      "test_a_landed_worktree_run_records_the_merge_commit"
+    ]
+  ],
+  "touched": [],
+  "performed_by": {
+    "provider": "session",
+    "host": "claude-code",
+    "agent": "claude-code_2-1-314_agent",
+    "effort": "xhigh",
+    "model": "claude-opus-5-5",
+    "versions": {
+      "used": {
+        "chongdae": "1.24.0"
+      }
+    },
+    "trace": {
+      "changed": [],
+      "commands-run": 3,
+      "command-lines": "kept in the local session transcript, not in the record",
+      "window-from": "2026-10-30T11:03:46+00:00"
+    }
+  },
+  "done": {
+    "at": "2026-10-30T11:15:40+00:00",
+    "chongdae": "chongdae 1.24.0"
+  }
+}

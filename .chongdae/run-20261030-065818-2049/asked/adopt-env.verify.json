@@ -1,0 +1,84 @@
+{
+  "artifact-type": "chongdae/request@1",
+  "written_by": "chongdae 1.24.0",
+  "stage": "verify",
+  "run": "run-20261030-065818-2049",
+  "task": "adopt-env",
+  "role": "verifier",
+  "target": ".",
+  "goal": "Self-host stage (owner-authorized): adopt the environment bootstrapped by session adedcf9a with honest provenance, and have the lock's Codex implementer write a new SELFHOSTING.md maintenance entry, reviewed by the lock's Claude verifier and the close reviewer; prior README/AGENTS/manifest edits stay outside this run; no version bump, push or release.",
+  "brief": "Adopt the bootstrapped environment files unchanged with honest provenance (written by bootstrap session adedcf9a, not by this run). Checks: hunsu check exit 0 on this Claude host; roles and reporters equal in hunsu.json and hunsu.lock.json, reviewer/coherence/reporter targets '.', no {target} placeholder (only {request}/{response} in roles, {since} in the chongdae reporter), and every role/reporter engine resolves to the locked release under the plugin cache. Known and not fixed here: AGENT_HOST=codex hunsu check exits 1 (hunsu, mangsang, jokbo 'content differs': Codex's install adds a root .codex-marketplace-install.json that released hunsu 1.15.1 fingerprints) — pending a hunsu repair.",
+  "closes": [],
+  "contract": {},
+  "checks": [
+    [
+      "python3",
+      "{plugin:hunsu}/hunsu.py",
+      "check",
+      "--target",
+      "."
+    ],
+    [
+      "python3",
+      "-c",
+      "import json,os,sys\nm=json.load(open(\"hunsu.json\")); l=json.load(open(\"hunsu.lock.json\"))\nassert m[\"roles\"]==l[\"roles\"]==l[\"roles-declared\"], \"roles: manifest and lock differ\"\nassert m[\"reporters\"]==l[\"reporters\"], \"reporters: manifest and lock differ\"\nfor n,p in m[\"plugins\"].items(): assert l[\"plugins\"][n][\"version\"]==p[\"version\"], n\nbad=[]\nfor k in (\"reviewer\",\"coherence\"):\n  if m[\"roles\"][k][-2:]!=[\"--target\",\".\"]: bad.append(\"role \"+k+\": not --target .\")\nfor k,v in m[\"reporters\"].items():\n  if v[-2:]!=[\"--target\",\".\"]: bad.append(\"reporter \"+k+\": not --target .\")\nfor kind,allowed,table in ((\"role\",{\"{request}\",\"{response}\"},m[\"roles\"]),(\"reporter\",{\"{since}\"},m[\"reporters\"])):\n  for k,v in table.items():\n    if v==\"session\": continue\n    for a in v:\n      if \"{\" in a and not a.startswith(\"{plugin\") and a not in allowed: bad.append(kind+\" \"+k+\": placeholder \"+a)\nfor f in sys.argv[1:]:\n  ver=os.path.basename(os.path.dirname(f)); name=os.path.basename(os.path.dirname(os.path.dirname(f)))\n  if not os.path.isfile(f) or l[\"plugins\"].get(name,{}).get(\"version\")!=ver: bad.append(\"not the locked release: \"+f)\nassert not bad, bad\nprint(\"roles+reporters equal in manifest and lock; reviewer/coherence/reporters --target .; placeholders only {request} {response} {since}; engines resolve to locked releases:\", *sys.argv[1:])",
+      "{plugin:hacheong}/worker.py",
+      "{plugin:dwitbuk}/eyes_worker.py",
+      "{plugin:dwitbuk}/dwitbuk.py",
+      "{plugin:mangsang}/mangsang.py",
+      "{plugin:hunsu}/hunsu.py",
+      "{plugin:chongdae}/chongdae.py"
+    ]
+  ],
+  "tests": [],
+  "response": "./.chongdae/run-20261030-065818-2049/local/adopt-env.verify.response.json",
+  "touched": [
+    ".claude/settings.json",
+    ".gitignore",
+    "hunsu-judgments.json",
+    "hunsu.json",
+    "hunsu.lock.json"
+  ],
+  "built": null,
+  "excluded": {
+    "record-paths": []
+  },
+  "attribution": {
+    "adopted": [
+      ".claude/settings.json",
+      ".gitignore",
+      "hunsu-judgments.json",
+      "hunsu.json",
+      "hunsu.lock.json"
+    ]
+  },
+  "since": {
+    ".": "26632742e27d4fa5eda8d68afd030481f61c5b6a"
+  },
+  "checked": [
+    {
+      "command": "python3 '{plugin:hunsu}/hunsu.py' check --target .",
+      "exit": 0,
+      "tail": [
+        "info  4 finding(s) settled by the members' own text (sequenced / not co-active / duplicate, each on a verified sentence) — no resolution needed; see hunsu-conflicts.md",
+        "  (offline: a release is known here only from this machine's marketplace copies — `hunsu outdated` asks the marketplaces, read-only)",
+        "errors 0 · warnings 0 · info 1"
+      ],
+      "at": "2026-10-30T06:59:19+00:00",
+      "chongdae": "chongdae 1.24.0",
+      "source": "the task's checks, run by chongdae to decide it",
+      "changed_since": []
+    },
+    {
+      "command": "python3 -c 'import json,os,sys\nm=json.load(open(\"hunsu.json\")); l=json.load(open(\"hunsu.lock.json\"))\nassert m[\"roles\"]==l[\"roles\"]==l[\"roles-declared\"], \"roles: manifest and lock differ\"\nassert m[\"reporters\"]==l[\"reporters\"], \"reporters: manifest and lock differ\"\nfor n,p in m[\"plugins\"].items(): assert l[\"plugins\"][n][\"version\"]==p[\"version\"], n\nbad=[]\nfor k in (\"reviewer\",\"coherence\"):\n  if m[\"roles\"][k][-2:]!=[\"--target\",\".\"]: bad.append(\"role \"+k+\": not --target .\")\nfor k,v in m[\"reporters\"].items():\n  if v[-2:]!=[\"--target\",\".\"]: bad.append(\"reporter \"+k+\": not --target .\")\nfor kind,allowed,table in ((\"role\",{\"{request}\",\"{response}\"},m[\"roles\"]),(\"reporter\",{\"{since}\"},m[\"reporters\"])):\n  for k,v in table.items():\n    if v==\"session\": continue\n    for a in v:\n      if \"{\" in a and not a.startswith(\"{plugin\") and a not in allowed: bad.append(kind+\" \"+k+\": placeholder \"+a)\nfor f in sys.argv[1:]:\n  ver=os.path.basename(os.path.dirname(f)); name=os.path.basename(os.path.dirname(os.path.dirname(f)))\n  if not os.path.isfile(f) or l[\"plugins\"].get(name,{}).get(\"version\")!=ver: bad.append(\"not the locked release: \"+f)\nassert not bad, bad\nprint(\"roles+reporters equal in manifest and lock; reviewer/coherence/reporters --target .; placeholders only {request} {response} {since}; engines resolve to locked releases:\", *sys.argv[1:])' '{plugin:hacheong}/worker.py' '{plugin:dwitbuk}/eyes_worker.py' '{plugin:dwitbuk}/dwitbuk.py' '{plugin:mangsang}/mangsang.py' '{plugin:hunsu}/hunsu.py' '{plugin:chongdae}/chongdae.py'",
+      "exit": 0,
+      "tail": [
+        "roles+reporters equal in manifest and lock; reviewer/coherence/reporters --target .; placeholders only {request} {response} {since}; engines resolve to locked releases: <plugin:hacheong@1.12.1>/worker.py <plugin:dwitbuk@1.16.0>/eyes_worker.py <plugin:dwitbuk@1.16.0>/dwitbuk.py <plugin:mangsang@1.19.3>/mangsang.py <plugin:hunsu@1.15.1>/hunsu.py <plugin:chongdae@1.24.0>/chongdae.py"
+      ],
+      "at": "2026-10-30T06:59:19+00:00",
+      "chongdae": "chongdae 1.24.0",
+      "source": "the task's checks, run by chongdae to decide it",
+      "changed_since": []
+    }
+  ]
+}

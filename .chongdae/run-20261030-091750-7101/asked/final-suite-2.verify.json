@@ -1,0 +1,69 @@
+{
+  "artifact-type": "chongdae/request@1",
+  "written_by": "chongdae 1.24.0",
+  "stage": "verify",
+  "run": "run-20261030-091750-7101",
+  "task": "final-suite-2",
+  "role": "verifier",
+  "target": ".",
+  "goal": "Privacy follow-up and fixture isolation (owner-authorized; new work): first isolate test fixtures (seven normal-parent hook tests that inherit a worker's AGENT_WORKER, six expectations that miss portable command paths) through a disputed-tests amendment by the lock's Claude tests writer; then one bounded contract for the public projection (left boundaries for every prefix, backslash host paths within a stated platform limit, refusal of machine-path keys, the projected worktree-main close lock and raw CLI reload) with Claude tests, a Codex build and the Claude verifier; then adopt the earlier authorized README/Python-floor/AGENTS/CLAUDE work with its provenance and document the major-version rule and the public/local split. commit-records stays false; no version bump, push, release, cache change or history rewrite.",
+  "brief": "Final verification of candidate 554f8b3 (runtime and tests identical to 852b852; later commits change only docs and the five version fields). Check 1 binds the source: HEAD, sha256 of chongdae.py, the test files and hooks, and a clean product tree. Check 2: test_chongdae.py once, with the HOME interpreter ~/.local/bin/python3.11 (3.11.16) in a worker-fixture context (AGENT_WORKER=1 only for the suite process; subprocess python/python3 pinned to python3.11 through <tmp>); complete output in <tmp>; counts printed; the suite's own exit code. Normal-parent targeted fixtures are not repeated: the fixture files are unchanged since 306bf16 and passed 14/14 in final-suite. The 0ae52cf full run (120 function PASS, 100 unittest OK, 0 skip, 638s) stays evidence for 0ae52cf only (log kept as final-full-0ae52cf.log).",
+  "closes": [],
+  "contract": {},
+  "checks": [
+    [
+      "python3",
+      "<tmp>"
+    ],
+    [
+      "~/.local/bin/python3.11",
+      "<tmp>",
+      "<tmp>"
+    ]
+  ],
+  "tests": [],
+  "response": "./.chongdae/run-20261030-091750-7101/local/final-suite-2.verify.response.json",
+  "touched": [],
+  "built": null,
+  "excluded": {
+    "record-paths": [
+      "reviews/review-20261030-181048-64f0.json"
+    ]
+  },
+  "since": {
+    ".": "554f8b3c4b631cf0e569b94fcfd1ed0628eb79ce"
+  },
+  "checked": [
+    {
+      "command": "python3 <tmp>",
+      "exit": 0,
+      "tail": [
+        "8a747755b777090d test_review_freshness.py",
+        "a48b8bf3fbf39990 test_state_recovery.py",
+        "411033f926d66fb3 hooks/pre_bash.py",
+        "ac493dc966f190e1 hooks/pre_write.py",
+        "1b6732d3ed25a452 hooks/session_start.py",
+        "candidate HEAD 554f8b3c4b631cf0e569b94fcfd1ed0628eb79ce - product tree clean (run records and reviews aside)"
+      ],
+      "at": "2026-10-30T11:42:37+00:00",
+      "chongdae": "chongdae 1.24.0",
+      "source": "the task's checks, run by chongdae to decide it",
+      "changed_since": []
+    },
+    {
+      "command": "'~/.local/bin/python3.11' <tmp> <tmp>",
+      "exit": 0,
+      "tail": [
+        "interpreter ~/.local/bin/python3.11 3.11.16; AGENT_WORKER=1; subprocess python3 -> ~/.local/share/uv/python/cpython-3.11.16-macos-aarch64-none/bin/python3.11",
+        "functions: 120 PASS, 0 FAIL, 0 SKIP",
+        "unittest: Ran 116 in 181.748s | OK",
+        "last line: all passed",
+        "exit 0, 639s, full output in <tmp>"
+      ],
+      "at": "2026-10-30T11:53:15+00:00",
+      "chongdae": "chongdae 1.24.0",
+      "source": "the task's checks, run by chongdae to decide it",
+      "changed_since": []
+    }
+  ]
+}

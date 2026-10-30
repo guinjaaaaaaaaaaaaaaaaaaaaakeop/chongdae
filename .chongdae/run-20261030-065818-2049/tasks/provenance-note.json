@@ -1,0 +1,45 @@
+{
+  "artifact-type": "chongdae/task@1",
+  "written_by": "chongdae 1.24.0",
+  "status": "done",
+  "def": {
+    "id": "provenance-note",
+    "role": "session",
+    "brief": "Provenance note, no tree change. In this run, three session-signed entries made before the session set AGENT_HOST name the Codex parent that launched this session, not this session: tasks/adopt-env.json `self-performed.by.agent` and `adopted[0].by.agent` (\"codex gpt-6-astra\"), and `performed_by` (host codex, agent codex_0.165.0, model gpt-6-astra). This session is Claude Code, model claude-opus-5-5, CLAUDE_CODE_SESSION_ID 1d86b13b-751d-4314-859d-65f124777667 (the `added-in` of every task in this run). It had inherited CODEX_THREAD_ID from the Codex parent, and chongdae 1.24.0 `performer` picks codex whenever CODEX_THREAD_ID is set and AGENT_HOST is not. From selfhosting-doc on, the session ran the engines with AGENT_HOST=claude-code. The coordinator's launcher now strips the inherited markers (../tools/umbrella/umbrella.py:223-224: drops CODEX_THREAD_ID, AI_AGENT, CHONGDAE_SESSION; sets AGENT_HOST=claude-code), and the released engine now reports this session as claude-code / claude-opus-5-5 / 1d86b13b-751d-4314-859d-65f124777667. The mislabeled entries are kept as recorded, not rewritten; commit 4de6d33's message already carried this correction in prose. Not a mislabel: the codex / gpt-6-astra on selfhosting-doc and selfhosting-fix `performed_by` and `response.worker` is the real hacheong dakdol worker on Codex (sessions 01a18b9e-e095-7753-9f88-28f379ca0e3f and 01a18ba2-15c4-7131-b3e6-a9840c16a382), labeled correctly.",
+    "closes": [],
+    "needs": [],
+    "checks": [],
+    "tests": [],
+    "gate": null
+  },
+  "seq": 4,
+  "added": "2026-10-30T07:17:43+00:00",
+  "non-claims": [
+    "no check decides this task; done means the agent said so",
+    "provenance-note: done on the session's word by name (`run provenance-note`), with nothing of its own in the tree and no `did`"
+  ],
+  "checks": [],
+  "touched": [],
+  "performed_by": {
+    "provider": "session",
+    "host": "claude-code",
+    "agent": "claude-code_2-1-314_agent",
+    "effort": "xhigh",
+    "model": "claude-opus-5-5",
+    "versions": {
+      "used": {
+        "chongdae": "1.24.0"
+      }
+    },
+    "trace": {
+      "changed": [],
+      "commands-run": 1,
+      "command-lines": "kept in the local session transcript, not in the record",
+      "window-from": "2026-10-30T07:17:43+00:00"
+    }
+  },
+  "done": {
+    "at": "2026-10-30T07:17:48+00:00",
+    "chongdae": "chongdae 1.24.0"
+  }
+}

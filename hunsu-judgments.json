@@ -1,0 +1,704 @@
+{
+  "artifact-type": "hunsu/judgments@1",
+  "skills-fingerprint": "fc6974514c9c",
+  "skills": [
+    "chongdae:run",
+    "dwitbuk:review",
+    "hacheong:hire",
+    "hunsu:compose",
+    "jokbo:read",
+    "mangsang:operate",
+    "dwitbuk:eyes",
+    "hacheong:build",
+    "hacheong:newbie",
+    "hacheong:nitpick",
+    "hacheong:quibble"
+  ],
+  "judged-by": "claude-code claude-opus-5-5",
+  "situations": [
+    {
+      "situation": "pursuing a stated goal or executing a plan",
+      "members": [
+        "chongdae:run"
+      ],
+      "modes": [
+        "plugin:chongdae",
+        "plugin:dwitbuk",
+        "plugin:hunsu",
+        "plugin:jokbo",
+        "file:CLAUDE.md",
+        "file:AGENTS.md"
+      ],
+      "members-fingerprint": "09e7c51467c5",
+      "members-text-fingerprint": "359955b40e63",
+      "member-fingerprints": {
+        "chongdae:run": "da92b1d52a3c",
+        "file:AGENTS.md": "7cfa2f4f340c",
+        "file:CLAUDE.md": "336cc4fbf19b",
+        "plugin:chongdae": "9de6ee882387",
+        "plugin:dwitbuk": "079f0e56c456",
+        "plugin:hunsu": "e0b89c53806c",
+        "plugin:jokbo": "b66888e591f1"
+      },
+      "modes-read": {
+        "plugin:chongdae": "1af57b783ae3",
+        "plugin:dwitbuk": "99af6f9bc9e4",
+        "plugin:hunsu": "da5690287625",
+        "plugin:jokbo": "24fb1df410b0",
+        "file:CLAUDE.md": "336cc4fbf19b",
+        "file:AGENTS.md": "7cfa2f4f340c"
+      },
+      "judged-by": "claude-code claude-opus-5-5",
+      "findings": [],
+      "findings-fingerprint": "4f53cda18c2b"
+    },
+    {
+      "situation": "building a slice",
+      "members": [
+        "chongdae:run",
+        "hacheong:hire",
+        "hacheong:build",
+        "mangsang:operate"
+      ],
+      "modes": [
+        "plugin:chongdae",
+        "plugin:dwitbuk",
+        "plugin:hunsu",
+        "plugin:jokbo",
+        "file:CLAUDE.md",
+        "file:AGENTS.md"
+      ],
+      "members-fingerprint": "ea71b3d82764",
+      "members-text-fingerprint": "92bdfce9ecca",
+      "member-fingerprints": {
+        "chongdae:run": "da92b1d52a3c",
+        "file:AGENTS.md": "7cfa2f4f340c",
+        "file:CLAUDE.md": "336cc4fbf19b",
+        "hacheong:build": "54499f99f0f0",
+        "hacheong:hire": "205dc70c1ed4",
+        "mangsang:operate": "b1da9ac060d5",
+        "plugin:chongdae": "9de6ee882387",
+        "plugin:dwitbuk": "079f0e56c456",
+        "plugin:hunsu": "e0b89c53806c",
+        "plugin:jokbo": "b66888e591f1"
+      },
+      "modes-read": {
+        "plugin:chongdae": "1af57b783ae3",
+        "plugin:dwitbuk": "99af6f9bc9e4",
+        "plugin:hunsu": "da5690287625",
+        "plugin:jokbo": "24fb1df410b0",
+        "file:CLAUDE.md": "336cc4fbf19b",
+        "file:AGENTS.md": "7cfa2f4f340c"
+      },
+      "judged-by": "claude-code claude-opus-5-5",
+      "findings": [
+        {
+          "kind": "overlap",
+          "members": [
+            "chongdae:run",
+            "hacheong:hire"
+          ],
+          "quotes": {
+            "chongdae:run": "start a FRESH subagent of this host with that prompt as its whole task (Claude Code: the Agent tool, general-purpose, run in the foreground; Codex: spawn_agent and wait); write the subagent's final JSON answer verbatim to the response path it names",
+            "hacheong:hire": "A session dispatching its own subagent instead (a `native:` provider) runs the same argv with `--prompt-only`, gives the printed prompt to a fresh subagent, and writes its JSON answer verbatim to the response path."
+          },
+          "why": "Both skills give the session the procedure for relaying a native: dispatch of a hacheong member (prompt-only argv, fresh subagent, verbatim answer to the response path). The steps are the same, so following either one gives the same relay.",
+          "proposed": {
+            "use": "chongdae:run"
+          },
+          "class": "duplicate",
+          "class_quote": {
+            "member": "hacheong:hire",
+            "quote": "A session dispatching its own subagent instead (a `native:` provider) runs the same argv with `--prompt-only`, gives the printed prompt to a fresh subagent, and writes its JSON answer verbatim to the response path."
+          }
+        },
+        {
+          "kind": "contradiction",
+          "members": [
+            "chongdae:run",
+            "hacheong:hire"
+          ],
+          "quotes": {
+            "chongdae:run": "When a hired task stopped but its work is in the tree and you finish it (the sandbox could not run its tests; a guard read your own concurrent edits), `take <id> --why \"...\"` — never `drop`: a drop records done work as not done.",
+            "hacheong:hire": "Never do a member's work yourself and never edit its answer."
+          },
+          "why": "In some cases chongdae tells the session to finish a hired member's stopped build itself (take), or to take a small build itself instead of hiring. hacheong forbids the session from ever doing a member's work. While building a slice, the session cannot follow both.",
+          "proposed": {
+            "use": "chongdae:run"
+          },
+          "class": "authority"
+        },
+        {
+          "kind": "premise",
+          "members": [
+            "mangsang:operate",
+            "plugin:chongdae"
+          ],
+          "quotes": {
+            "mangsang:operate": "After a slice: `register` the files the slice created first",
+            "plugin:chongdae": "the run is the agent's container, so Edit/Write are refused until one starts"
+          },
+          "why": "mangsang's after-slice step writes its record into the project (register, proposals.json, confirm). chongdae refuses writes when no run is open, and counts files written outside a task's scope against other tasks.",
+          "proposed": {
+            "order": [
+              "chongdae:run",
+              "mangsang:operate"
+            ]
+          },
+          "class": "authority",
+          "class-refused": "sequenced claimed; its sentence is not in chongdae:run's text"
+        }
+      ],
+      "findings-fingerprint": "d66e865bb097"
+    },
+    {
+      "situation": "reviewing, disputing or trying a change",
+      "members": [
+        "dwitbuk:review",
+        "dwitbuk:eyes",
+        "hacheong:hire",
+        "hacheong:quibble",
+        "hacheong:nitpick",
+        "hacheong:newbie"
+      ],
+      "modes": [
+        "plugin:chongdae",
+        "plugin:dwitbuk",
+        "plugin:hunsu",
+        "plugin:jokbo",
+        "file:CLAUDE.md",
+        "file:AGENTS.md"
+      ],
+      "members-fingerprint": "84822a552395",
+      "members-text-fingerprint": "e90de8341fcf",
+      "member-fingerprints": {
+        "dwitbuk:eyes": "935c101ee251",
+        "dwitbuk:review": "933a42190b12",
+        "file:AGENTS.md": "7cfa2f4f340c",
+        "file:CLAUDE.md": "336cc4fbf19b",
+        "hacheong:hire": "205dc70c1ed4",
+        "hacheong:newbie": "91d98dbdc5d0",
+        "hacheong:nitpick": "b77e452f3304",
+        "hacheong:quibble": "f89e44ac635f",
+        "plugin:chongdae": "9de6ee882387",
+        "plugin:dwitbuk": "079f0e56c456",
+        "plugin:hunsu": "e0b89c53806c",
+        "plugin:jokbo": "b66888e591f1"
+      },
+      "modes-read": {
+        "plugin:chongdae": "1af57b783ae3",
+        "plugin:dwitbuk": "99af6f9bc9e4",
+        "plugin:hunsu": "da5690287625",
+        "plugin:jokbo": "24fb1df410b0",
+        "file:CLAUDE.md": "336cc4fbf19b",
+        "file:AGENTS.md": "7cfa2f4f340c"
+      },
+      "judged-by": "claude-code claude-opus-5-5",
+      "findings": [
+        {
+          "kind": "premise",
+          "members": [
+            "hacheong:newbie",
+            "hacheong:quibble",
+            "hacheong:nitpick",
+            "plugin:jokbo"
+          ],
+          "quotes": {
+            "hacheong:newbie": "You do not open anything that person would not see (source files, tests, records) — if you learn how it works from the inside, you are no longer the person this role exists for.",
+            "hacheong:quibble": "You do not read the tree — however the code happens to be, what the contract did not decide is not decided.",
+            "hacheong:nitpick": "you do not read the implementation that may already exist, and you never read the builder's intentions",
+            "plugin:jokbo": "at session start, a map of what this project holds (documents, and a line from each product that declares one) and how to ask; at the first look at a file, a line per fact that bears on it"
+          },
+          "why": "These workers run in fresh sessions, and the modes are injected there too. Each one's value comes from not knowing the project's insides: newbie sees only the README and the program, quibble sees only the contract, nitpick never sees the implementation. jokbo's session-start map and its per-file facts give them that inside knowledge unasked. jokbo's text says nothing about staying silent in a worker session, unlike chongdae and dwitbuk.",
+          "proposed": {
+            "deny": [
+              "plugin:jokbo"
+            ]
+          },
+          "class": "authority"
+        },
+        {
+          "kind": "contradiction",
+          "members": [
+            "plugin:chongdae",
+            "hacheong:nitpick"
+          ],
+          "quotes": {
+            "plugin:chongdae": "the run is the agent's container, so Edit/Write are refused until one starts",
+            "hacheong:nitpick": "Do not commit, branch, or touch the run's record or the plan."
+          },
+          "why": "nitpick has to write test files with Edit/Write and is told not to touch the run's record. chongdae's no-run branch refuses Edit/Write until the worker itself starts a run. If that branch reached a nitpick worker, the worker could not do its job without first starting a run, which it is forbidden to do.",
+          "proposed": {
+            "order": [
+              "plugin:chongdae",
+              "hacheong:nitpick"
+            ]
+          },
+          "class": "not-co-active",
+          "class_quote": {
+            "member": "plugin:chongdae",
+            "quote": "Silent in a worker session (AGENT_WORKER=1): the run is the hiring session's."
+          }
+        },
+        {
+          "kind": "premise",
+          "members": [
+            "dwitbuk:review",
+            "plugin:chongdae"
+          ],
+          "quotes": {
+            "dwitbuk:review": "A review run by hand is a record like a run: commit `reviews/<id>.json`.",
+            "plugin:chongdae": "the run is the agent's container, so Edit/Write are refused until one starts"
+          },
+          "why": "The skill's commit step assumes the session may commit a hand-run review's record with no run open. chongdae treats the run as the container for all of the agent's changes. A commit made outside a run is the same kind of work dwitbuk itself reports as `outside-run`. Neither text says whether this commit needs a run or a person's approval, and a commit is hard to undo.",
+          "proposed": {
+            "accept": "a person decides whether a hand-run review's record is committed inside a chongdae run or directly"
+          },
+          "class": "authority"
+        }
+      ],
+      "findings-fingerprint": "307f0b10c6bd"
+    },
+    {
+      "situation": "a decision waiting on the person",
+      "members": [
+        "chongdae:run",
+        "dwitbuk:review",
+        "mangsang:operate"
+      ],
+      "modes": [
+        "plugin:chongdae",
+        "plugin:dwitbuk",
+        "plugin:hunsu",
+        "plugin:jokbo",
+        "file:CLAUDE.md",
+        "file:AGENTS.md"
+      ],
+      "members-fingerprint": "0a82e3d1b4d9",
+      "members-text-fingerprint": "3077174c82c7",
+      "member-fingerprints": {
+        "chongdae:run": "da92b1d52a3c",
+        "dwitbuk:review": "933a42190b12",
+        "file:AGENTS.md": "7cfa2f4f340c",
+        "file:CLAUDE.md": "336cc4fbf19b",
+        "mangsang:operate": "b1da9ac060d5",
+        "plugin:chongdae": "9de6ee882387",
+        "plugin:dwitbuk": "079f0e56c456",
+        "plugin:hunsu": "e0b89c53806c",
+        "plugin:jokbo": "b66888e591f1"
+      },
+      "modes-read": {
+        "plugin:chongdae": "1af57b783ae3",
+        "plugin:dwitbuk": "99af6f9bc9e4",
+        "plugin:hunsu": "da5690287625",
+        "plugin:jokbo": "24fb1df410b0",
+        "file:CLAUDE.md": "336cc4fbf19b",
+        "file:AGENTS.md": "7cfa2f4f340c"
+      },
+      "judged-by": "claude-code claude-opus-5-5",
+      "findings": [
+        {
+          "kind": "contradiction",
+          "members": [
+            "chongdae:run",
+            "dwitbuk:review"
+          ],
+          "quotes": {
+            "chongdae:run": "Never write the owner's name on your own judgment, and never `--delegated` one the person did not hand off; the gates (`confirm`, `accept`) still need the person's `--by` or their delegation.",
+            "dwitbuk:review": "If no person reads a finding and you dispose it yourself, say so: `--as ... --delegated \"<why it was handed off>\"` — recorded as a delegation, like a gate"
+          },
+          "why": "While a decision waits on the person, dwitbuk lets the session dispose of a finding itself with --delegated when no person reads it. chongdae forbids --delegated on any judgment the person did not hand off. The two disagree on whether the session may settle a person's decision without being handed it.",
+          "proposed": {
+            "accept": "dispose a dwitbuk finding with --delegated only when the person handed it off (a chongdae `delegate` D-id or their recorded words); otherwise leave it undisposed and ask the person"
+          },
+          "class": "authority"
+        },
+        {
+          "kind": "overlap",
+          "members": [
+            "chongdae:run",
+            "dwitbuk:review"
+          ],
+          "quotes": {
+            "chongdae:run": "The lock's `reviewer` role ran as the run ended (its line is in the output; what it wrote went into the close commit) — you do not run a review yourself; what its findings need from a person, the reviewer says at the next session start.",
+            "dwitbuk:review": "When the lock declares dwitbuk as chongdae's `reviewer`, the review already ran when each run ended — do not run another for the same run; go to step 2 with the latest `reviews/<id>.json` (`follow` lists what is open)."
+          },
+          "why": "Both cover the review findings that wait on the person after a run. dwitbuk's own text says the reviewer already ran at close and that the session should go straight to relaying the findings for disposition.",
+          "proposed": {
+            "order": [
+              "chongdae:run",
+              "dwitbuk:review"
+            ]
+          },
+          "class": "sequenced",
+          "class_quote": {
+            "member": "dwitbuk:review",
+            "quote": "When the lock declares dwitbuk as chongdae's `reviewer`, the review already ran when each run ended — do not run another for the same run; go to step 2 with the latest `reviews/<id>.json` (`follow` lists what is open)."
+          }
+        },
+        {
+          "kind": "premise",
+          "members": [
+            "chongdae:run",
+            "mangsang:operate"
+          ],
+          "quotes": {
+            "mangsang:operate": "Show the list to the person; `confirm proposals.json --by <name>` on their word, or `--delegated \"<why>\"`",
+            "chongdae:run": "Writes to the project need a run in progress (the PreToolUse hook refuses them otherwise)."
+          },
+          "why": "mangsang writes its confirm records into the project once the person decides. chongdae assumes every write to the project goes through a run. chongdae's text says how another product's records fit: as a task scoped to them.",
+          "proposed": {
+            "order": [
+              "chongdae:run",
+              "mangsang:operate"
+            ]
+          },
+          "class": "sequenced",
+          "class_quote": {
+            "member": "chongdae:run",
+            "quote": "A task whose work is another product's records (`hunsu lock`, a mangsang confirm) names them in its `--scope` (`--scope hunsu.json hunsu.lock.json`, `--scope mangsang`): inside its own scope they count as its work, and `run` prints their commit lines."
+          }
+        },
+        {
+          "kind": "premise",
+          "members": [
+            "chongdae:run",
+            "dwitbuk:review"
+          ],
+          "quotes": {
+            "dwitbuk:review": "For each they answer, `dispose <review>/<n> --as accepted|dismissed --why \"<their words>\" --by <name>`.",
+            "chongdae:run": "Writes to the project need a run in progress (the PreToolUse hook refuses them otherwise)."
+          },
+          "why": "Recording the person's disposition writes dwitbuk's review record into the project, often after a run has closed. chongdae assumes project writes happen inside a run. Neither text says whether a disposition needs a run or a scoped task, or stands outside one.",
+          "proposed": {
+            "accept": "record a disposition inside a session run task scoped to dwitbuk's review records when no run is open, or let the person decide that dispositions stand outside runs"
+          },
+          "class": "authority"
+        }
+      ],
+      "findings-fingerprint": "df066f29ec2d"
+    },
+    {
+      "situation": "asking what happened or what is open",
+      "members": [
+        "dwitbuk:review",
+        "jokbo:read"
+      ],
+      "modes": [
+        "plugin:chongdae",
+        "plugin:dwitbuk",
+        "plugin:hunsu",
+        "plugin:jokbo",
+        "file:CLAUDE.md",
+        "file:AGENTS.md"
+      ],
+      "members-fingerprint": "002c1eea27d2",
+      "members-text-fingerprint": "9fd2ea0d50b3",
+      "member-fingerprints": {
+        "dwitbuk:review": "933a42190b12",
+        "file:AGENTS.md": "7cfa2f4f340c",
+        "file:CLAUDE.md": "336cc4fbf19b",
+        "jokbo:read": "d24048fadeec",
+        "plugin:chongdae": "9de6ee882387",
+        "plugin:dwitbuk": "079f0e56c456",
+        "plugin:hunsu": "e0b89c53806c",
+        "plugin:jokbo": "b66888e591f1"
+      },
+      "modes-read": {
+        "plugin:chongdae": "1af57b783ae3",
+        "plugin:dwitbuk": "99af6f9bc9e4",
+        "plugin:hunsu": "da5690287625",
+        "plugin:jokbo": "24fb1df410b0",
+        "file:CLAUDE.md": "336cc4fbf19b",
+        "file:AGENTS.md": "7cfa2f4f340c"
+      },
+      "judged-by": "claude-code claude-opus-5-5",
+      "findings": [
+        {
+          "kind": "overlap",
+          "members": [
+            "dwitbuk:review",
+            "jokbo:read"
+          ],
+          "quotes": {
+            "dwitbuk:review": "Use when the session-start line says objections are undisposed, when the person asks what happened or what is open, before a merge, or on a project whose lock has no `reviewer` role (there, run the review by hand).",
+            "jokbo:read": "Use when a question about this project comes up that its records may already answer — \"what did we decide about X\", \"why is it this way\", \"where is X described\", \"what happened in that run / today\", \"what changed since I last looked\", \"what stands on this file before I change it\", or the owner asks any of these."
+          },
+          "why": "Both claim the question \"what happened\". dwitbuk answers it by relaying review findings to the person and recording their dispositions. jokbo answers it by quoting the project's own records and commits. The two give different answers: one is a disposition workflow, the other a read-only quotation. Neither text says which one comes first or how one yields to the other. dwitbuk's path also records the person's decisions (`dispose ... --by`) and can commit a hand-run review, so choosing between them changes what gets written and decided.",
+          "proposed": {
+            "order": [
+              "jokbo:read",
+              "dwitbuk:review"
+            ]
+          },
+          "class": "authority"
+        }
+      ],
+      "findings-fingerprint": "e8c80088111c"
+    },
+    {
+      "situation": "asking what was decided, why, or what stands on a file",
+      "members": [
+        "jokbo:read",
+        "mangsang:operate"
+      ],
+      "modes": [
+        "plugin:chongdae",
+        "plugin:dwitbuk",
+        "plugin:hunsu",
+        "plugin:jokbo",
+        "file:CLAUDE.md",
+        "file:AGENTS.md"
+      ],
+      "members-fingerprint": "26b8a09614ed",
+      "members-text-fingerprint": "e61e39d8eaf6",
+      "member-fingerprints": {
+        "file:AGENTS.md": "7cfa2f4f340c",
+        "file:CLAUDE.md": "336cc4fbf19b",
+        "jokbo:read": "d24048fadeec",
+        "mangsang:operate": "b1da9ac060d5",
+        "plugin:chongdae": "9de6ee882387",
+        "plugin:dwitbuk": "079f0e56c456",
+        "plugin:hunsu": "e0b89c53806c",
+        "plugin:jokbo": "b66888e591f1"
+      },
+      "modes-read": {
+        "plugin:chongdae": "1af57b783ae3",
+        "plugin:dwitbuk": "99af6f9bc9e4",
+        "plugin:hunsu": "da5690287625",
+        "plugin:jokbo": "24fb1df410b0",
+        "file:CLAUDE.md": "336cc4fbf19b",
+        "file:AGENTS.md": "7cfa2f4f340c"
+      },
+      "judged-by": "claude-code claude-opus-5-5",
+      "findings": [
+        {
+          "kind": "overlap",
+          "members": [
+            "jokbo:read",
+            "mangsang:operate"
+          ],
+          "quotes": {
+            "jokbo:read": "`file PATH` — the sections that speak of it with how current each is, who last changed it, and what each declared `file` read says.",
+            "mangsang:operate": "Before editing a registered file: `lookup <path>` prints the confirmed relations standing on it — grouped by concept with its meaning, each with its quote, its confirmer and whether it is fresh now — and marks which ones the edit would make stale; read it instead of opening the record's JSON."
+          },
+          "why": "Both members claim the question 'what stands on this file before I change it'. jokbo's `file PATH` and mangsang's `lookup <path>` each print what stands on a file. jokbo also brings in each product's declared `file` read, which is where mangsang's confirmed relations would appear. Both only read, so nothing contradicts. They are two ways to answer one question.",
+          "proposed": {
+            "order": [
+              "jokbo:read",
+              "mangsang:operate"
+            ]
+          },
+          "class": "duplicate",
+          "class_quote": {
+            "member": "jokbo:read",
+            "quote": "What a declared read prints is that product's word; jokbo's ranking is shared words, confirmed by nobody: say which you relied on."
+          }
+        }
+      ],
+      "findings-fingerprint": "9759ee832cb6"
+    },
+    {
+      "situation": "before a merge",
+      "members": [
+        "dwitbuk:review"
+      ],
+      "modes": [
+        "plugin:chongdae",
+        "plugin:dwitbuk",
+        "plugin:hunsu",
+        "plugin:jokbo",
+        "file:CLAUDE.md",
+        "file:AGENTS.md"
+      ],
+      "members-fingerprint": "757209caa867",
+      "members-text-fingerprint": "37c9d5049d35",
+      "member-fingerprints": {
+        "dwitbuk:review": "933a42190b12",
+        "file:AGENTS.md": "7cfa2f4f340c",
+        "file:CLAUDE.md": "336cc4fbf19b",
+        "plugin:chongdae": "9de6ee882387",
+        "plugin:dwitbuk": "079f0e56c456",
+        "plugin:hunsu": "e0b89c53806c",
+        "plugin:jokbo": "b66888e591f1"
+      },
+      "modes-read": {
+        "plugin:chongdae": "1af57b783ae3",
+        "plugin:dwitbuk": "99af6f9bc9e4",
+        "plugin:hunsu": "da5690287625",
+        "plugin:jokbo": "24fb1df410b0",
+        "file:CLAUDE.md": "336cc4fbf19b",
+        "file:AGENTS.md": "7cfa2f4f340c"
+      },
+      "judged-by": "claude-code claude-opus-5-5",
+      "findings": [
+        {
+          "kind": "premise",
+          "members": [
+            "dwitbuk:review",
+            "plugin:chongdae"
+          ],
+          "quotes": {
+            "dwitbuk:review": "A review run by hand is a record like a run: commit `reviews/<id>.json`.",
+            "plugin:chongdae": "Writes go through this run; `python3 \"<this plugin>/chongdae.py\" run` advances it."
+          },
+          "why": "Before a merge, the review skill writes and commits a reviews/<id>.json record when it runs by hand (steps 1 and 3), and the eyes step adds contradictions to the latest review. chongdae's mode says every write goes through the active run, and with no run in progress it refuses writes until one starts. A hand-run review commit made outside a run is work no run claims. The next review would flag it as outside-run, or chongdae would refuse it. A commit is hard to undo, so a person has to decide whether the review record gets committed inside a chongdae run or is exempt from that rule.",
+          "proposed": {
+            "order": [
+              "plugin:chongdae",
+              "dwitbuk:review"
+            ]
+          },
+          "class": "authority"
+        }
+      ],
+      "findings-fingerprint": "fd5a4cfc7424"
+    },
+    {
+      "situation": "setting up or adopting the project's agent environment",
+      "members": [
+        "hunsu:compose",
+        "mangsang:operate"
+      ],
+      "modes": [
+        "plugin:chongdae",
+        "plugin:dwitbuk",
+        "plugin:hunsu",
+        "plugin:jokbo",
+        "file:CLAUDE.md",
+        "file:AGENTS.md"
+      ],
+      "members-fingerprint": "315fa62ceec5",
+      "members-text-fingerprint": "b119cb80abef",
+      "member-fingerprints": {
+        "file:AGENTS.md": "7cfa2f4f340c",
+        "file:CLAUDE.md": "336cc4fbf19b",
+        "hunsu:compose": "46ff670a8b94",
+        "mangsang:operate": "b1da9ac060d5",
+        "plugin:chongdae": "9de6ee882387",
+        "plugin:dwitbuk": "079f0e56c456",
+        "plugin:hunsu": "e0b89c53806c",
+        "plugin:jokbo": "b66888e591f1"
+      },
+      "modes-read": {
+        "plugin:chongdae": "1af57b783ae3",
+        "plugin:dwitbuk": "99af6f9bc9e4",
+        "plugin:hunsu": "da5690287625",
+        "plugin:jokbo": "24fb1df410b0",
+        "file:CLAUDE.md": "336cc4fbf19b",
+        "file:AGENTS.md": "7cfa2f4f340c"
+      },
+      "judged-by": "claude-code claude-opus-5-5",
+      "findings": [
+        {
+          "kind": "contradiction",
+          "members": [
+            "hunsu:compose",
+            "plugin:chongdae"
+          ],
+          "quotes": {
+            "hunsu:compose": "an edit to `hunsu.json`",
+            "plugin:chongdae": "the run is the agent's container, so Edit/Write are refused until one starts"
+          },
+          "why": "While setting up the environment, compose has the agent edit hunsu.json (engines, resolutions, local-hooks-ok) and hunsu.local.json directly. chongdae's standing instruction refuses Edit/Write when no run is in progress, so in a project with no run the compose answer cannot be written until a run starts.",
+          "proposed": {
+            "order": [
+              "plugin:chongdae",
+              "hunsu:compose"
+            ]
+          },
+          "class": "sequenced",
+          "class_quote": {
+            "member": "plugin:chongdae",
+            "quote": "the run is the agent's container, so Edit/Write are refused until one starts"
+          }
+        },
+        {
+          "kind": "contradiction",
+          "members": [
+            "mangsang:operate",
+            "plugin:chongdae"
+          ],
+          "quotes": {
+            "mangsang:operate": "Write the name into `mangsang/people.json`",
+            "plugin:chongdae": "the run is the agent's container, so Edit/Write are refused until one starts"
+          },
+          "why": "When a project first adopts mangsang, the agent writes files directly (mangsang/people.json, a proposals.json). chongdae refuses Edit/Write when no run is in progress, so these writes have to happen inside a run.",
+          "proposed": {
+            "order": [
+              "plugin:chongdae",
+              "mangsang:operate"
+            ]
+          },
+          "class": "sequenced",
+          "class_quote": {
+            "member": "plugin:chongdae",
+            "quote": "the run is the agent's container, so Edit/Write are refused until one starts"
+          }
+        }
+      ],
+      "findings-fingerprint": "592f13daedc8"
+    },
+    {
+      "situation": "a check fails",
+      "members": [
+        "mangsang:operate"
+      ],
+      "modes": [
+        "plugin:chongdae",
+        "plugin:dwitbuk",
+        "plugin:hunsu",
+        "plugin:jokbo",
+        "file:CLAUDE.md",
+        "file:AGENTS.md"
+      ],
+      "members-fingerprint": "8d1dc85676f4",
+      "members-text-fingerprint": "b8321f6312dc",
+      "member-fingerprints": {
+        "file:AGENTS.md": "7cfa2f4f340c",
+        "file:CLAUDE.md": "336cc4fbf19b",
+        "mangsang:operate": "b1da9ac060d5",
+        "plugin:chongdae": "9de6ee882387",
+        "plugin:dwitbuk": "079f0e56c456",
+        "plugin:hunsu": "e0b89c53806c",
+        "plugin:jokbo": "b66888e591f1"
+      },
+      "modes-read": {
+        "plugin:chongdae": "1af57b783ae3",
+        "plugin:dwitbuk": "99af6f9bc9e4",
+        "plugin:hunsu": "da5690287625",
+        "plugin:jokbo": "24fb1df410b0",
+        "file:CLAUDE.md": "336cc4fbf19b",
+        "file:AGENTS.md": "7cfa2f4f340c"
+      },
+      "judged-by": "claude-code claude-opus-5-5",
+      "findings": [
+        {
+          "kind": "premise",
+          "members": [
+            "mangsang:operate",
+            "plugin:chongdae"
+          ],
+          "quotes": {
+            "mangsang:operate": "FAILED (a declared invariant does not hold — propose the missing relations, step 2)",
+            "plugin:chongdae": "the run is the agent's container, so Edit/Write are refused until one starts"
+          },
+          "why": "When a check fails, mangsang:operate has the agent write a proposals.json and record files (register, confirm). That assumes the agent can write files. chongdae's standing mode refuses Edit/Write until a run is in progress. So mangsang's fix steps only work after a chongdae run has started, and they go through that run.",
+          "proposed": {
+            "order": [
+              "plugin:chongdae",
+              "mangsang:operate"
+            ]
+          },
+          "class": "sequenced",
+          "class_quote": {
+            "member": "plugin:chongdae",
+            "quote": "the run is the agent's container, so Edit/Write are refused until one starts"
+          }
+        }
+      ],
+      "findings-fingerprint": "1d64e6598d29"
+    }
+  ],
+  "rejected": []
+}

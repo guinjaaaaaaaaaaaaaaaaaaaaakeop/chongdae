@@ -1,0 +1,38 @@
+{
+  "artifact-type": "chongdae/request@1",
+  "written_by": "chongdae 1.24.0",
+  "stage": "build",
+  "run": "run-20261030-091750-7101",
+  "task": "docs-update",
+  "role": "implementer",
+  "target": ".",
+  "goal": "Privacy follow-up and fixture isolation (owner-authorized; new work): first isolate test fixtures (seven normal-parent hook tests that inherit a worker's AGENT_WORKER, six expectations that miss portable command paths) through a disputed-tests amendment by the lock's Claude tests writer; then one bounded contract for the public projection (left boundaries for every prefix, backslash host paths within a stated platform limit, refusal of machine-path keys, the projected worktree-main close lock and raw CLI reload) with Claude tests, a Codex build and the Claude verifier; then adopt the earlier authorized README/Python-floor/AGENTS/CLAUDE work with its provenance and document the major-version rule and the public/local split. commit-records stays false; no version bump, push, release, cache change or history rewrite.",
+  "brief": "Minimal documentation consistency for the 2.0.0 candidate (unpublished), in README.md and SELFHOSTING.md only. The runtime is frozen at commit 852b852 (chongdae.py, hooks, commands, skills and test files must stay byte-identical; a check compares them). AGENTS.md and CLAUDE.md stay unchanged (CLAUDE.md is exactly \"@AGENTS.md\" and a newline). No machine paths, outer-checkout paths or run ids in product docs. Do not commit. Write only what is true of the code at 852b852:\n\nD1 In README's files/records description: the engine-owned run files plan.json, state.json and tasks/<id>.json are public projections — this machine's project root, home, temporary directories and plugin-cache paths become `.`, `~`, `<tmp>` and `<plugin:NAME@VERSION>` only where a path begins (a `**`-wrapped path at a path start included; a relative path that merely contains such a segment is kept); the exact raw strings live in the ignored overlays local/plan.json, local/state.json and local/tasks/<id>.json, and raw provider requests, responses and transcripts stay exact in ignored local/ storage; a public dict key that would hold a machine path is refused (MachinePathKey), never renamed. Extend the existing transaction sentence (\"Task records, their private overlays, and run state are saved through one local transaction journal\") to include the plan.\nD2 Landing: a supported worktree landing (close's merge-back) writes into the main checkout's local overlays only the raw strings whose public value is their projection, for that run's state, task and plan files — no private state, journal, leases, acknowledgements or worker artifacts; a run merged by hand, or read on another machine, has only its public projection there, so a check whose argv named machine-specific paths may not rerun there.\nD3 Bounded claims, stated plainly: asked/, contract/, delegations/, reviews/ and report output are not part of this normalization; only `**` emphasis is recognized (other Markdown, HTML or ANSI markup is not parsed, so a machine path behind other markup can stay public); backslash (Windows-style) handling is tested only with mocked strings, not on a live Windows host, and drive-letter or case variants and UNC paths are not recognized.\nD4 Versioning: say explicitly that dropping a supported Python version or host version (raising engines.python, or requiring a newer Claude Code or Codex) is a major change; the current floor is Python 3.11 (Install already says so; keep it).\nD5 Self-check: name test_public_projection.py among the suites the entry point runs.\nD6 SELFHOSTING.md: its sentence that `git show HEAD:plugin.json` and `git show HEAD:.claude-plugin/plugin.json` say Python >=3.9 is no longer true (the adopted floor commit made all three manifests >=3.11). State instead that the released 1.24.0 (commit c1c3f63) declared >=3.9 in plugin.json and .claude-plugin/plugin.json and >=3.11 in .codex-plugin/plugin.json, that source now declares >=3.11 in all three, and that this drop of 3.9/3.10 is a major change under README's versioning. Change nothing else in SELFHOSTING.md.\nKeep every addition short and in the existing style; link sections instead of repeating them.",
+  "closes": [],
+  "contract": {},
+  "checks": [
+    [
+      "python3",
+      "<tmp>",
+      "README.md",
+      "AGENTS.md",
+      "CLAUDE.md",
+      "SELFHOSTING.md"
+    ],
+    [
+      "python3",
+      "<tmp>"
+    ],
+    [
+      "git",
+      "diff",
+      "--check",
+      "--",
+      "README.md",
+      "SELFHOSTING.md"
+    ]
+  ],
+  "tests": [],
+  "domain": "code",
+  "response": "./.chongdae/run-20261030-091750-7101/local/docs-update.response.json"
+}

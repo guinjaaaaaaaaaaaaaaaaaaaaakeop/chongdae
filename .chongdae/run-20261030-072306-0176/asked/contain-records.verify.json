@@ -1,0 +1,80 @@
+{
+  "artifact-type": "chongdae/request@1",
+  "written_by": "chongdae 1.24.0",
+  "stage": "verify",
+  "run": "run-20261030-072306-0176",
+  "task": "contain-records",
+  "role": "verifier",
+  "target": ".",
+  "goal": "Privacy repair (owner-authorized, new work, not retroactive): chongdae's public task records leak this machine's absolute paths (jokbo run-20261030-063525-2d81: stages.newbie.response.tried[].command). Contain first with machine-local commit-records:false in a recorded environment task; then the lock's Claude tests writer and Codex builder make save_state write a path-normalized public projection while exact raw values stay in ignored local state for validation, recovery and ownership; the lock's Claude verifier checks it. No version bump, push, cache change or history rewrite; prior README/AGENTS/manifest edits and SELFHOSTING.md stay as they are.",
+  "brief": "Set settings.chongdae.commit-records to false in hunsu.local.json (git-ignored, machine-local overlay; keep its local-hooks-ok entry). Effect: the engine writes this run's records but does not commit them, until the projection repair is independently checked. Not done: no ignore rule added, no existing record branch or commit rewritten or deleted; commits already made (run-20261030-065818-2049 and this run's init 7919012) stay in history as they are.",
+  "closes": [],
+  "contract": {},
+  "checks": [
+    [
+      "python3",
+      "-c",
+      "import json; s=json.load(open(\"hunsu.local.json\")); assert s[\"settings\"][\"chongdae\"][\"commit-records\"] is False, s; assert s[\"local-hooks-ok\"]==[\"claude-hook.sh\"], s; print(\"hunsu.local.json: settings.chongdae.commit-records is false; local-hooks-ok kept\")"
+    ],
+    [
+      "git",
+      "check-ignore",
+      "-q",
+      "hunsu.local.json"
+    ],
+    [
+      "python3",
+      "{plugin:hunsu}/hunsu.py",
+      "check",
+      "--target",
+      "."
+    ]
+  ],
+  "tests": [],
+  "response": "./.chongdae/run-20261030-072306-0176/local/contain-records.verify.response.json",
+  "touched": [],
+  "built": null,
+  "excluded": {
+    "record-paths": []
+  },
+  "since": {
+    ".": "79190124ab3067db11f1f663147824875330548f"
+  },
+  "checked": [
+    {
+      "command": "python3 -c 'import json; s=json.load(open(\"hunsu.local.json\")); assert s[\"settings\"][\"chongdae\"][\"commit-records\"] is False, s; assert s[\"local-hooks-ok\"]==[\"claude-hook.sh\"], s; print(\"hunsu.local.json: settings.chongdae.commit-records is false; local-hooks-ok kept\")'",
+      "exit": 0,
+      "tail": [
+        "hunsu.local.json: settings.chongdae.commit-records is false; local-hooks-ok kept"
+      ],
+      "at": "2026-10-30T07:23:26+00:00",
+      "chongdae": "chongdae 1.24.0",
+      "source": "the task's checks, run by chongdae to decide it",
+      "changed_since": []
+    },
+    {
+      "command": "git check-ignore -q hunsu.local.json",
+      "exit": 0,
+      "tail": [
+        ""
+      ],
+      "at": "2026-10-30T07:23:26+00:00",
+      "chongdae": "chongdae 1.24.0",
+      "source": "the task's checks, run by chongdae to decide it",
+      "changed_since": []
+    },
+    {
+      "command": "python3 '{plugin:hunsu}/hunsu.py' check --target .",
+      "exit": 0,
+      "tail": [
+        "info  4 finding(s) settled by the members' own text (sequenced / not co-active / duplicate, each on a verified sentence) — no resolution needed; see hunsu-conflicts.md",
+        "  (offline: a release is known here only from this machine's marketplace copies — `hunsu outdated` asks the marketplaces, read-only)",
+        "errors 0 · warnings 0 · info 1"
+      ],
+      "at": "2026-10-30T07:23:26+00:00",
+      "chongdae": "chongdae 1.24.0",
+      "source": "the task's checks, run by chongdae to decide it",
+      "changed_since": []
+    }
+  ]
+}

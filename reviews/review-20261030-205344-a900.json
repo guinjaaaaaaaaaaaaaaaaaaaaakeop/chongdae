@@ -1,0 +1,344 @@
+{
+  "artifact-type": "dwitbuk/review@1",
+  "id": "review-20261030-205344-a900",
+  "since": "2e9114a4e3fc84f13d39c5dd055bf4a9f8dd0ac5",
+  "head": "554f8b3c4b631cf0e569b94fcfd1ed0628eb79ce",
+  "findings": [
+    {
+      "kind": "unreviewed",
+      "where": "hunsu.json resolutions['building a slice']",
+      "text": "applied from the judge's proposal, marked reviewed: false — `hunsu policy` shows the conflict a person judges",
+      "standing": true,
+      "reporter": "hunsu",
+      "layer": "objection",
+      "first-seen": "review-20261030-161758-45ac"
+    },
+    {
+      "kind": "unreviewed",
+      "where": "hunsu.json resolutions['reviewing, disputing or trying a change']",
+      "text": "applied from the judge's proposal, marked reviewed: false — `hunsu policy` shows the conflict a person judges",
+      "standing": true,
+      "reporter": "hunsu",
+      "layer": "objection",
+      "first-seen": "review-20261030-161758-45ac"
+    },
+    {
+      "kind": "unreviewed",
+      "where": "hunsu.json resolutions['a decision waiting on the person']",
+      "text": "applied from the judge's proposal, marked reviewed: false — `hunsu policy` shows the conflict a person judges",
+      "standing": true,
+      "reporter": "hunsu",
+      "layer": "objection",
+      "first-seen": "review-20261030-161758-45ac"
+    },
+    {
+      "kind": "unreviewed",
+      "where": "hunsu.json resolutions['asking what happened or what is open']",
+      "text": "applied from the judge's proposal, marked reviewed: false — `hunsu policy` shows the conflict a person judges",
+      "standing": true,
+      "reporter": "hunsu",
+      "layer": "objection",
+      "first-seen": "review-20261030-161758-45ac"
+    },
+    {
+      "kind": "unreviewed",
+      "where": "hunsu.json resolutions['before a merge']",
+      "text": "applied from the judge's proposal, marked reviewed: false — `hunsu policy` shows the conflict a person judges",
+      "standing": true,
+      "reporter": "hunsu",
+      "layer": "objection",
+      "first-seen": "review-20261030-161758-45ac"
+    },
+    {
+      "kind": "self-performed",
+      "where": "run-20261030-091750-7101/adopt-prior-docs",
+      "text": "the session did this itself instead of the lock's implementer (decided by the session (claude-code claude-opus-5-5)): Adoption, not authorship: README.md, plugin.json and .claude-plugin/plugin.json (the Python 3.11 floor, shared host guidance, release and adoption notes) and the untracked AGENTS.md and CLAUDE.md are earlier owner-authorized work that predates every privacy task in this session; this session did not write them. Evidence, compared by the session on this machine: no commit since c1c3f63 touched them; git diff c1c3f63 of the three tracked files is byte-identical to the owner's baseline patch, and AGENTS.md and CLAUDE.md match the baseline's sha256 and text. The engine's drop-time measure listed them under the dropped privacy builds; they are not the privacy builder's work. Nothing is built, so no implementer: the session commits them as they stand and the lock's verifier reviews them fresh.",
+      "layer": "observation"
+    },
+    {
+      "kind": "session-judged",
+      "where": "run-20261030-091750-7101/adopt-prior-docs",
+      "text": "adopt .claude-plugin/plugin.json, AGENTS.md, CLAUDE.md, README.md, plugin.json decided by the session (claude-code claude-opus-5-5), not a person: Earlier owner-authorized work that predates this session's privacy tasks (Python 3.11 floor in two manifests, README host-entry/release/limits/versioning text, the shared AGENTS.md and CLAUDE.md importing it). Verified on this machine: no commit since c1c3f63 touched these files; git diff c1c3f63 of README.md, plugin.json and .claude-plugin/plugin.json is byte-identical to the owner's baseline patch; AGENTS.md and CLAUDE.md match the baseline's sha256 and text. The engine's drop-time measure had listed them under the dropped privacy builds (privacy-build, privacy-build-2, privacy-build-3); none of those builds wrote them, and this adoption moves them out. Not authored by this session.",
+      "layer": "observation"
+    },
+    {
+      "kind": "self-performed",
+      "where": "run-20261030-091750-7101/final-suite-2",
+      "text": "the session did this itself instead of the lock's implementer (decided by the session (claude-code claude-opus-5-5)): Verification only, no build: the one final full suite on the 2.0.0 candidate, required by AGENTS.md because the Markdown wrapper fix (852b852) changed runtime after the earlier final run (which is evidence for 0ae52cf only). Run by chongdae so the exit and counts are in the record; nothing in the tree is written.",
+      "layer": "observation"
+    },
+    {
+      "kind": "self-performed",
+      "where": "run-20261030-091750-7101/final-suite",
+      "text": "the session did this itself instead of the lock's implementer (decided by the session (claude-code claude-opus-5-5)): Verification only, no build: the one final full test_chongdae.py the owner asked for, after the corrected runtime was accepted by a fresh verifier, run by chongdae itself so its exit and counts are in the record; plus the changed fixtures targeted in a normal-parent context. Nothing in the tree is written by it.",
+      "layer": "observation"
+    },
+    {
+      "kind": "session-judged",
+      "where": "run-20261030-091750-7101/privacy-build-2",
+      "text": "drop decided by the session (claude-code claude-opus-5-5), not a person: Superseded before it started: its brief carries the rejected R6 (public def.checks/checks exempt from projection), which violates the owner's privacy contract. privacy-build-3 carries the corrected contract (R1-R5, R3 atomicity, corrected R6: public checks projected; the minimal raw overlay of a landing run is carried into main through save_state under the destination lock, and merge_back's landed write uses load_state/save_state). Nothing was built under this task. Its dispute stands in the record: commit ecdb9dc changed a protected expectation for the rejected exemption, and that expectation is re-disputed on privacy-build-3 so its writer (privacy-build-tests) corrects it prospectively.",
+      "layer": "observation"
+    },
+    {
+      "kind": "session-judged",
+      "where": "run-20261030-091750-7101/privacy-build-2",
+      "text": "retry after attempt 1 decided by the session (claude-code claude-opus-5-5), not a person: Contract R6 (added after this amendment): a task's checks (def.checks, checks) are executable argv and keep the portable form portable_argv gives them at add; the narrow projection does not apply to them. test_concurrency.ConcurrentCommands.test_check_attachment_is_not_lost_during_another_run now expects def.checks == [public_projection(portable_argv([sys.executable, '-c', 'pass']), project)[0]]; under R6 the expected public form is [portable_argv([sys.executable, '-c', 'pass'])]. The two differ when the interpreter's path is under a temporary directory (<tmp>/cd-py311/bin/python3 gives '<tmp>' today but must stay the path). Change only that expectation; the F1/F2 amendment otherwise stands. It may fail before privacy-build-2 is built (today's engine still projects checks).",
+      "layer": "observation"
+    },
+    {
+      "kind": "session-judged",
+      "where": "run-20261030-091750-7101/privacy-build-3",
+      "text": "drop decided by the session (claude-code claude-opus-5-5), not a person: Contradictory contract: its brief (contract R corrected, without plan.json scope) conflicted with its own protected all-public-JSON landing test, which found the raw goal in plan.json. The builder (dakdol on codex) honestly stopped blocked on that (attempts 2 and 3, sessions 01a18c5c-e309-77e0-a857-5d9cb1bf2f24 and 01a18c62-e5fe-73f1-9069-bbe4927e8370). The session then resent the same brief with a delegated decision instead of a corrected contract; the owner's reviewer interrupted that fourth launch (SIGINT), which edited chongdae.py for about 23 seconds (mtime 19:41:11 after its 19:40:48 dispatch) and left no answer; the engine recorded it as no-response. The work is NOT done: the uncommitted chongdae.py (sha256 a1a48b73..., preserved in <tmp>/cd-selfhost/partial-chongdae-before-recovery.py) is adopted by privacy-build-4, whose contract (R final) explicitly includes the owner-approved plan.json scope (R7) and the R3a atomicity requirement.",
+      "layer": "observation"
+    },
+    {
+      "kind": "session-judged",
+      "where": "run-20261030-091750-7101/privacy-build-3",
+      "text": "retry after attempt 1 decided by the session (claude-code claude-opus-5-5), not a person: The owner rejected R6 as written (public def.checks/checks exempt from projection). Under the corrected contract R6, public def.checks are projected like every public string; the exact argv stays in the local overlay. Commit ecdb9dc changed test_concurrency.ConcurrentCommands.test_check_attachment_is_not_lost_during_another_run to expect def.checks == [portable_argv([sys.executable, '-c', 'pass'])] for the rejected exemption; correct that expectation prospectively (a new change, ecdb9dc stays in history) to the public projection of the recorded portable argv, as 6431d3f had it: [public_projection(portable_argv([sys.executable, '-c', 'pass']), str(project))[0]]; and, if this test can read the raw value without changing the engine (load_state of the run directory), also assert the merged raw def.checks equals portable_argv([...]) exactly. Change only this test; the F1/F2 fixture amendment otherwise stands. It passes against today's engine (which projects checks).",
+      "layer": "observation"
+    },
+    {
+      "kind": "delegated",
+      "where": "run-20261030-091750-7101/privacy-build-3 attempt 3",
+      "text": "retry after blocked passed by delegation: Owner's handoff in this session: 'Routine implementation and containment choices are delegated; don't stop merely to ask generic permission' and 'Converge known privacy/landing/key/boundary gaps in one corrected prospective runtime build'. Decision (made by the session as planner, under that handoff; it applies contract R6's own sentence 'no actual project, home, temp or plugin-cache path appears in any public file'): a run's plan.json is public run JSON. Write it projected like tasks/<id>.json and state.json, keep its raw strings in an ignored local/plan.json overlay written together with it, and read it through a merged raw view wherever the engine reads a run's plan.json (a plan run's checks must still run with their raw argv). Carry plan.json's minimal raw overlay through landing exactly like state.json and the task files. A plan.json written before this change keeps its bytes until the engine writes it again. Nothing else changes in scope.",
+      "layer": "observation"
+    },
+    {
+      "kind": "session-judged",
+      "where": "run-20261030-091750-7101/privacy-build-4",
+      "text": "adopt chongdae.py decided by the session (claude-code claude-opus-5-5), not a person: Adopted as this build's starting point, not as finished or reviewed work: the uncommitted chongdae.py (sha256 a1a48b7315a78e78..., copy in <tmp>/cd-selfhost/partial-chongdae-before-recovery.py) was written by privacy-build-3's builder, hacheong dakdol on codex gpt-6-astra (attempt 1 session 01a18c56..., attempt 2 01a18c5c-e309-77e0-a857-5d9cb1bf2f24, attempt 3 01a18c62-e5fe-73f1-9069-bbe4927e8370 made no edits, and an interrupted fourth launch that edited it for about 23 seconds and left no answer), on top of committed 2e9114a. privacy-build-3 was dropped for its contradictory contract; this task finishes the work under contract R final.",
+      "layer": "observation"
+    },
+    {
+      "kind": "session-judged",
+      "where": "run-20261030-091750-7101/privacy-build-tests",
+      "text": "reopen for attempt 1 decided by the session (claude-code claude-opus-5-5), not a person: Contract R6 (added after this amendment): a task's checks (def.checks, checks) are executable argv and keep the portable form portable_argv gives them at add; the narrow projection does not apply to them. test_concurrency.ConcurrentCommands.test_check_attachment_is_not_lost_during_another_run now expects def.checks == [public_projection(portable_argv([sys.executable, '-c', 'pass']), project)[0]]; under R6 the expected public form is [portable_argv([sys.executable, '-c', 'pass'])]. The two differ when the interpreter's path is under a temporary directory (<tmp>/cd-py311/bin/python3 gives '<tmp>' today but must stay the path). Change only that expectation; the F1/F2 amendment otherwise stands. It may fail before privacy-build-2 is built (today's engine still projects checks).",
+      "layer": "observation"
+    },
+    {
+      "kind": "session-judged",
+      "where": "run-20261030-091750-7101/privacy-build-tests",
+      "text": "reopen for attempt 2 decided by the session (claude-code claude-opus-5-5), not a person: The owner rejected R6 as written (public def.checks/checks exempt from projection). Under the corrected contract R6, public def.checks are projected like every public string; the exact argv stays in the local overlay. Commit ecdb9dc changed test_concurrency.ConcurrentCommands.test_check_attachment_is_not_lost_during_another_run to expect def.checks == [portable_argv([sys.executable, '-c', 'pass'])] for the rejected exemption; correct that expectation prospectively (a new change, ecdb9dc stays in history) to the public projection of the recorded portable argv, as 6431d3f had it: [public_projection(portable_argv([sys.executable, '-c', 'pass']), str(project))[0]]; and, if this test can read the raw value without changing the engine (load_state of the run directory), also assert the merged raw def.checks equals portable_argv([...]) exactly. Change only this test; the F1/F2 fixture amendment otherwise stands. It passes against today's engine (which projects checks).",
+      "layer": "observation"
+    },
+    {
+      "kind": "session-judged",
+      "where": "run-20261030-091750-7101/privacy-build",
+      "text": "drop decided by the session (claude-code claude-opus-5-5), not a person: Superseded before it started: the fixture amendment it routed (privacy-build-tests, done) found that a landed worktree's merge-back runs task checks from the public record, where the narrow projection had turned an interpreter path under a temp dir into '<tmp>' (FileNotFoundError). The contract gains R6 (executable check argv keeps its portable_argv form), and a build's brief is fixed when it is added, so privacy-build-2 carries contract R with R6. Nothing was built under this task; its dispute and the amended tests stand.",
+      "layer": "observation"
+    },
+    {
+      "kind": "session-judged",
+      "where": "run-20261030-091750-7101/privacy-build",
+      "text": "retry after attempt 1 decided by the session (claude-code claude-opus-5-5), not a person: Fixture context, not production behavior (contract F). F1: seven tests that exercise the hooks of a NORMAL parent session fail only because the test process inherits AGENT_WORKER=1 from a hired worker, where hooks are silent by design: test_hooks_and_engine_anchor_to_the_project_not_the_shells_directory, test_operation_words_are_report_hints_and_a_bash_operation_gets_a_did_nudge, test_performed_by_is_recorded_like_an_author_line, test_session_run_tasks_added_as_the_work_goes_claims_and_the_write_hook, test_session_start_under_hunsus_probe_says_its_standing_text_not_one_state, test_the_session_start_and_close_say_unpushed_commits_and_no_upstream, test_the_session_start_line_counts_open_tasks_by_the_rule_run_uses (all in test_chongdae.py). Each must construct the environment of the session it means for every hook or engine subprocess it runs: a normal session has no AGENT_WORKER; a scenario that means worker suppression sets AGENT_WORKER=1 itself. Do not change the hooks, the engine or their AGENT_WORKER behavior, do not clear AGENT_WORKER process-wide (os.environ) or for the whole suite, and do not weaken any hook assertion: only the env a test passes to the subprocess it means changes. F2: six expectations assume the raw sys.executable appears in public command records, but chongdae records commands portably (portable_argv: a path under the home becomes `~/...`, an installed plugin's path `{plugin:NAME}`), so they fail whenever the interpreter lives under HOME (e.g. ~/.local/bin/python3.11): test_a_disputed_contract_test_goes_back_to_its_writer_and_the_build_goes_out_again, test_a_quibble_task_is_sent_a_review_shaped_request_not_its_own_empty_checks, test_a_verifier_finding_whose_quote_is_not_where_it_says_is_overruled_and_the_work_is_not_resent, test_did_keeps_a_script_outside_the_project_a_sensible_subject_a_meaningful_tail_and_a_batch_as_one_judgment, test_did_runs_one_operation_records_it_whatever_the_exit_and_report_lists_it (test_chongdae.py) and test_concurrency.ConcurrentCommands.test_check_attachment_is_not_lost_during_another_run. Each must expect the contract-correct public form (what the engine's portable recording gives for the command the test passed, e.g. derived with chongdae.portable_argv / shlex.join) or use a stable fixture input whose public form is known; not the raw path, not a skip, and no change to the engine's normalizers. Evidence before the amendment (the session's runs): with ~/.local/bin/python3.11 as the test interpreter (sys.executable under HOME) and subprocess python/python3 pinned to 3.11 on PATH (<tmp>/cd-py311/bin holds python and python3 links to it), all 13 fail with AGENT_WORKER=1; without AGENT_WORKER the 7 hook tests pass and the 6 fail. A runner outside the tree reproduces them by name: `PATH=<tmp>/cd-py311/bin:$PATH ~/.local/bin/python3.11 <tmp>/cd-selfhost/run_selected.py NAME...` (unittest ids such as test_concurrency.ConcurrentCommands.test_... work too). Done when all 13 pass with AGENT_WORKER=1 and without it, under that interpreter and under one outside HOME; only test_chongdae.py and test_concurrency.py change, and no other test.",
+      "layer": "observation"
+    },
+    {
+      "kind": "session-judged",
+      "where": "run-20261030-091750-7101/privacy-tests",
+      "text": "drop decided by the session (claude-code claude-opus-5-5), not a person: Its brief carries the rejected contract R6 (a public-check exemption: def.checks/checks left unprojected), which the owner's independent review rejected; the outer reviewer's SIGINT interrupted the parent while this task's worker was starting, and the engine recorded that launch as no-response (no answer, no tree change). The tests are re-requested from the lock's nitpick under the corrected contract (R1-R5 plus the corrected R6: projected public checks, raw argv carried by the local overlay through landing) as privacy-tests-2. The rejected contract is kept in <tmp>/cd-selfhost/contract-R-rejected-public-check-exemption.txt.",
+      "layer": "observation"
+    },
+    {
+      "kind": "verifier-non-claim",
+      "where": "run-20261030-091750-7101",
+      "text": "final-suite: (verifier) accepted without reading the tree: the eyes opened no file and ran no command — the verdict rests on the packet alone",
+      "layer": "observation"
+    },
+    {
+      "kind": "seen-non-claims",
+      "where": "run-20261030-072306-0176/projection-build (3), run-20261030-072306-0176/projection-tests (7), run-20261030-072306-0176/projection-tests-rel (6), run-20261030-091750-7101/docs-update (1), run-20261030-091750-7101/markdown-build (2), run-20261030-091750-7101/markdown-tests (12), run-20261030-091750-7101/metadata-2.0.0 (1), run-20261030-091750-7101/privacy-build-4 (4), run-20261030-091750-7101/privacy-build-tests (16), run-20261030-091750-7101/privacy-tests-3 (11)",
+      "text": "63 provider non-claim(s) went to the verifier with the work and it accepted — read there, said here, not charged; each stays in its task's `non-claims`",
+      "layer": "observation"
+    },
+    {
+      "kind": "non-claim",
+      "where": "run-20261030-091750-7101",
+      "text": "no check decides this task  [tasks: privacy-build-tests (run-20261030-091750-7101), privacy-tests (run-20261030-091750-7101), privacy-tests-2 (run-20261030-091750-7101), adopt-correction (run-20261030-091750-7101), privacy-tests-3 (run-20261030-091750-7101), markdown-tests (run-20261030-091750-7101); also in other runs: projection-tests (run-20261030-072306-0176), projection-tests-rel (run-20261030-072306-0176)]",
+      "layer": "objection"
+    },
+    {
+      "kind": "non-claim",
+      "where": "run-20261030-072306-0176",
+      "text": "projection-fix-rel: taken over by the session from implementer: The hired builder (hacheong dakdol on codex) wrote P2-rel in chongdae.py in its first attempt and kept it unchanged in the second, then stopped blocked only because its sandbox sets AGENT_WORKER=1, which silences hooks, so seven hook tests of the full suite fail there whatever the change (seen in every build attempt of this run  [task projection-fix-rel]",
+      "layer": "objection",
+      "first-seen": "review-20261030-181048-64f0"
+    },
+    {
+      "kind": "non-claim",
+      "where": "run-20261030-091750-7101",
+      "text": "dropped, not done: Superseded before it started: the fixture amendment it routed (privacy-build-tests, done) found that a landed worktree's merge-back runs task checks from the public record, where the narrow projection had turned an interpreter path under a temp dir into '<tmp>' (FileNotFoundError). The contract gains R6 (executable check argv keeps its portable_argv form), and a build's brief is fixed when it is added, so privacy-build-2 carries contract R with R6. Nothing was built under this task  [task privacy-build]",
+      "layer": "objection"
+    },
+    {
+      "kind": "non-claim",
+      "where": "run-20261030-091750-7101",
+      "text": "dropped, not done: Superseded before it started: its brief carries the rejected R6 (public def.checks/checks exempt from projection), which violates the owner's privacy contract. privacy-build-3 carries the corrected contract (R1-R5, R3 atomicity, corrected R6: public checks projected  [task privacy-build-2]",
+      "layer": "objection"
+    },
+    {
+      "kind": "non-claim",
+      "where": "run-20261030-091750-7101",
+      "text": "dropped, not done: Its brief carries the rejected contract R6 (a public-check exemption: def.checks/checks left unprojected), which the owner's independent review rejected  [task privacy-tests]",
+      "layer": "objection"
+    },
+    {
+      "kind": "non-claim",
+      "where": "run-20261030-091750-7101",
+      "text": "dropped, not done: Contradictory contract: its brief (contract R corrected, without plan.json scope) conflicted with its own protected all-public-JSON landing test, which found the raw goal in plan.json. The builder (dakdol on codex) honestly stopped blocked on that (attempts 2 and 3, sessions 01a18c5c-e309-77e0-a857-5d9cb1bf2f24 and 01a18c62-e5fe-73f1-9069-bbe4927e8370). The session then resent the same brief with a delegated decision instead of a corrected contract  [task privacy-build-3]",
+      "layer": "objection"
+    },
+    {
+      "kind": "non-claim",
+      "where": "run-20261030-091750-7101",
+      "text": "(provider) R2: \"these tests run on macOS with mocked backslash strings and are not evidence for a live Windows host\" — no test runs on Windows; UNC paths and a prefix written with the other separator are not tested (only the case/drive-letter variant is).  [task privacy-tests-2]",
+      "layer": "objection"
+    },
+    {
+      "kind": "non-claim",
+      "where": "run-20261030-091750-7101",
+      "text": "(provider) R3 atomicity: \"a PRIOR prepared generation found at the start of save_state is still recovered (recover_state) as today, under the same command lock, with no new lock taken\" and \"a refused save leaves the completed launch records in place and the same outcome can be consumed again\" are not tested; the refusal test checks only that every byte and directory listing under the project stays the same after a refused save that has a committed earlier generation.  [task privacy-tests-2]",
+      "layer": "objection"
+    },
+    {
+      "kind": "non-claim",
+      "where": "run-20261030-091750-7101",
+      "text": "(provider) R3: \"the records the engine itself writes hold no such key\" has no test of its own.  [task privacy-tests-2]",
+      "layer": "objection"
+    },
+    {
+      "kind": "non-claim",
+      "where": "run-20261030-091750-7101",
+      "text": "(provider) R4a: \"close holds the child's command lock before it loads state, and load_state stays read-only\" is not tested directly; the test checks only the result: exit 4, output starting `still working:`, the child's public record unchanged, and no `<tmp>`/`~`/`<...>` names created.  [task privacy-tests-2]",
+      "layer": "objection"
+    },
+    {
+      "kind": "non-claim",
+      "where": "run-20261030-091750-7101",
+      "text": "(provider) R4b's verifier finding uses where=\"brief\" with the raw brief text as its record_quote; the test checks that the reloaded task has no `overruled` key anywhere and that `show` does not print 'overruled'. It does not check which field of the verifier request carries the brief.  [task privacy-tests-2]",
+      "layer": "objection"
+    },
+    {
+      "kind": "non-claim",
+      "where": "run-20261030-091750-7101",
+      "text": "(provider) R6: \"A public value in main that is not the projection of the child's raw value (a merge changed it) gets no raw from the child\" and \"An overlay main already holds for that run is kept\" are not tested. \"the final landed write uses load_state/save_state ... commit_record then commits only public files\" is tested only through its results (`landed` in the merged view, public JSON free of the machine paths, recheck exit 0 in a new process), not by spying on which function runs.  [task privacy-tests-2]",
+      "layer": "objection"
+    },
+    {
+      "kind": "non-claim",
+      "where": "run-20261030-091750-7101",
+      "text": "(provider) R6's overlay file check rejects names containing request/response/pending/transcript/journal/launch/.log; it allows local/state-transaction.json in main, because the contract says the overlay is written through save_state (one state transaction in main).  [task privacy-tests-2]",
+      "layer": "objection"
+    },
+    {
+      "kind": "non-claim",
+      "where": "run-20261030-091750-7101",
+      "text": "(provider) R5 (\"chongdae.py only for the build; no CLI command, setting or record key is added; README is not changed\") is a scope rule for the build: no test of mine decides it. The runner's hash check covers README.  [task privacy-tests-2]",
+      "layer": "objection"
+    },
+    {
+      "kind": "non-claim",
+      "where": "run-20261030-091750-7101",
+      "text": "(provider) A machine path that is not the project, the home, a temp directory or a plugin cache (e.g. sys.executable under the real home while HOME is mocked) is outside what the leak scans look for.  [task privacy-tests-2]",
+      "layer": "objection"
+    },
+    {
+      "kind": "non-claim",
+      "where": "run-20261030-091750-7101",
+      "text": "(provider) Amendment to test_P2_only_whole_path_prefixes_and_metadata_unchanged: the builder was right. R3 says \"A key the narrow projection would change (it holds a machine prefix at a path start, per R1/R2) must not reach a public file\". The fixture key is now `\"docs\" + root + \"/key\"`, which R3 accepts unchanged (\"a key holding a machine prefix only inside another path\"). Refusing a machine-path key is decided by the ProjectionR R3 tests.  [task privacy-tests-2]",
+      "layer": "objection"
+    },
+    {
+      "kind": "non-claim",
+      "where": "run-20261030-091750-7101",
+      "text": "(provider) test_R6_landed_worktree_run_keeps_its_raw_argv_in_main still fails against the current build and was not disputed, so I kept it. The earlier run's public plan.json, written by the engine's own `init --session --goal`, holds a raw temp path. The sentence that decides it is R6: \"main's public JSON holds no actual machine path\" (the brief: \"no public JSON file of either run holds an actual machine path ... scan the complete serialized bytes, keys included\").  [task privacy-tests-2]",
+      "layer": "objection"
+    },
+    {
+      "kind": "non-claim",
+      "where": "run-20261030-091750-7101",
+      "text": "(provider) The non-claims of the earlier attempt still apply, unchanged.  [task privacy-tests-2]",
+      "layer": "objection"
+    },
+    {
+      "kind": "non-claim",
+      "where": "run-20261030-091750-7101",
+      "text": "adopt-correction: done on the session's word by name (`run adopt-correction`), with nothing of its own in the tree and no `did`  [task adopt-correction]",
+      "layer": "objection"
+    },
+    {
+      "kind": "unchanged",
+      "layer": "observation",
+      "where": "1 earlier review(s)",
+      "seen-in": [
+        "review-20261030-181048-64f0"
+      ],
+      "text": "8 observation(s) written in full in 1 earlier review(s) and unchanged since (non-claim 1, self-performed 2, session-judged 2, verifier-reject 3)"
+    },
+    {
+      "kind": "undisposed",
+      "layer": "objection",
+      "where": "AGENTS.md, CLAUDE.md, README.md, plugin.json",
+      "text": "4 file(s) changed since e0757d39419999292c1532907f92b41f96e27524; no completed run recorded touching them",
+      "carries": [
+        "outside-run",
+        "AGENTS.md, CLAUDE.md, README.md, plugin.json",
+        "changed ; no completed run recorded touching them"
+      ],
+      "first-seen": "review-20261030-161758-45ac",
+      "raised-in": "review-20261030-181048-64f0/13"
+    },
+    {
+      "kind": "undisposed",
+      "layer": "objection",
+      "where": ".claude-plugin/plugin.json",
+      "text": "1 file(s) changed since e0757d39419999292c1532907f92b41f96e27524; no completed run recorded touching them",
+      "carries": [
+        "outside-run",
+        ".claude-plugin/plugin.json",
+        "changed ; no completed run recorded touching them"
+      ],
+      "first-seen": "review-20261030-161758-45ac",
+      "raised-in": "review-20261030-181048-64f0/14"
+    },
+    {
+      "kind": "undisposed",
+      "layer": "objection",
+      "where": "run-20261030-065818-2049",
+      "text": "no session transcript here: what the session did for this task is its word alone  [task adopt-env]",
+      "carries": [
+        "non-claim",
+        "run-20261030-065818-2049",
+        "no session transcript here: what the session did for this task is its word alone"
+      ],
+      "first-seen": "review-20261030-161758-45ac",
+      "raised-in": "review-20261030-181048-64f0/15"
+    },
+    {
+      "kind": "undisposed",
+      "layer": "objection",
+      "where": "run-20261030-065818-2049",
+      "text": "no check decides this task  [tasks: provenance-note (run-20261030-065818-2049); also in other runs: projection-tests (run-20261030-072306-0176), projection-tests-rel (run-20261030-072306-0176)]",
+      "carries": [
+        "non-claim",
+        "run-20261030-065818-2049",
+        "no check decides this task"
+      ],
+      "first-seen": "review-20261030-161758-45ac",
+      "raised-in": "review-20261030-181048-64f0/16"
+    },
+    {
+      "kind": "undisposed",
+      "layer": "objection",
+      "where": "run-20261030-065818-2049",
+      "text": "provenance-note: done on the session's word by name (`run provenance-note`), with nothing of its own in the tree and no `did`  [task provenance-note]",
+      "carries": [
+        "non-claim",
+        "run-20261030-065818-2049",
+        "provenance-note: done on the session's word by name (`run provenance-note`), with nothing of its own in the tree and no `did`"
+      ],
+      "first-seen": "review-20261030-161758-45ac",
+      "raised-in": "review-20261030-181048-64f0/18"
+    }
+  ]
+}

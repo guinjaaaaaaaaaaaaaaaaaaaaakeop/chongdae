@@ -1,0 +1,221 @@
+{
+  "artifact-type": "chongdae/task@1",
+  "written_by": "chongdae 1.24.0",
+  "status": "done",
+  "def": {
+    "id": "privacy-tests-2",
+    "role": "nitpick",
+    "brief": "Write the tests that decide contract R (corrected, below) before it is built, in test_public_projection.py only (add to it; keep its 19 existing tests as they are). Name each test after its section (test_R1_..., test_R2_..., test_R3_..., test_R4a_..., test_R4b_...). The file must fail against the current chongdae.py (R1, R2 and R3 are not built yet); R4a and R4b are regression tests that may pass now but must fail if the behavior they name breaks (R4a: a close that took `main` from the public state.json would not see the held lock). Do not change the engine, test_chongdae.py, test_concurrency.py or test_record_transactions.py.\n\nRequired cases:\n- R1 through public_projection with the home mocked (HOME=/home/person in a subprocess, or a patched expanduser as the engine reads it) and target=/work/project: `docs/home/person/readme.md` and `docs/work/project/readme.md` unchanged; `/home/person/notes` -> `~/notes`; `cd /home/person/x` -> `cd ~/x`; `/work/project/src/a.py` -> `./src/a.py`; `cd /work/project` -> `cd .`; a plugin cache path at a path start projected, the same inside another path unchanged; the earlier P2/P2-rel examples still hold.\n- R1 through save_state: such strings in a task's response, stage answer and attempts are kept unchanged in the public file when they sit inside another path, and raw values merge back exactly.\n- R2 with HOME mocked as C:\\Users\\person: `C:\\Users\\person\\private.py` -> `~\\private.py`; `C:\\Users\\person` -> `~`; `see C:\\Users\\person\\a` -> `see ~\\a`; `C:\\Users\\personal\\x` unchanged. Name in a comment that these are mocked strings on this host, not a Windows run.\n- R3: public_projection raises chongdae.MachinePathKey (a SystemExit subclass) for a dict key holding the project root or the home at a path start, at the top level and nested inside a list item, its message naming the location; ordinary schema keys, relative-path keys, `~/x` and `<tmp>` keys, and a key holding a prefix only inside another path are accepted unchanged; a dict with both `<root>/a` and `./a` is refused, not merged. save_state with such a key raises it and leaves tasks/<id>.json, local/tasks/<id>.json, state.json and local/state-transaction.json byte-for-byte as they were (a previous generation exists before the refused save), and a response file under local/ unchanged.\n- R4a: a worktree session run in a temporary git repository (use the engine's own init --session --worktree through the CLI, or build the record with save_state as the engine would) whose state.json holds the projected `worktree.main` and local/state.json the raw main; another process holds the real main checkout's chongdae CommandLock (chongdae.CommandLock(main) held in a child process); `python3 chongdae.py close --target <child>` exits 4 with `still working:` first, the child run stays open with its record unchanged, and no directory named `<tmp>`, `~` or another projected literal appears in the child, the main checkout or the cwd. Release the lock afterwards.\n- R4b: through the CLI, with recorded command providers (scripts in the temporary project that copy fixed answer files to the response path) for the implementer and the verifier: an implementer answer holding the project root, the home and a temp path (summary, a non-claim, and `verified[].check` only where it is the real check line) plus a relative quote is consumed by `run`; local/<tag>.response.json keeps the provider's exact bytes (sha256); tasks/<id>.json holds none of those absolute paths; after a reload in a new process (`run`, `status` or `show`) load_state holds the raw strings and `added-in` equals the CHONGDAE_SESSION that added the task; and a verifier reject whose finding quotes a raw path that is in the request's own words (e.g. from the brief) is not overruled (the record has no `overruled` entry for it). If a lock or provider fixture from test_chongdae.py helps, import it; do not change that file.\nRun the new tests with python3 as the session runs them (python/python3 are pinned to 3.11 on PATH).\n- R6 (corrected) through save_state: a task whose `def.checks` and `checks` hold an interpreter path under a temporary directory and the project root has NO actual machine path in its public file (projected like every string), its local overlay holds the exact argv, and load_state returns the exact argv.\n- R6 (corrected) through the CLI, modeled on test_chongdae.py's test_a_landed_worktree_run_records_the_merge_commit (import its helpers if useful; do not change that file): in a temporary git repository (main) that already holds a completed run with its own local overlay (raw strings), a worktree session run (`init --session --worktree`) gets a task whose check's interpreter is a link under a temporary directory to sys.executable (and whose argv names the child's project path); the task is done and `close` lands it (exit 0, merge-back recheck runs the original argv). Then, in main: no public JSON file of either run holds an actual machine path (temp link, project paths, home) — scan the complete serialized bytes, keys included; the landing run's local overlay in main holds the raw argv and the raw strings of the public values, and none of PRIVATE_KEYS (`added-in`, `session`, `transcript`, `start`, `lease-*`, `completion-acks`, `checks-tree`, ...) and no copied journal, pending, request, response, transcript or log files; in a new process `chongdae recheck --target <main>` exits 0 and load_state restores the raw values, `landed` included in state.json; the pre-existing run's overlay bytes are unchanged.\nThe file must fail now (R1, R2, R3 and the corrected R6 landing are not built yet).\n\nContract R (corrected): bounded follow-up to contract P (public run records are a path-normalized projection, exact raws in ignored local state; built in commits 2fe1b61 and 2e9114a). Everything P says stays true unless a section below amends it. neutral_path (narrow=False) and its callers (portable, asked/) keep their behavior exactly.\n\nR1 Every prefix needs a path start. In the narrow projection (public_projection, and so the public files save_state writes) each machine prefix — the project root (abspath and realpath), the home directory, a host plugin cache path (`~/.claude|codex/plugins/cache/...` under the home), and a temporary directory (as P2-rel already does) — is replaced only where it BEGINS a path: at the start of the string, or right after whitespace, a quote, a backtick, or one of = ( [ , : ; | & >. Inside another path it stays unchanged. With the home mocked as /home/person: `docs/home/person/readme.md` stays `docs/home/person/readme.md` (today it becomes `docs~/readme.md`), `x/home/person` stays; `/home/person/notes` still becomes `~/notes`, `cd /home/person/x` becomes `cd ~/x`. With project root /work/project: `docs/work/project/readme.md` stays (today `docs./readme.md`); `/work/project/src/a.py` becomes `./src/a.py`, `cd /work/project` becomes `cd .`. The P2 right boundary (a whole path prefix: followed by a separator, R2, or ending the path at end of string, whitespace, a quote, a backtick, or one of ; | & ) , :) applies as before; the project root is still replaced before the home and temp prefixes.\n\nR2 Separators, and a stated platform limit. A prefix is followed by a separator when the next character is `/`, the host's os.sep or os.altsep, or `\\` when the prefix itself is written with backslashes (a Windows-style home such as C:\\Users\\person). With the home mocked as C:\\Users\\person: `C:\\Users\\person\\private.py` becomes `~\\private.py` (today it stays raw), `C:\\Users\\person` alone becomes `~`, `see C:\\Users\\person\\a` becomes `see ~\\a`, while `C:\\Users\\personal\\x` and `docs\\C:\\Users\\person\\x`-style text inside another path stay unchanged. The rest of the string is kept exactly (only the prefix is replaced). Limit, said and not hidden: chongdae decides this from the strings and os.sep/os.altsep only; these tests run on macOS with mocked backslash strings and are not evidence for a live Windows host; drive-letter or case variants of a prefix (c:\\users\\person for C:\\Users\\person), UNC paths, and a prefix written with the other separator than the host's home string uses are not recognized and stay as written. No test or document may claim all platforms were tested.\n\nR3 Machine-path keys are refused, never renamed. Dict keys are not projected (P2). A key the narrow projection would change (it holds a machine prefix at a path start, per R1/R2) must not reach a public file: public_projection raises `chongdae.MachinePathKey`, a subclass of SystemExit (chongdae's refusal), whose message names where the key is (the dotted path of its parent keys, list items as [i]) and the key in its projected form. save_state lets it propagate before anything is written: the public files, overlays and local/state-transaction.json keep their bytes, no partial generation is left, and the local raw inputs (the response, request and transcript files under local/) are unchanged. Ordinary keys are unchanged and accepted: schema keys (`stages`, role names, `tried`, `by`, ...), relative paths (`src/a.py`, `./x`, `README.md#versioning`), a key that is already `~/x` or `<tmp>`, and a key holding a machine prefix only inside another path (R1). Two keys that would collide after projection (`<root>/a` beside `./a`) are refused (the machine one), never merged. Nothing else about the engine changes for keys: the records the engine itself writes hold no such key.\n\nR4 The projected worktree main, and raw values through the CLI after a reload. These are regression tests for claims P made and the earlier tests left untested; they may already pass before this build, and must fail if the behavior they name breaks. R4a: a worktree session run whose state was saved through save_state — so the public state.json holds the projected `worktree.main` (not a real path) and local/state.json the raw main — `close` of that child, while another process holds the REAL destination checkout's command lock (chongdae's CommandLock on the main checkout), returns WAITING (exit 4, its output starts `still working:`), leaves the child run open and its record unchanged, and no directory named `<tmp>`, `~` or another projected literal appears in the child, the main checkout or the current directory. The existing order stays: close holds the child's command lock before it loads state, and load_state stays read-only. R4b: through the CLI (`python3 chongdae.py ... --target <tmp project>` in subprocesses, with a lock whose implementer and verifier are recorded command providers that copy fixed answer files): an implementer answer whose strings hold the project root, the home and a temp path (in `summary`, a finding or non-claim, `verified[].check` where it is the real check line) and a relative quote is consumed by `run`; local/<tag>.response.json keeps the provider's exact bytes; tasks/<id>.json is projected; after a reload in a new process (a further `run`, `status` or `show`) the merged state holds the raw strings, `added-in` is the session that added the task (CHONGDAE_SESSION), and a verifier finding whose quote is a raw path that is in the request's own words is not overruled.\n\nR5 Scope. chongdae.py only for the build; no CLI command, setting or record key is added (MachinePathKey is an exception class, not a record key); README is not changed by the build.\n\nR3 atomicity, stated: a refused projection publishes nothing of its own generation — the refusal comes before save_state writes its local/state-transaction.json, so no prepared journal, public file or overlay of that generation exists; a PRIOR prepared generation found at the start of save_state is still recovered (recover_state) as today, under the same command lock, with no new lock taken; a completion acknowledgement is recorded only with a durable save, so a refused save leaves the completed launch records in place and the same outcome can be consumed again.\n\nR6 (corrected; replaces the rejected \"R6 Executable argv stays runnable\" — no public-path exception). Public `def.checks` and `checks` are projected like every other public string: no actual project, home, temp or plugin-cache path appears in any public file. The exact runnable argv lives in the ignored local overlay, and the overlay's lifecycle carries it through landing and reload. When `close` lands a worktree run (merge_back: commit the worktree, merge its branch into main), the landing run's directory in main receives the merged PUBLIC record by git; before the recheck runs, the engine writes in main the landing run's minimal raw overlay: for each of its task files and its state.json, only the raw strings whose public value is the projection of the child's raw value (the projection mirror) — never PRIVATE_KEYS state (session, transcript, start snapshots, `added-in` ownership, lease keys, completion acks, check/review source trees, reported/rebaseline flags), never the journal, never pending/launch records, requests, responses, transcripts or logs. It writes them through save_state on main's copy of that run directory (one state transaction in main, under the destination command lock close already holds, so no new lock and no recursion). A public value in main that is not the projection of the child's raw value (a merge changed it) gets no raw from the child. An overlay main already holds for that run is kept. Other runs in main, their public files and their overlays are not touched. The recheck then runs each completed task's ACTUAL original argv (merged raw view), and the final landed write uses load_state/save_state on main's run directory (not load/save of the public file), so `landed` is recorded in the same transaction discipline, the public state.json stays projected and the raw overlay stays consistent; commit_record then commits only public files. After a successful close, in a new process in main (`recheck`, `show`, `status`, or load_state), the merged view holds the raw strings and recheck runs the original argv; main's public JSON holds no actual machine path; another completed run already in main with its own overlay keeps its overlay bytes. Said, not hidden: a run merged by hand (`git merge` + `init --merge`) or read on another machine has only its public record there, so a check whose argv named a temporary directory or another machine path cannot be rerun there (it is not exposed publicly either); the worker artifacts under a worktree run's local/ are removed with the worktree, as before. Regression: test_a_landed_worktree_run_records_the_merge_commit (test_chongdae.py) passes with the interpreter under a temporary directory (<tmp>/cd-py311/bin/python3 -> python3.11, AGENT_WORKER=1); the session's trace of today's failure (cmd_close -> merge_back line 1799 -> run_checks -> check_runs, executable '<tmp>') is in <tmp>/cd-selfhost/landed-trace.log.",
+    "closes": [],
+    "needs": [],
+    "checks": [],
+    "tests": [
+      "test_public_projection.py"
+    ],
+    "gate": null,
+    "domain": "code",
+    "scope": [
+      "test_public_projection.py"
+    ]
+  },
+  "seq": 6,
+  "added": "2026-10-30T10:22:13+00:00",
+  "non-claims": [
+    "no check decides this task; done means the agent said so",
+    "(provider) R2: \"these tests run on macOS with mocked backslash strings and are not evidence for a live Windows host\" — no test runs on Windows; UNC paths and a prefix written with the other separator are not tested (only the case/drive-letter variant is).",
+    "(provider) R3 atomicity: \"a PRIOR prepared generation found at the start of save_state is still recovered (recover_state) as today, under the same command lock, with no new lock taken\" and \"a refused save leaves the completed launch records in place and the same outcome can be consumed again\" are not tested; the refusal test checks only that every byte and directory listing under the project stays the same after a refused save that has a committed earlier generation.",
+    "(provider) R3: \"the records the engine itself writes hold no such key\" has no test of its own.",
+    "(provider) R4a: \"close holds the child's command lock before it loads state, and load_state stays read-only\" is not tested directly; the test checks only the result: exit 4, output starting `still working:`, the child's public record unchanged, and no `<tmp>`/`~`/`<...>` names created.",
+    "(provider) R4b's verifier finding uses where=\"brief\" with the raw brief text as its record_quote; the test checks that the reloaded task has no `overruled` key anywhere and that `show` does not print 'overruled'. It does not check which field of the verifier request carries the brief.",
+    "(provider) R6: \"A public value in main that is not the projection of the child's raw value (a merge changed it) gets no raw from the child\" and \"An overlay main already holds for that run is kept\" are not tested. \"the final landed write uses load_state/save_state ... commit_record then commits only public files\" is tested only through its results (`landed` in the merged view, public JSON free of the machine paths, recheck exit 0 in a new process), not by spying on which function runs.",
+    "(provider) R6's overlay file check rejects names containing request/response/pending/transcript/journal/launch/.log; it allows local/state-transaction.json in main, because the contract says the overlay is written through save_state (one state transaction in main).",
+    "(provider) R5 (\"chongdae.py only for the build; no CLI command, setting or record key is added; README is not changed\") is a scope rule for the build: no test of mine decides it. The runner's hash check covers README.",
+    "(provider) A machine path that is not the project, the home, a temp directory or a plugin cache (e.g. sys.executable under the real home while HOME is mocked) is outside what the leak scans look for.",
+    "(provider) Amendment to test_P2_only_whole_path_prefixes_and_metadata_unchanged: the builder was right. R3 says \"A key the narrow projection would change (it holds a machine prefix at a path start, per R1/R2) must not reach a public file\". The fixture key is now `\"docs\" + root + \"/key\"`, which R3 accepts unchanged (\"a key holding a machine prefix only inside another path\"). Refusing a machine-path key is decided by the ProjectionR R3 tests.",
+    "(provider) test_R6_landed_worktree_run_keeps_its_raw_argv_in_main still fails against the current build and was not disputed, so I kept it. The earlier run's public plan.json, written by the engine's own `init --session --goal`, holds a raw temp path. The sentence that decides it is R6: \"main's public JSON holds no actual machine path\" (the brief: \"no public JSON file of either run holds an actual machine path ... scan the complete serialized bytes, keys included\").",
+    "(provider) The non-claims of the earlier attempt still apply, unchanged."
+  ],
+  "touched_by_provider": [
+    "test_public_projection.py"
+  ],
+  "performed_by": {
+    "provider": "command",
+    "argv": [
+      "python3",
+      "{plugin:hacheong}/worker.py",
+      "--member",
+      "teujip",
+      "--request",
+      "{request}",
+      "--response",
+      "{response}",
+      "--host",
+      "claude"
+    ],
+    "host": "claude-code",
+    "model": "claude-opus-5-5",
+    "turns": 6,
+    "cost_usd": 0.19722219999999996,
+    "versions": {
+      "used": {
+        "hacheong": "1.12.1",
+        "chongdae": "1.24.0"
+      }
+    },
+    "trace": {
+      "changed": [],
+      "commands-run": 4,
+      "commands-failed": 0
+    }
+  },
+  "checks": [],
+  "attempts": [
+    {
+      "status": "done",
+      "summary": "I added 17 tests for contract R to test_public_projection.py, in a new ProjectionR class. The 19 existing tests are unchanged, and the new class does not run them a second time. I ran the file with python3 (3.11) against the current chongdae.py: 36 tests, 12 fail, each because the feature is missing.\n- R1 (4 tests fail): `docs/home/person/readme.md` becomes `docs~/readme.md`, `docs/work/project/readme.md` becomes `docs./readme.md`, and a plugin cache path inside another path is projected. Through save_state, the projection is also applied inside other paths.\n- R2 (1 test fails): `C:\\Users\\person\\private.py` stays raw.\n- R3 (6 tests fail): chongdae.MachinePathKey does not exist.\n- R6 landing (1 test fails): `close` of the worktree run crashes at merge_back -> run_checks -> check_runs with FileNotFoundError '<tmp>', the documented failure.\nPassing now, as allowed for regression tests: R4a (close waits with exit 4 while a child process holds the real main CommandLock), R4b (the CLI provider path with a reload), R6 through save_state, R1's temp-prefix rules under the mocked home, and R2's case-variant limit. R1 and R2 run public_projection in a child process with HOME=/home/person or HOME=C:\\Users\\person; a comment says these are mocked strings on macOS, not a Windows run. The CLI tests unset AGENT_WORKER and set CHONGDAE_SESSION, so a worker's environment cannot leak in. No other file was touched; git status shows only test_public_projection.py newly modified.",
+      "tests": [
+        "test_public_projection.py"
+      ],
+      "covers": [
+        {
+          "section": "R1",
+          "tests": [
+            "test_R1_public_projection_replaces_a_prefix_only_where_a_path_begins",
+            "test_R1_docs_home_and_docs_root_stay_unchanged",
+            "test_R1_plugin_cache_path_only_at_a_path_start",
+            "test_R1_temp_prefix_rules_still_hold_with_the_mocked_home",
+            "test_R1_save_state_keeps_prefixes_inside_another_path"
+          ]
+        },
+        {
+          "section": "R2",
+          "tests": [
+            "test_R2_backslash_home_is_followed_by_a_backslash_separator",
+            "test_R2_case_and_drive_variants_are_not_recognized"
+          ]
+        },
+        {
+          "section": "R3",
+          "tests": [
+            "test_R3_machine_path_key_is_a_systemexit",
+            "test_R3_root_key_at_top_level_is_refused",
+            "test_R3_home_key_nested_in_a_list_item_names_its_location",
+            "test_R3_ordinary_keys_are_accepted_unchanged",
+            "test_R3_colliding_keys_are_refused_not_merged",
+            "test_R3_save_state_refusal_leaves_every_byte"
+          ]
+        },
+        {
+          "section": "R4a",
+          "tests": [
+            "test_R4a_close_waits_on_the_real_main_lock_not_a_projected_one"
+          ]
+        },
+        {
+          "section": "R4b",
+          "tests": [
+            "test_R4b_raw_values_through_the_cli_and_a_reload"
+          ]
+        },
+        {
+          "section": "R6",
+          "tests": [
+            "test_R6_checks_are_projected_publicly_and_exact_locally",
+            "test_R6_landed_worktree_run_keeps_its_raw_argv_in_main"
+          ]
+        }
+      ],
+      "non-claims": [
+        "R2: \"these tests run on macOS with mocked backslash strings and are not evidence for a live Windows host\" — no test runs on Windows; UNC paths and a prefix written with the other separator are not tested (only the case/drive-letter variant is).",
+        "R3 atomicity: \"a PRIOR prepared generation found at the start of save_state is still recovered (recover_state) as today, under the same command lock, with no new lock taken\" and \"a refused save leaves the completed launch records in place and the same outcome can be consumed again\" are not tested; the refusal test checks only that every byte and directory listing under the project stays the same after a refused save that has a committed earlier generation.",
+        "R3: \"the records the engine itself writes hold no such key\" has no test of its own.",
+        "R4a: \"close holds the child's command lock before it loads state, and load_state stays read-only\" is not tested directly; the test checks only the result: exit 4, output starting `still working:`, the child's public record unchanged, and no `<tmp>`/`~`/`<...>` names created.",
+        "R4b's verifier finding uses where=\"brief\" with the raw brief text as its record_quote; the test checks that the reloaded task has no `overruled` key anywhere and that `show` does not print 'overruled'. It does not check which field of the verifier request carries the brief.",
+        "R6: \"A public value in main that is not the projection of the child's raw value (a merge changed it) gets no raw from the child\" and \"An overlay main already holds for that run is kept\" are not tested. \"the final landed write uses load_state/save_state ... commit_record then commits only public files\" is tested only through its results (`landed` in the merged view, public JSON free of the machine paths, recheck exit 0 in a new process), not by spying on which function runs.",
+        "R6's overlay file check rejects names containing request/response/pending/transcript/journal/launch/.log; it allows local/state-transaction.json in main, because the contract says the overlay is written through save_state (one state transaction in main).",
+        "R5 (\"chongdae.py only for the build; no CLI command, setting or record key is added; README is not changed\") is a scope rule for the build: no test of mine decides it. The runner's hash check covers README.",
+        "A machine path that is not the project, the home, a temp directory or a plugin cache (e.g. sys.executable under the real home while HOME is mocked) is outside what the leak scans look for."
+      ],
+      "worker": {
+        "host": "claude-code",
+        "model": "claude-opus-5-5",
+        "turns": 15,
+        "cost_usd": 1.3165495999999999
+      },
+      "reopened": {
+        "by": "chongdae",
+        "auto": "tests disputed by privacy-build-3",
+        "at": "2026-10-30T10:33:28+00:00",
+        "chongdae": "chongdae 1.24.0"
+      },
+      "disputed-tests": [
+        {
+          "test": "test_public_projection.py::Projection.test_P2_only_whole_path_prefixes_and_metadata_unchanged",
+          "contract_quote": "A key the narrow projection would change (it holds a machine prefix at a path start, per R1/R2) must not reach a public file: public_projection raises `chongdae.MachinePathKey`, a subclass of SystemExit (chongdae's refusal), whose message names where the key is (the dotted path of its parent keys, list items as [i]) and the key in its projected form.",
+          "why": "The fixture includes root + '/key' in keep, expects save_state to succeed, and asserts the public keep dictionary equals the original. R3 requires refusing that machine-path key; the implementation raises MachinePathKey at keep: ./key."
+        }
+      ],
+      "answered": {
+        "at": "2026-10-30T10:29:49+00:00",
+        "chongdae": "chongdae 1.24.0"
+      },
+      "done": {
+        "at": "2026-10-30T10:29:49+00:00",
+        "chongdae": "chongdae 1.24.0"
+      },
+      "touched": [
+        "test_public_projection.py"
+      ]
+    }
+  ],
+  "amending": [
+    {
+      "test": "test_public_projection.py::Projection.test_P2_only_whole_path_prefixes_and_metadata_unchanged",
+      "contract_quote": "A key the narrow projection would change (it holds a machine prefix at a path start, per R1/R2) must not reach a public file: public_projection raises `chongdae.MachinePathKey`, a subclass of SystemExit (chongdae's refusal), whose message names where the key is (the dotted path of its parent keys, list items as [i]) and the key in its projected form.",
+      "why": "The fixture includes root + '/key' in keep, expects save_state to succeed, and asserts the public keep dictionary equals the original. R3 requires refusing that machine-path key; the implementation raises MachinePathKey at keep: ./key."
+    }
+  ],
+  "response": {
+    "status": "done",
+    "summary": "I fixed the one disputed test. The builder was right: in test_P2_only_whole_path_prefixes_and_metadata_unchanged, the `keep` fixture used the key `root + \"/key\"`. That is a project root at the start of a path, and R3 says public_projection must refuse such a key with MachinePathKey, not accept it. I replaced it with `\"docs\" + root + \"/key\"`, a key where the root sits inside another path. R3 says such a key is accepted unchanged, so the test still checks that `keep` is kept as given and dict keys are not projected. The other assertions and the other 35 tests are unchanged.\n\nRun with python3 (3.11) against the current build: the corrected test passes. The whole file runs 36 tests with 1 failure, test_R6_landed_worktree_run_keeps_its_raw_argv_in_main, which the builder did not dispute. `close` no longer crashes at '<tmp>'. The test now fails because the earlier run's plan.json in main, written by the engine's own `init --session --goal \"earlier work in <main>/x\"`, holds the raw temp path `/var/folders/...` in `goal`. The brief and R6 require that no public JSON file of either run holds a machine path, so I kept that test as it is.\n\nOnly test_public_projection.py changed.",
+    "tests": [
+      "test_public_projection.py"
+    ],
+    "covers": [
+      {
+        "section": "R3",
+        "tests": [
+          "test_public_projection.py::Projection.test_P2_only_whole_path_prefixes_and_metadata_unchanged"
+        ]
+      },
+      {
+        "section": "P2",
+        "tests": [
+          "test_public_projection.py::Projection.test_P2_only_whole_path_prefixes_and_metadata_unchanged"
+        ]
+      }
+    ],
+    "non-claims": [
+      "Amendment to test_P2_only_whole_path_prefixes_and_metadata_unchanged: the builder was right. R3 says \"A key the narrow projection would change (it holds a machine prefix at a path start, per R1/R2) must not reach a public file\". The fixture key is now `\"docs\" + root + \"/key\"`, which R3 accepts unchanged (\"a key holding a machine prefix only inside another path\"). Refusing a machine-path key is decided by the ProjectionR R3 tests.",
+      "test_R6_landed_worktree_run_keeps_its_raw_argv_in_main still fails against the current build and was not disputed, so I kept it. The earlier run's public plan.json, written by the engine's own `init --session --goal`, holds a raw temp path. The sentence that decides it is R6: \"main's public JSON holds no actual machine path\" (the brief: \"no public JSON file of either run holds an actual machine path ... scan the complete serialized bytes, keys included\").",
+      "The non-claims of the earlier attempt still apply, unchanged."
+    ],
+    "worker": {
+      "host": "claude-code",
+      "model": "claude-opus-5-5",
+      "turns": 6,
+      "cost_usd": 0.19722219999999996
+    }
+  },
+  "answered": {
+    "at": "2026-10-30T10:36:47+00:00",
+    "chongdae": "chongdae 1.24.0"
+  },
+  "touched": [
+    "test_public_projection.py"
+  ],
+  "done": {
+    "at": "2026-10-30T10:36:48+00:00",
+    "chongdae": "chongdae 1.24.0"
+  }
+}

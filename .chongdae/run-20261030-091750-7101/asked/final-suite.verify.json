@@ -1,0 +1,82 @@
+{
+  "artifact-type": "chongdae/request@1",
+  "written_by": "chongdae 1.24.0",
+  "stage": "verify",
+  "run": "run-20261030-091750-7101",
+  "task": "final-suite",
+  "role": "verifier",
+  "target": ".",
+  "goal": "Privacy follow-up and fixture isolation (owner-authorized; new work): first isolate test fixtures (seven normal-parent hook tests that inherit a worker's AGENT_WORKER, six expectations that miss portable command paths) through a disputed-tests amendment by the lock's Claude tests writer; then one bounded contract for the public projection (left boundaries for every prefix, backslash host paths within a stated platform limit, refusal of machine-path keys, the projected worktree-main close lock and raw CLI reload) with Claude tests, a Codex build and the Claude verifier; then adopt the earlier authorized README/Python-floor/AGENTS/CLAUDE work with its provenance and document the major-version rule and the public/local split. commit-records stays false; no version bump, push, release, cache change or history rewrite.",
+  "brief": "Final verification of commits 6431d3f..0ae52cf on python3.11 (3.11.16, the HOME interpreter ~/.local/bin/python3.11). Check 1: the full test_chongdae.py once in a worker-fixture context (AGENT_WORKER=1 set only for the suite process; subprocess python/python3 pinned to python3.11 through <tmp>), complete output kept in <tmp> counts printed, the suite's own exit code. Check 2: in this session's normal-parent context (no AGENT_WORKER), the 13 amended fixtures and test_a_landed_worktree_run_records_the_merge_commit, targeted, with the HOME interpreter. Not repeated: earlier unchanged full suites (baseline 9m27s green on 3.12; the fixture writer's three diagnostic runs, <tmp> 119 function PASS, 1 FAIL, 76 unittest PASS, no skips) are evidence of their own moments, not this one.",
+  "closes": [],
+  "contract": {},
+  "checks": [
+    [
+      "~/.local/bin/python3.11",
+      "<tmp>"
+    ],
+    [
+      "~/.local/bin/python3.11",
+      "<tmp>",
+      "test_hooks_and_engine_anchor_to_the_project_not_the_shells_directory",
+      "test_operation_words_are_report_hints_and_a_bash_operation_gets_a_did_nudge",
+      "test_performed_by_is_recorded_like_an_author_line",
+      "test_session_run_tasks_added_as_the_work_goes_claims_and_the_write_hook",
+      "test_session_start_under_hunsus_probe_says_its_standing_text_not_one_state",
+      "test_the_session_start_and_close_say_unpushed_commits_and_no_upstream",
+      "test_the_session_start_line_counts_open_tasks_by_the_rule_run_uses",
+      "test_a_disputed_contract_test_goes_back_to_its_writer_and_the_build_goes_out_again",
+      "test_a_quibble_task_is_sent_a_review_shaped_request_not_its_own_empty_checks",
+      "test_a_verifier_finding_whose_quote_is_not_where_it_says_is_overruled_and_the_work_is_not_resent",
+      "test_did_keeps_a_script_outside_the_project_a_sensible_subject_a_meaningful_tail_and_a_batch_as_one_judgment",
+      "test_did_runs_one_operation_records_it_whatever_the_exit_and_report_lists_it",
+      "test_concurrency.ConcurrentCommands.test_check_attachment_is_not_lost_during_another_run",
+      "test_a_landed_worktree_run_records_the_merge_commit"
+    ]
+  ],
+  "tests": [],
+  "response": "./.chongdae/run-20261030-091750-7101/local/final-suite.verify.response.json",
+  "touched": [],
+  "built": null,
+  "excluded": {
+    "record-paths": [
+      "reviews/review-20261030-181048-64f0.json"
+    ]
+  },
+  "since": {
+    ".": "0ae52cf73ad0f6dea9a62b0efa4f893ff5f490ca"
+  },
+  "checked": [
+    {
+      "command": "'~/.local/bin/python3.11' <tmp>",
+      "exit": 0,
+      "tail": [
+        "interpreter ~/.local/bin/python3.11 3.11.16; AGENT_WORKER=1; subprocess python3 -> ~/.local/share/uv/python/cpython-3.11.16-macos-aarch64-none/bin/python3.11",
+        "functions: 120 PASS, 0 FAIL, 0 SKIP",
+        "unittest: Ran 100 in 178.978s | OK",
+        "last line: all passed",
+        "exit 0, 638s, full output in <tmp>"
+      ],
+      "at": "2026-10-30T11:14:30+00:00",
+      "chongdae": "chongdae 1.24.0",
+      "source": "the task's checks, run by chongdae to decide it",
+      "changed_since": []
+    },
+    {
+      "command": "'~/.local/bin/python3.11' <tmp> test_hooks_and_engine_anchor_to_the_project_not_the_shells_directory test_operation_words_are_report_hints_and_a_bash_operation_gets_a_did_nudge test_performed_by_is_recorded_like_an_author_line test_session_run_tasks_added_as_the_work_goes_claims_and_the_write_hook test_session_start_under_hunsus_probe_says_its_standing_text_not_one_state test_the_session_start_and_close_say_unpushed_commits_and_no_upstream test_the_session_start_line_counts_open_tasks_by_the_rule_run_uses test_a_disputed_contract_test_goes_back_to_its_writer_and_the_build_goes_out_again test_a_quibble_task_is_sent_a_review_shaped_request_not_its_own_empty_checks test_a_verifier_finding_whose_quote_is_not_where_it_says_is_overruled_and_the_work_is_not_resent test_did_keeps_a_script_outside_the_project_a_sensible_subject_a_meaningful_tail_and_a_batch_as_one_judgment test_did_runs_one_operation_records_it_whatever_the_exit_and_report_lists_it test_concurrency.ConcurrentCommands.test_check_attachment_is_not_lost_during_another_run test_a_landed_worktree_run_records_the_merge_commit",
+      "exit": 0,
+      "tail": [
+        "PASS test_a_verifier_finding_whose_quote_is_not_where_it_says_is_overruled_and_the_work_is_not_resent",
+        "PASS test_did_keeps_a_script_outside_the_project_a_sensible_subject_a_meaningful_tail_and_a_batch_as_one_judgment",
+        "PASS test_did_runs_one_operation_records_it_whatever_the_exit_and_report_lists_it",
+        "PASS test_concurrency.ConcurrentCommands.test_check_attachment_is_not_lost_during_another_run",
+        "PASS test_a_landed_worktree_run_records_the_merge_commit",
+        "selected: 14 passed, 0 failed (python 3.11.16, sys.executable ~/.local/bin/python3.11, AGENT_WORKER=None)"
+      ],
+      "at": "2026-10-30T11:15:32+00:00",
+      "chongdae": "chongdae 1.24.0",
+      "source": "the task's checks, run by chongdae to decide it",
+      "changed_since": []
+    }
+  ]
+}

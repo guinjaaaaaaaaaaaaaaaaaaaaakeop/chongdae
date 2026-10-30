@@ -1,0 +1,1063 @@
+{
+ "artifact-type": "chongdae/selfhost-public-records@1",
+ "status": "exported public snapshot of the frozen chongdae 2.0.0 candidate on the public base, with reviewed derived records of three closed self-host runs; derived copies for publication, not original evidence",
+ "export": {
+  "public_base": "c1c3f63d442fbabaf647221b5d6f5ad0f2de05c6",
+  "sole_parent": "c1c3f63d442fbabaf647221b5d6f5ad0f2de05c6",
+  "source_tree": "78904e8b543ed952a42b66945468d6404593c690",
+  "source_commit": "554f8b3c4b631cf0e569b94fcfd1ed0628eb79ce",
+  "version": "2.0.0",
+  "history": "The original detailed development history (29 commits from the public base to the source commit) is retained privately and is not an ancestor of this export. Its tree equals the source tree except for the record snapshot and this manifest. No claim is made that the private development history is publishable."
+ },
+ "method": "explicit per-file literal replacements of actual temporary execution paths inside named JSON string leaves; keys, types, list lengths and all other bytes unchanged; no product engine invoked",
+ "counts": {
+  "public_files": 65,
+  "byte_identical": 49,
+  "derived": 16,
+  "mappings": 41,
+  "changed_json_string_leaves": 74,
+  "literal_applications": 106,
+  "originals": 410,
+  "excluded": 345
+ },
+ "excluded_by_kind": {
+  "environment bootstrap scratch": 41,
+  "interpreter and test caches": 28,
+  "jokbo caches and controls": 7,
+  "machine-local environment files": 2,
+  "review lock": 1,
+  "run local work (requests, raw responses, transcripts, pending and launch records, logs, private overlays)": 264,
+  "session pointers": 2
+ },
+ "runs": [
+  {
+   "run": "run-20261030-065818-2049",
+   "status": "complete",
+   "closed": {
+    "at": "2026-10-30T07:17:58+00:00",
+    "chongdae": "chongdae 1.24.0"
+   },
+   "state_sha256": "49babc6a36bc087975e934a1ac971c1a7e499ffaa001737e7c858c1b916ba363"
+  },
+  {
+   "run": "run-20261030-072306-0176",
+   "status": "complete",
+   "closed": {
+    "at": "2026-10-30T09:10:47+00:00",
+    "chongdae": "chongdae 1.24.0"
+   },
+   "state_sha256": "65f089ff0d5f665f193f4e00f8d9fb94c6ffbc2be42f70b57cebfe5a1e3f42f0"
+  },
+  {
+   "run": "run-20261030-091750-7101",
+   "status": "complete",
+   "closed": {
+    "at": "2026-10-30T11:53:44+00:00",
+    "chongdae": "chongdae 1.24.0"
+   },
+   "state_sha256": "bc4dadcfc96b70996d7eeb3e974027c57a529c1aba5354975bead310f517593f"
+  }
+ ],
+ "private_preparation_inputs_sha256": {
+  "inventory": "d44d72f5724e5b577f466bdba01549c5c7e4a220b6f1643c4c21064a4d8fa69a",
+  "classification": "37c9a54eefb000c75bf9e22e3e7e370a16c40c0b7b9986f5b91f545133f80f98",
+  "generator": "a350aaa331a5c21342c6f1f8ff0bc29afe8507b66e6494ad0e5286fd94b4744a",
+  "note": "local preparation evidence, not published"
+ },
+ "review": {
+  "by": "dwitbuk eyes_worker as the lock's verifier, claude-code claude-opus-5-5",
+  "session": "d71c63a7-b0dc-437c-ae03-9e4d6be76c07",
+  "verdict": "accept",
+  "findings": 0,
+  "scope": "bounded payload review: generator, final classification, inventory, changed leaves and counts, hashes, exclusions, three complete states, source equality, this provenance wording; it read the generator, classification, inventory and the session's independent checker and relied on the checks chongdae ran for the per-file re-derivation"
+ },
+ "not_claimed": [
+  "Derived files, including derived historical contract snippets and derived provider text, are not original executable contracts, test inputs, provider answers or quote-validation inputs; the original records remain the authoritative raw evidence and are not published here.",
+  "Derived historical contract snippets include four places in .chongdae/run-20261030-091750-7101/tasks/markdown-tests.json (def.brief three times, response.summary once) that quote an observed temporary interpreter path as a regression example; in this snapshot that quote is derived and, like all derived text, is not an original contract, test input, provider answer or quote-validation input. The source test file keeps its fixture unchanged.",
+  "Generic, synthetic and relative path examples are kept as written.",
+  "No personal review of any proposal is claimed; historical rejects, wrong or rejected contracts, blocked and interrupted attempts, dropped tasks, non-claims, reviewer objections and observations, and reviewed:false resolutions stay as recorded.",
+  "Not included: the later private preparation runs and every excluded file counted above.",
+  "The empty .dwitbuk/review.lock already tracked in the frozen source stays in the tree as source; it is not part of this snapshot and holds no content."
+ ],
+ "files": [
+  {
+   "path": ".chongdae/.gitignore",
+   "original_sha256": "aafbe4ac09e3ce380be4f87c0cbab19e3601a71bc02a551a8aa6c48576dc0f3b",
+   "public_sha256": "aafbe4ac09e3ce380be4f87c0cbab19e3601a71bc02a551a8aa6c48576dc0f3b",
+   "derivation": "byte-identical",
+   "changed_json_leaves": [],
+   "applied_mapping_counts_by_private_literal_sha256": {}
+  },
+  {
+   "path": ".chongdae/run-20261030-065818-2049/asked/adopt-env.verify.json",
+   "original_sha256": "f90dd8ced90b48a56e590f6c20e562692fd4b49eb4aa55577b88b299ae8adb97",
+   "public_sha256": "f90dd8ced90b48a56e590f6c20e562692fd4b49eb4aa55577b88b299ae8adb97",
+   "derivation": "byte-identical",
+   "changed_json_leaves": [],
+   "applied_mapping_counts_by_private_literal_sha256": {}
+  },
+  {
+   "path": ".chongdae/run-20261030-065818-2049/asked/selfhosting-doc.json",
+   "original_sha256": "57dccb79c3c98ebbcbe55b403f229274679f47b1a689612da2a970ecdcd1c564",
+   "public_sha256": "57dccb79c3c98ebbcbe55b403f229274679f47b1a689612da2a970ecdcd1c564",
+   "derivation": "byte-identical",
+   "changed_json_leaves": [],
+   "applied_mapping_counts_by_private_literal_sha256": {}
+  },
+  {
+   "path": ".chongdae/run-20261030-065818-2049/asked/selfhosting-doc.verify.json",
+   "original_sha256": "61fa6126ce1847d00224e7672c42d2038d3840d16b453c65a3759c75e6339869",
+   "public_sha256": "61fa6126ce1847d00224e7672c42d2038d3840d16b453c65a3759c75e6339869",
+   "derivation": "byte-identical",
+   "changed_json_leaves": [],
+   "applied_mapping_counts_by_private_literal_sha256": {}
+  },
+  {
+   "path": ".chongdae/run-20261030-065818-2049/asked/selfhosting-fix.json",
+   "original_sha256": "e68c11c37cb268ed883330d3a601e5c3c33c31986867bc96109fd1b0e91e9b8f",
+   "public_sha256": "e68c11c37cb268ed883330d3a601e5c3c33c31986867bc96109fd1b0e91e9b8f",
+   "derivation": "byte-identical",
+   "changed_json_leaves": [],
+   "applied_mapping_counts_by_private_literal_sha256": {}
+  },
+  {
+   "path": ".chongdae/run-20261030-065818-2049/asked/selfhosting-fix.verify.json",
+   "original_sha256": "2bbe4889aae535071c71cf7201524ae06f6bf93cee7254b51b3829d9aa893f5a",
+   "public_sha256": "2bbe4889aae535071c71cf7201524ae06f6bf93cee7254b51b3829d9aa893f5a",
+   "derivation": "byte-identical",
+   "changed_json_leaves": [],
+   "applied_mapping_counts_by_private_literal_sha256": {}
+  },
+  {
+   "path": ".chongdae/run-20261030-065818-2049/plan.json",
+   "original_sha256": "40c9918e3472ba3d097c8ef723c291d9662061a5566b7d34a2668ab7c3fa2e40",
+   "public_sha256": "40c9918e3472ba3d097c8ef723c291d9662061a5566b7d34a2668ab7c3fa2e40",
+   "derivation": "byte-identical",
+   "changed_json_leaves": [],
+   "applied_mapping_counts_by_private_literal_sha256": {}
+  },
+  {
+   "path": ".chongdae/run-20261030-065818-2049/state.json",
+   "original_sha256": "49babc6a36bc087975e934a1ac971c1a7e499ffaa001737e7c858c1b916ba363",
+   "public_sha256": "49babc6a36bc087975e934a1ac971c1a7e499ffaa001737e7c858c1b916ba363",
+   "derivation": "byte-identical",
+   "changed_json_leaves": [],
+   "applied_mapping_counts_by_private_literal_sha256": {}
+  },
+  {
+   "path": ".chongdae/run-20261030-065818-2049/tasks/adopt-env.json",
+   "original_sha256": "4084dea7bbc8af53901a939075079b2a573e38b97810aad666316b8c1a12dd19",
+   "public_sha256": "4084dea7bbc8af53901a939075079b2a573e38b97810aad666316b8c1a12dd19",
+   "derivation": "byte-identical",
+   "changed_json_leaves": [],
+   "applied_mapping_counts_by_private_literal_sha256": {}
+  },
+  {
+   "path": ".chongdae/run-20261030-065818-2049/tasks/provenance-note.json",
+   "original_sha256": "1cfb63afff77519eed1c87fe5465079bf56e92a548762ce31ceeb334da1be3dc",
+   "public_sha256": "1cfb63afff77519eed1c87fe5465079bf56e92a548762ce31ceeb334da1be3dc",
+   "derivation": "byte-identical",
+   "changed_json_leaves": [],
+   "applied_mapping_counts_by_private_literal_sha256": {}
+  },
+  {
+   "path": ".chongdae/run-20261030-065818-2049/tasks/selfhosting-doc.json",
+   "original_sha256": "ad974438c6ebc4944ef4bf06d6b0023bd12fd3d8a595c0521b98a77828ba53e2",
+   "public_sha256": "ad974438c6ebc4944ef4bf06d6b0023bd12fd3d8a595c0521b98a77828ba53e2",
+   "derivation": "byte-identical",
+   "changed_json_leaves": [],
+   "applied_mapping_counts_by_private_literal_sha256": {}
+  },
+  {
+   "path": ".chongdae/run-20261030-065818-2049/tasks/selfhosting-fix.json",
+   "original_sha256": "15492f3942a1b64e2442141d7d09085c538ae38b50ce4e60c25d35111fdae582",
+   "public_sha256": "15492f3942a1b64e2442141d7d09085c538ae38b50ce4e60c25d35111fdae582",
+   "derivation": "byte-identical",
+   "changed_json_leaves": [],
+   "applied_mapping_counts_by_private_literal_sha256": {}
+  },
+  {
+   "path": ".chongdae/run-20261030-072306-0176/asked/contain-records.verify.json",
+   "original_sha256": "1c3d5cf7da7458f2d228c33442083c4651d5d0ca3cf1e9e27e41e42c9196fedf",
+   "public_sha256": "1c3d5cf7da7458f2d228c33442083c4651d5d0ca3cf1e9e27e41e42c9196fedf",
+   "derivation": "byte-identical",
+   "changed_json_leaves": [],
+   "applied_mapping_counts_by_private_literal_sha256": {}
+  },
+  {
+   "path": ".chongdae/run-20261030-072306-0176/asked/projection-build.json",
+   "original_sha256": "2fe4bf659d9c6d49f41e00c23015955758373ec2e370e1a2b32c84961e858827",
+   "public_sha256": "2fe4bf659d9c6d49f41e00c23015955758373ec2e370e1a2b32c84961e858827",
+   "derivation": "byte-identical",
+   "changed_json_leaves": [],
+   "applied_mapping_counts_by_private_literal_sha256": {}
+  },
+  {
+   "path": ".chongdae/run-20261030-072306-0176/asked/projection-build.verify.2.json",
+   "original_sha256": "4f8761ab24df8bd90a25b2f2843f349bdee39c0d244e1339b1acef58ad72e9b4",
+   "public_sha256": "4f8761ab24df8bd90a25b2f2843f349bdee39c0d244e1339b1acef58ad72e9b4",
+   "derivation": "byte-identical",
+   "changed_json_leaves": [],
+   "applied_mapping_counts_by_private_literal_sha256": {}
+  },
+  {
+   "path": ".chongdae/run-20261030-072306-0176/asked/projection-build.verify.json",
+   "original_sha256": "5aaf4a3d2b1e2541342becb92d4af09d7d5709199eeba150806a7a61a29b09ab",
+   "public_sha256": "5aaf4a3d2b1e2541342becb92d4af09d7d5709199eeba150806a7a61a29b09ab",
+   "derivation": "byte-identical",
+   "changed_json_leaves": [],
+   "applied_mapping_counts_by_private_literal_sha256": {}
+  },
+  {
+   "path": ".chongdae/run-20261030-072306-0176/asked/projection-fix-rel.json",
+   "original_sha256": "65c62cc47fd4e88af1b0f823d31ae4762daea41ec8424c3254b7f41e01982bd2",
+   "public_sha256": "65c62cc47fd4e88af1b0f823d31ae4762daea41ec8424c3254b7f41e01982bd2",
+   "derivation": "byte-identical",
+   "changed_json_leaves": [],
+   "applied_mapping_counts_by_private_literal_sha256": {}
+  },
+  {
+   "path": ".chongdae/run-20261030-072306-0176/asked/projection-fix-rel.verify.3.json",
+   "original_sha256": "982bc2d9985b24d393b6b37989e2828b01c4a1a5492067e6062a73e4f6665645",
+   "public_sha256": "982bc2d9985b24d393b6b37989e2828b01c4a1a5492067e6062a73e4f6665645",
+   "derivation": "byte-identical",
+   "changed_json_leaves": [],
+   "applied_mapping_counts_by_private_literal_sha256": {}
+  },
+  {
+   "path": ".chongdae/run-20261030-072306-0176/asked/projection-tests-rel.json",
+   "original_sha256": "5e7b665c6e1c70a779979a4df44a9fe17e1cfb96def0be06dd04cefb9598e3bd",
+   "public_sha256": "5e7b665c6e1c70a779979a4df44a9fe17e1cfb96def0be06dd04cefb9598e3bd",
+   "derivation": "byte-identical",
+   "changed_json_leaves": [],
+   "applied_mapping_counts_by_private_literal_sha256": {}
+  },
+  {
+   "path": ".chongdae/run-20261030-072306-0176/asked/projection-tests.json",
+   "original_sha256": "3e43a2b958db53f5e031a2c1b78f3e02f31b62a5dd560cfb5a9db6aa89262423",
+   "public_sha256": "3e43a2b958db53f5e031a2c1b78f3e02f31b62a5dd560cfb5a9db6aa89262423",
+   "derivation": "byte-identical",
+   "changed_json_leaves": [],
+   "applied_mapping_counts_by_private_literal_sha256": {}
+  },
+  {
+   "path": ".chongdae/run-20261030-072306-0176/plan.json",
+   "original_sha256": "ec275defea3ab47da8b6de288ee279114dd9902868d70ee319bf27763fcac792",
+   "public_sha256": "ec275defea3ab47da8b6de288ee279114dd9902868d70ee319bf27763fcac792",
+   "derivation": "byte-identical",
+   "changed_json_leaves": [],
+   "applied_mapping_counts_by_private_literal_sha256": {}
+  },
+  {
+   "path": ".chongdae/run-20261030-072306-0176/state.json",
+   "original_sha256": "65f089ff0d5f665f193f4e00f8d9fb94c6ffbc2be42f70b57cebfe5a1e3f42f0",
+   "public_sha256": "65f089ff0d5f665f193f4e00f8d9fb94c6ffbc2be42f70b57cebfe5a1e3f42f0",
+   "derivation": "byte-identical",
+   "changed_json_leaves": [],
+   "applied_mapping_counts_by_private_literal_sha256": {}
+  },
+  {
+   "path": ".chongdae/run-20261030-072306-0176/tasks/contain-records.json",
+   "original_sha256": "84ae7b7948dda62b45f0a34f5501bd18d6456d551b57e21a0cf8c1810ac961cd",
+   "public_sha256": "84ae7b7948dda62b45f0a34f5501bd18d6456d551b57e21a0cf8c1810ac961cd",
+   "derivation": "byte-identical",
+   "changed_json_leaves": [],
+   "applied_mapping_counts_by_private_literal_sha256": {}
+  },
+  {
+   "path": ".chongdae/run-20261030-072306-0176/tasks/projection-build.json",
+   "original_sha256": "d571132f63063cb67ce245d96b2e174e425fab9074c8efcb378ab9425def77d0",
+   "public_sha256": "d571132f63063cb67ce245d96b2e174e425fab9074c8efcb378ab9425def77d0",
+   "derivation": "byte-identical",
+   "changed_json_leaves": [],
+   "applied_mapping_counts_by_private_literal_sha256": {}
+  },
+  {
+   "path": ".chongdae/run-20261030-072306-0176/tasks/projection-fix-rel.json",
+   "original_sha256": "358d95fa95bb47782683649578433a1df398e4d63a25b99af55b8165af00319c",
+   "public_sha256": "358d95fa95bb47782683649578433a1df398e4d63a25b99af55b8165af00319c",
+   "derivation": "byte-identical",
+   "changed_json_leaves": [],
+   "applied_mapping_counts_by_private_literal_sha256": {}
+  },
+  {
+   "path": ".chongdae/run-20261030-072306-0176/tasks/projection-tests-rel.json",
+   "original_sha256": "2a0cde99f5eeda7e6f4b3a10fac0ace39a1a26db3b9e9d6516a99053e29eeffe",
+   "public_sha256": "2a0cde99f5eeda7e6f4b3a10fac0ace39a1a26db3b9e9d6516a99053e29eeffe",
+   "derivation": "byte-identical",
+   "changed_json_leaves": [],
+   "applied_mapping_counts_by_private_literal_sha256": {}
+  },
+  {
+   "path": ".chongdae/run-20261030-072306-0176/tasks/projection-tests.json",
+   "original_sha256": "bba490c18788869fc251cbc84613ce07a0a58429411cbf57e8f27c27ab56f083",
+   "public_sha256": "bba490c18788869fc251cbc84613ce07a0a58429411cbf57e8f27c27ab56f083",
+   "derivation": "byte-identical",
+   "changed_json_leaves": [],
+   "applied_mapping_counts_by_private_literal_sha256": {}
+  },
+  {
+   "path": ".chongdae/run-20261030-091750-7101/asked/adopt-prior-docs.verify.json",
+   "original_sha256": "2921926ba515a6cfd28d8db39605a73749a8962333bff1ae90db1ed9aa2d4262",
+   "public_sha256": "2921926ba515a6cfd28d8db39605a73749a8962333bff1ae90db1ed9aa2d4262",
+   "derivation": "byte-identical",
+   "changed_json_leaves": [],
+   "applied_mapping_counts_by_private_literal_sha256": {}
+  },
+  {
+   "path": ".chongdae/run-20261030-091750-7101/asked/docs-update.json",
+   "original_sha256": "89688448e5d7c7f526d319ab92f4eb70b10766a1d805400862f38d9679e8ccc0",
+   "public_sha256": "89688448e5d7c7f526d319ab92f4eb70b10766a1d805400862f38d9679e8ccc0",
+   "derivation": "byte-identical",
+   "changed_json_leaves": [],
+   "applied_mapping_counts_by_private_literal_sha256": {}
+  },
+  {
+   "path": ".chongdae/run-20261030-091750-7101/asked/docs-update.verify.json",
+   "original_sha256": "02f3e13c0ebf8b03e94162a2660d7f1f3c7c0df6b90eda8fc3f46db2f30339a6",
+   "public_sha256": "02f3e13c0ebf8b03e94162a2660d7f1f3c7c0df6b90eda8fc3f46db2f30339a6",
+   "derivation": "byte-identical",
+   "changed_json_leaves": [],
+   "applied_mapping_counts_by_private_literal_sha256": {}
+  },
+  {
+   "path": ".chongdae/run-20261030-091750-7101/asked/final-suite-2.verify.json",
+   "original_sha256": "de0764547679ef1589461ba982ad4613614962e4bae7ee7733dcbe35fd4ff979",
+   "public_sha256": "de0764547679ef1589461ba982ad4613614962e4bae7ee7733dcbe35fd4ff979",
+   "derivation": "byte-identical",
+   "changed_json_leaves": [],
+   "applied_mapping_counts_by_private_literal_sha256": {}
+  },
+  {
+   "path": ".chongdae/run-20261030-091750-7101/asked/final-suite.verify.json",
+   "original_sha256": "71061a74236068fe25db0bfe0ccd88a537bffb76e9d2d0c70c803b97540e88bf",
+   "public_sha256": "71061a74236068fe25db0bfe0ccd88a537bffb76e9d2d0c70c803b97540e88bf",
+   "derivation": "byte-identical",
+   "changed_json_leaves": [],
+   "applied_mapping_counts_by_private_literal_sha256": {}
+  },
+  {
+   "path": ".chongdae/run-20261030-091750-7101/asked/markdown-build.json",
+   "original_sha256": "25123f0ac8ce6012f2cbfe1d31f90652472e2665a76c4d704b920e5b35162580",
+   "public_sha256": "25123f0ac8ce6012f2cbfe1d31f90652472e2665a76c4d704b920e5b35162580",
+   "derivation": "byte-identical",
+   "changed_json_leaves": [],
+   "applied_mapping_counts_by_private_literal_sha256": {}
+  },
+  {
+   "path": ".chongdae/run-20261030-091750-7101/asked/markdown-build.verify.2.json",
+   "original_sha256": "fdc0cfc3df634f92b705345f8ad9d3d4dd689d21da81c746fa019509d8531893",
+   "public_sha256": "fdc0cfc3df634f92b705345f8ad9d3d4dd689d21da81c746fa019509d8531893",
+   "derivation": "byte-identical",
+   "changed_json_leaves": [],
+   "applied_mapping_counts_by_private_literal_sha256": {}
+  },
+  {
+   "path": ".chongdae/run-20261030-091750-7101/asked/markdown-tests.json",
+   "original_sha256": "a68316a062d6135f651a52cd1e5cb52db668f81d402b876d9f46380a0a82a5e1",
+   "public_sha256": "a68316a062d6135f651a52cd1e5cb52db668f81d402b876d9f46380a0a82a5e1",
+   "derivation": "byte-identical",
+   "changed_json_leaves": [],
+   "applied_mapping_counts_by_private_literal_sha256": {}
+  },
+  {
+   "path": ".chongdae/run-20261030-091750-7101/asked/metadata-2.0.0.json",
+   "original_sha256": "6dfa60439a99a3bba5d0722531c330ae10ffd902895237dc23ef8eda55b0c487",
+   "public_sha256": "6dfa60439a99a3bba5d0722531c330ae10ffd902895237dc23ef8eda55b0c487",
+   "derivation": "byte-identical",
+   "changed_json_leaves": [],
+   "applied_mapping_counts_by_private_literal_sha256": {}
+  },
+  {
+   "path": ".chongdae/run-20261030-091750-7101/asked/metadata-2.0.0.verify.json",
+   "original_sha256": "256dd7ad0b21e3ebc40ff3c413e1582691ba4b9d48e47790fa152be9048409c3",
+   "public_sha256": "256dd7ad0b21e3ebc40ff3c413e1582691ba4b9d48e47790fa152be9048409c3",
+   "derivation": "byte-identical",
+   "changed_json_leaves": [],
+   "applied_mapping_counts_by_private_literal_sha256": {}
+  },
+  {
+   "path": ".chongdae/run-20261030-091750-7101/asked/privacy-build-3.json",
+   "original_sha256": "7ca2a632e49bfb5f7d3df590205f3a94aab4e725184b6a059ca1ac4259f00f09",
+   "public_sha256": "7ca2a632e49bfb5f7d3df590205f3a94aab4e725184b6a059ca1ac4259f00f09",
+   "derivation": "byte-identical",
+   "changed_json_leaves": [],
+   "applied_mapping_counts_by_private_literal_sha256": {}
+  },
+  {
+   "path": ".chongdae/run-20261030-091750-7101/asked/privacy-build-4.json",
+   "original_sha256": "46e28cc61e41af1adf5f1a039691306b658c003e32df8982fadc88d03a722730",
+   "public_sha256": "46e28cc61e41af1adf5f1a039691306b658c003e32df8982fadc88d03a722730",
+   "derivation": "byte-identical",
+   "changed_json_leaves": [],
+   "applied_mapping_counts_by_private_literal_sha256": {}
+  },
+  {
+   "path": ".chongdae/run-20261030-091750-7101/asked/privacy-build-4.verify.json",
+   "original_sha256": "a18f6797a540a0746d7185c0867fe24f1f1298c61e8a2a04e09e08131829869c",
+   "public_sha256": "a18f6797a540a0746d7185c0867fe24f1f1298c61e8a2a04e09e08131829869c",
+   "derivation": "byte-identical",
+   "changed_json_leaves": [],
+   "applied_mapping_counts_by_private_literal_sha256": {}
+  },
+  {
+   "path": ".chongdae/run-20261030-091750-7101/asked/privacy-build-tests.json",
+   "original_sha256": "1dd0d7a6fafeeacf66adca6abc92a816973d014ce8820546e1f70e224db89093",
+   "public_sha256": "1dd0d7a6fafeeacf66adca6abc92a816973d014ce8820546e1f70e224db89093",
+   "derivation": "byte-identical",
+   "changed_json_leaves": [],
+   "applied_mapping_counts_by_private_literal_sha256": {}
+  },
+  {
+   "path": ".chongdae/run-20261030-091750-7101/asked/privacy-tests-2.json",
+   "original_sha256": "eb709676dec49440af85685d4b893b8975c70e9a4fbd8b74a701e7479908fd4c",
+   "public_sha256": "eb709676dec49440af85685d4b893b8975c70e9a4fbd8b74a701e7479908fd4c",
+   "derivation": "byte-identical",
+   "changed_json_leaves": [],
+   "applied_mapping_counts_by_private_literal_sha256": {}
+  },
+  {
+   "path": ".chongdae/run-20261030-091750-7101/asked/privacy-tests-3.json",
+   "original_sha256": "22fb4899614eab0a1d52731c8242dd7ba8e878aa52bedb3ef2e1441b94b0f1c2",
+   "public_sha256": "22fb4899614eab0a1d52731c8242dd7ba8e878aa52bedb3ef2e1441b94b0f1c2",
+   "derivation": "byte-identical",
+   "changed_json_leaves": [],
+   "applied_mapping_counts_by_private_literal_sha256": {}
+  },
+  {
+   "path": ".chongdae/run-20261030-091750-7101/asked/privacy-tests.json",
+   "original_sha256": "465bb6caebf53b98d88a37bc0e32a306b964a99e510a7f74852eebb4d6727aaf",
+   "public_sha256": "465bb6caebf53b98d88a37bc0e32a306b964a99e510a7f74852eebb4d6727aaf",
+   "derivation": "byte-identical",
+   "changed_json_leaves": [],
+   "applied_mapping_counts_by_private_literal_sha256": {}
+  },
+  {
+   "path": ".chongdae/run-20261030-091750-7101/plan.json",
+   "original_sha256": "f66a9c8dba3baf555a51c945b3eb6b1a0e373902265abe81a81463facf9c312d",
+   "public_sha256": "f66a9c8dba3baf555a51c945b3eb6b1a0e373902265abe81a81463facf9c312d",
+   "derivation": "byte-identical",
+   "changed_json_leaves": [],
+   "applied_mapping_counts_by_private_literal_sha256": {}
+  },
+  {
+   "path": ".chongdae/run-20261030-091750-7101/state.json",
+   "original_sha256": "bc4dadcfc96b70996d7eeb3e974027c57a529c1aba5354975bead310f517593f",
+   "public_sha256": "bc4dadcfc96b70996d7eeb3e974027c57a529c1aba5354975bead310f517593f",
+   "derivation": "byte-identical",
+   "changed_json_leaves": [],
+   "applied_mapping_counts_by_private_literal_sha256": {}
+  },
+  {
+   "path": ".chongdae/run-20261030-091750-7101/tasks/adopt-correction.json",
+   "original_sha256": "f47bec3d9112db7ebda23afc726cc43a569c38d5a528a4fd81774b109e939c85",
+   "public_sha256": "f47bec3d9112db7ebda23afc726cc43a569c38d5a528a4fd81774b109e939c85",
+   "derivation": "byte-identical",
+   "changed_json_leaves": [],
+   "applied_mapping_counts_by_private_literal_sha256": {}
+  },
+  {
+   "path": ".chongdae/run-20261030-091750-7101/tasks/adopt-prior-docs.json",
+   "original_sha256": "dbb27905c61487a07dd4f7c31d576945d411a3bf138bab66c1c232a5658b52e4",
+   "public_sha256": "086fb89a149c5d2bd53af51f1abc8f89920cabac4f323aaf3f0870d45cddef9f",
+   "derivation": "approved exact literal replacements in specified JSON strings",
+   "changed_json_leaves": [
+    [
+     "def",
+     "checks",
+     0,
+     1
+    ],
+    [
+     "checks-passed",
+     "ran",
+     0,
+     "command"
+    ],
+    [
+     "checks",
+     0,
+     1
+    ]
+   ],
+   "applied_mapping_counts_by_private_literal_sha256": {
+    "affe078f25c543b9c5af9fe969a913e1af06f8d314af10cdd924e66c30ed9d4d": 3
+   }
+  },
+  {
+   "path": ".chongdae/run-20261030-091750-7101/tasks/docs-update.json",
+   "original_sha256": "8f385bc2b5b0598c38f15c282100c340c6a9eb60610d361ce102df86dc8d9f4c",
+   "public_sha256": "bbd0d0ca314fcfc2e39ad4d19e5eca28bfca8b2d2ec33b7875d92a7469b2fd8a",
+   "derivation": "approved exact literal replacements in specified JSON strings",
+   "changed_json_leaves": [
+    [
+     "def",
+     "checks",
+     0,
+     1
+    ],
+    [
+     "def",
+     "checks",
+     1,
+     1
+    ],
+    [
+     "response",
+     "verified",
+     0,
+     "check"
+    ],
+    [
+     "response",
+     "verified",
+     1,
+     "check"
+    ],
+    [
+     "checks-passed",
+     "ran",
+     0,
+     "command"
+    ],
+    [
+     "checks-passed",
+     "ran",
+     1,
+     "command"
+    ],
+    [
+     "checks",
+     0,
+     1
+    ],
+    [
+     "checks",
+     1,
+     1
+    ]
+   ],
+   "applied_mapping_counts_by_private_literal_sha256": {
+    "affe078f25c543b9c5af9fe969a913e1af06f8d314af10cdd924e66c30ed9d4d": 4,
+    "faa3ced16237c9309b65f70c520939a1c5d05df3e867dbea87e7b6e22d365b9c": 4
+   }
+  },
+  {
+   "path": ".chongdae/run-20261030-091750-7101/tasks/final-suite-2.json",
+   "original_sha256": "80825d38cb6b626f11346caa3ee946c4e10274720709e68466c47983d4586132",
+   "public_sha256": "028c9145679b3ea11a65d5ca2c7aea9fdde071211385abc742a0f6de77812d33",
+   "derivation": "approved exact literal replacements in specified JSON strings",
+   "changed_json_leaves": [
+    [
+     "def",
+     "brief"
+    ],
+    [
+     "def",
+     "checks",
+     0,
+     1
+    ],
+    [
+     "def",
+     "checks",
+     1,
+     1
+    ],
+    [
+     "def",
+     "checks",
+     1,
+     2
+    ],
+    [
+     "checks-passed",
+     "ran",
+     0,
+     "command"
+    ],
+    [
+     "checks-passed",
+     "ran",
+     1,
+     "command"
+    ],
+    [
+     "checks",
+     0,
+     1
+    ],
+    [
+     "checks",
+     1,
+     1
+    ],
+    [
+     "checks",
+     1,
+     2
+    ]
+   ],
+   "applied_mapping_counts_by_private_literal_sha256": {
+    "12493c5f93d17b4d0efa4c31755c73782ac3088c1cb5effc1f6fd177c9c7f384": 1,
+    "f903b18469b2a6eb4c95a1c78a419767de3cd97cfdda24b843e93167a2ce6970": 4,
+    "106849bc1ac3cdc38b9d637e4a711e6eb1a9c1c9a94e608cdc3b7099de192030": 3,
+    "934d1d81f30c757465756783059dc089eced8b8fd5e96535d538e5f94c1ba691": 3
+   }
+  },
+  {
+   "path": ".chongdae/run-20261030-091750-7101/tasks/final-suite.json",
+   "original_sha256": "25c82825ffd967c38d9b6cd6a3856f5cc759fdc5e5eef837e9c42366d37ab44c",
+   "public_sha256": "f86365ebd14acdfff2dc25b614cbd96b695208ac8f9ade1b2e8fedda44e66883",
+   "derivation": "approved exact literal replacements in specified JSON strings",
+   "changed_json_leaves": [
+    [
+     "def",
+     "brief"
+    ],
+    [
+     "def",
+     "checks",
+     0,
+     1
+    ],
+    [
+     "def",
+     "checks",
+     1,
+     1
+    ],
+    [
+     "checks-passed",
+     "ran",
+     0,
+     "command"
+    ],
+    [
+     "checks-passed",
+     "ran",
+     1,
+     "command"
+    ],
+    [
+     "checks",
+     0,
+     1
+    ],
+    [
+     "checks",
+     1,
+     1
+    ]
+   ],
+   "applied_mapping_counts_by_private_literal_sha256": {
+    "12493c5f93d17b4d0efa4c31755c73782ac3088c1cb5effc1f6fd177c9c7f384": 1,
+    "a967baffffc4497c21ac8c3a32c57d45042682e5a777243faaa799021ee95559": 1,
+    "65cf0ee9e603b3b35db672a98a63e9600c6188cd4ba5e9cd0d6bc7fd930c1e44": 1,
+    "934d1d81f30c757465756783059dc089eced8b8fd5e96535d538e5f94c1ba691": 3,
+    "24b08e8a2858d6e94c0d9eca3da62c2e777d55689ad55c5c1033ada7f428ed69": 3
+   }
+  },
+  {
+   "path": ".chongdae/run-20261030-091750-7101/tasks/markdown-build.json",
+   "original_sha256": "d20e757ec49751b872dd413ecfbdc4132ba5f108f76f781e83d3fd7fd0d74170",
+   "public_sha256": "8bc739c2202fb77f1008eccb2c2622e27b0807c0221c80a86455d08b314208ab",
+   "derivation": "approved exact literal replacements in specified JSON strings",
+   "changed_json_leaves": [
+    [
+     "def",
+     "brief"
+    ],
+    [
+     "response",
+     "verified",
+     0,
+     "check"
+    ],
+    [
+     "response",
+     "verified",
+     1,
+     "check"
+    ],
+    [
+     "response",
+     "verified",
+     2,
+     "check"
+    ],
+    [
+     "response",
+     "verified",
+     3,
+     "check"
+    ],
+    [
+     "response",
+     "verified",
+     4,
+     "check"
+    ],
+    [
+     "response",
+     "verified",
+     5,
+     "check"
+    ]
+   ],
+   "applied_mapping_counts_by_private_literal_sha256": {
+    "dd0baa9b388ad594588496a79b3e2d432248d9f5d83f6ae0cf7e708d506f6c2b": 3,
+    "12493c5f93d17b4d0efa4c31755c73782ac3088c1cb5effc1f6fd177c9c7f384": 6
+   }
+  },
+  {
+   "path": ".chongdae/run-20261030-091750-7101/tasks/markdown-tests.json",
+   "original_sha256": "a79038da303a9f3ad4a6242a6186793b97a13d435fdbe8b492482c3fe0e991c5",
+   "public_sha256": "90e26bb03c642a0a9dbb085aca16ec6dc1007ad788acb2f34f8ec0682d3351fd",
+   "derivation": "approved exact literal replacements in specified JSON strings",
+   "changed_json_leaves": [
+    [
+     "def",
+     "brief"
+    ],
+    [
+     "response",
+     "summary"
+    ]
+   ],
+   "applied_mapping_counts_by_private_literal_sha256": {
+    "dd0baa9b388ad594588496a79b3e2d432248d9f5d83f6ae0cf7e708d506f6c2b": 4
+   }
+  },
+  {
+   "path": ".chongdae/run-20261030-091750-7101/tasks/metadata-2.0.0.json",
+   "original_sha256": "ea6e8a46198f65531c76b687cf6e5d280b2c8daf8cc640ef8024ac986a443f50",
+   "public_sha256": "1591072c7b143c13ef30ae73a41fe5ceabb1be4f6bf07676326943b91ed552bc",
+   "derivation": "approved exact literal replacements in specified JSON strings",
+   "changed_json_leaves": [
+    [
+     "def",
+     "checks",
+     0,
+     1
+    ],
+    [
+     "response",
+     "verified",
+     0,
+     "check"
+    ],
+    [
+     "checks-passed",
+     "ran",
+     0,
+     "command"
+    ],
+    [
+     "checks",
+     0,
+     1
+    ]
+   ],
+   "applied_mapping_counts_by_private_literal_sha256": {
+    "b0a498a17649289d6a89faa66b47a678bd9efaf9592fa0980c4a2f43fff79131": 4
+   }
+  },
+  {
+   "path": ".chongdae/run-20261030-091750-7101/tasks/privacy-build-2.json",
+   "original_sha256": "7c55e779fd73dec5717c440dbcf7c0e34eb2eb9a437894c14046c49830d83120",
+   "public_sha256": "b47ab94609031614a199981472a05139186bd1ead2dab5020aeda46db3c99734",
+   "derivation": "approved exact literal replacements in specified JSON strings",
+   "changed_json_leaves": [
+    [
+     "def",
+     "brief"
+    ],
+    [
+     "attempts",
+     0,
+     "retried",
+     "why"
+    ]
+   ],
+   "applied_mapping_counts_by_private_literal_sha256": {
+    "dd0baa9b388ad594588496a79b3e2d432248d9f5d83f6ae0cf7e708d506f6c2b": 3
+   }
+  },
+  {
+   "path": ".chongdae/run-20261030-091750-7101/tasks/privacy-build-3.json",
+   "original_sha256": "63db2bac7e5e688d6b3b3dc2f585d4f0a363b757feed654f90491600f98427d6",
+   "public_sha256": "e7764a8c66622f093dde356f815ccfb6de5388176d9f4209e1d17e8a0b98d211",
+   "derivation": "approved exact literal replacements in specified JSON strings",
+   "changed_json_leaves": [
+    [
+     "def",
+     "brief"
+    ],
+    [
+     "attempts",
+     1,
+     "non-claims",
+     0
+    ],
+    [
+     "attempts",
+     2,
+     "non-claims",
+     0
+    ],
+    [
+     "dropped",
+     "why"
+    ],
+    [
+     "non-claims",
+     0
+    ],
+    [
+     "gave",
+     0,
+     "why"
+    ]
+   ],
+   "applied_mapping_counts_by_private_literal_sha256": {
+    "dd0baa9b388ad594588496a79b3e2d432248d9f5d83f6ae0cf7e708d506f6c2b": 3,
+    "910184eef8cbcf25c4485aa122cc055ffd31bad6d90e409cad8dc5bdd599d220": 2,
+    "12493c5f93d17b4d0efa4c31755c73782ac3088c1cb5effc1f6fd177c9c7f384": 1,
+    "b6b68ca6d320c4b5e34bb08f2a82e5e7439012e13c303a6d6ad35b31d29e1616": 3
+   }
+  },
+  {
+   "path": ".chongdae/run-20261030-091750-7101/tasks/privacy-build-4.json",
+   "original_sha256": "cabf8358281c186df20a11ed4ca0d0aa4b503c244dd1721d2f1450a3a69f0a5e",
+   "public_sha256": "9c81f0fe08ababc06d5b66878151279ae970eef3d5b6fa1bb01e4b42bf69fa99",
+   "derivation": "approved exact literal replacements in specified JSON strings",
+   "changed_json_leaves": [
+    [
+     "def",
+     "brief"
+    ],
+    [
+     "adopted",
+     0,
+     "why"
+    ]
+   ],
+   "applied_mapping_counts_by_private_literal_sha256": {
+    "dd0baa9b388ad594588496a79b3e2d432248d9f5d83f6ae0cf7e708d506f6c2b": 2,
+    "910184eef8cbcf25c4485aa122cc055ffd31bad6d90e409cad8dc5bdd599d220": 1,
+    "b6b68ca6d320c4b5e34bb08f2a82e5e7439012e13c303a6d6ad35b31d29e1616": 1
+   }
+  },
+  {
+   "path": ".chongdae/run-20261030-091750-7101/tasks/privacy-build-tests.json",
+   "original_sha256": "6e0fbe148b4b034cd5cf8d968f9bccdfc16a9dd4a0dd9d1a1f1219697d8ad684",
+   "public_sha256": "5b29d4eeab571ef144a8baa8fb0deb824db9a21c203157cd87655e7d85909030",
+   "derivation": "approved exact literal replacements in specified JSON strings",
+   "changed_json_leaves": [
+    [
+     "def",
+     "brief"
+    ],
+    [
+     "non-claims",
+     5
+    ],
+    [
+     "non-claims",
+     7
+    ],
+    [
+     "attempts",
+     0,
+     "summary"
+    ],
+    [
+     "attempts",
+     0,
+     "non-claims",
+     4
+    ],
+    [
+     "attempts",
+     0,
+     "reopened",
+     "why"
+    ],
+    [
+     "attempts",
+     0,
+     "disputed-tests",
+     0,
+     "why"
+    ],
+    [
+     "attempts",
+     1,
+     "summary"
+    ],
+    [
+     "attempts",
+     1,
+     "non-claims",
+     1
+    ],
+    [
+     "response",
+     "summary"
+    ],
+    [
+     "seen-non-claims",
+     "texts",
+     4
+    ],
+    [
+     "seen-non-claims",
+     "texts",
+     6
+    ]
+   ],
+   "applied_mapping_counts_by_private_literal_sha256": {
+    "12493c5f93d17b4d0efa4c31755c73782ac3088c1cb5effc1f6fd177c9c7f384": 6,
+    "24b08e8a2858d6e94c0d9eca3da62c2e777d55689ad55c5c1033ada7f428ed69": 5,
+    "121a8b842a2c65f568fe0bda2857bed479372e7428b34197cc9786f33e9ade95": 3,
+    "dd0baa9b388ad594588496a79b3e2d432248d9f5d83f6ae0cf7e708d506f6c2b": 10
+   }
+  },
+  {
+   "path": ".chongdae/run-20261030-091750-7101/tasks/privacy-build.json",
+   "original_sha256": "fb435c971c51b07621a0666ab7cf2b7e27dbced64b2d26d36c69bffc897907f4",
+   "public_sha256": "8de8811076699b46cb8ec60376851949b786130e4fdf85c1d4e340182773d292",
+   "derivation": "approved exact literal replacements in specified JSON strings",
+   "changed_json_leaves": [
+    [
+     "attempts",
+     0,
+     "retried",
+     "why"
+    ]
+   ],
+   "applied_mapping_counts_by_private_literal_sha256": {
+    "12493c5f93d17b4d0efa4c31755c73782ac3088c1cb5effc1f6fd177c9c7f384": 2,
+    "24b08e8a2858d6e94c0d9eca3da62c2e777d55689ad55c5c1033ada7f428ed69": 1
+   }
+  },
+  {
+   "path": ".chongdae/run-20261030-091750-7101/tasks/privacy-tests-2.json",
+   "original_sha256": "fed667bd64483dfe3bf7a6a4718c20f006523cdf14db3af8bb180782e392bf55",
+   "public_sha256": "8de5d11d3722944a9fe2f8a8677d5dc67f41b99282682ed2e41db3bc5fa2131a",
+   "derivation": "approved exact literal replacements in specified JSON strings",
+   "changed_json_leaves": [
+    [
+     "def",
+     "brief"
+    ]
+   ],
+   "applied_mapping_counts_by_private_literal_sha256": {
+    "dd0baa9b388ad594588496a79b3e2d432248d9f5d83f6ae0cf7e708d506f6c2b": 1,
+    "910184eef8cbcf25c4485aa122cc055ffd31bad6d90e409cad8dc5bdd599d220": 1
+   }
+  },
+  {
+   "path": ".chongdae/run-20261030-091750-7101/tasks/privacy-tests-3.json",
+   "original_sha256": "87c1d726567bcbbd58ceace790cdc1c40d5c599568f7ada0ef07530e0d10694d",
+   "public_sha256": "28ca53568df1d30d40aaba8007d4f75960a6aade6392ebf3c47987f1429c0e0a",
+   "derivation": "approved exact literal replacements in specified JSON strings",
+   "changed_json_leaves": [
+    [
+     "def",
+     "brief"
+    ]
+   ],
+   "applied_mapping_counts_by_private_literal_sha256": {
+    "dd0baa9b388ad594588496a79b3e2d432248d9f5d83f6ae0cf7e708d506f6c2b": 1,
+    "910184eef8cbcf25c4485aa122cc055ffd31bad6d90e409cad8dc5bdd599d220": 1
+   }
+  },
+  {
+   "path": ".chongdae/run-20261030-091750-7101/tasks/privacy-tests.json",
+   "original_sha256": "65a56987343a7aef0725c1c5efbab9230574e64cd5a0e1c4a46d7a27a56b7562",
+   "public_sha256": "7981f61bb96f949e47d4021d01bca63bcffda3b46c50699f63c3f3c5a555d870",
+   "derivation": "approved exact literal replacements in specified JSON strings",
+   "changed_json_leaves": [
+    [
+     "def",
+     "brief"
+    ],
+    [
+     "non-claims",
+     1
+    ],
+    [
+     "dropped",
+     "why"
+    ]
+   ],
+   "applied_mapping_counts_by_private_literal_sha256": {
+    "dd0baa9b388ad594588496a79b3e2d432248d9f5d83f6ae0cf7e708d506f6c2b": 1,
+    "1e75a17ba2341522deb2f0bcb3e6da346265362793bfeb37edbccd0ae83a0ca0": 2
+   }
+  },
+  {
+   "path": "reviews/review-20261030-161758-45ac.json",
+   "original_sha256": "54a984c114d954600ba00a3a64fc7965168026c01187bffd308f111c3c2d110f",
+   "public_sha256": "54a984c114d954600ba00a3a64fc7965168026c01187bffd308f111c3c2d110f",
+   "derivation": "byte-identical",
+   "changed_json_leaves": [],
+   "applied_mapping_counts_by_private_literal_sha256": {}
+  },
+  {
+   "path": "reviews/review-20261030-181048-64f0.json",
+   "original_sha256": "c4fd2c4a3e5199d5af1a9d971d4e779575830e4f558ff4a2451dbfb92ca9312e",
+   "public_sha256": "c4fd2c4a3e5199d5af1a9d971d4e779575830e4f558ff4a2451dbfb92ca9312e",
+   "derivation": "byte-identical",
+   "changed_json_leaves": [],
+   "applied_mapping_counts_by_private_literal_sha256": {}
+  },
+  {
+   "path": "reviews/review-20261030-205344-a900.json",
+   "original_sha256": "031eebae3567aedd44993c5c17ba7d7e2ac34083ef07804763de465868b9ef86",
+   "public_sha256": "c6cf1a0df01f39dc73e0455188ce0f2dbe851655f574609f209cb9211238319e",
+   "derivation": "approved exact literal replacements in specified JSON strings",
+   "changed_json_leaves": [
+    [
+     "findings",
+     10,
+     "text"
+    ],
+    [
+     "findings",
+     11,
+     "text"
+    ],
+    [
+     "findings",
+     14,
+     "text"
+    ],
+    [
+     "findings",
+     15,
+     "text"
+    ],
+    [
+     "findings",
+     18,
+     "text"
+    ],
+    [
+     "findings",
+     19,
+     "text"
+    ]
+   ],
+   "applied_mapping_counts_by_private_literal_sha256": {
+    "dd0baa9b388ad594588496a79b3e2d432248d9f5d83f6ae0cf7e708d506f6c2b": 2,
+    "b6b68ca6d320c4b5e34bb08f2a82e5e7439012e13c303a6d6ad35b31d29e1616": 2,
+    "12493c5f93d17b4d0efa4c31755c73782ac3088c1cb5effc1f6fd177c9c7f384": 2,
+    "24b08e8a2858d6e94c0d9eca3da62c2e777d55689ad55c5c1033ada7f428ed69": 1,
+    "1e75a17ba2341522deb2f0bcb3e6da346265362793bfeb37edbccd0ae83a0ca0": 1
+   }
+  }
+ ]
+}

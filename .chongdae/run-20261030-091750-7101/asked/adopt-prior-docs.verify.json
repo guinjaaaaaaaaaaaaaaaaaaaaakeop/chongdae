@@ -1,0 +1,98 @@
+{
+  "artifact-type": "chongdae/request@1",
+  "written_by": "chongdae 1.24.0",
+  "stage": "verify",
+  "run": "run-20261030-091750-7101",
+  "task": "adopt-prior-docs",
+  "role": "verifier",
+  "target": ".",
+  "goal": "Privacy follow-up and fixture isolation (owner-authorized; new work): first isolate test fixtures (seven normal-parent hook tests that inherit a worker's AGENT_WORKER, six expectations that miss portable command paths) through a disputed-tests amendment by the lock's Claude tests writer; then one bounded contract for the public projection (left boundaries for every prefix, backslash host paths within a stated platform limit, refusal of machine-path keys, the projected worktree-main close lock and raw CLI reload) with Claude tests, a Codex build and the Claude verifier; then adopt the earlier authorized README/Python-floor/AGENTS/CLAUDE work with its provenance and document the major-version rule and the public/local split. commit-records stays false; no version bump, push, release, cache change or history rewrite.",
+  "brief": "Adopt the earlier authorized source documentation and Python-floor manifests unchanged, with provenance: README.md, plugin.json, .claude-plugin/plugin.json (diff from c1c3f63 equal to the owner's baseline patch) and AGENTS.md, CLAUDE.md (equal to the baseline's text). Checks: links, anchors and command examples in README.md, AGENTS.md and CLAUDE.md resolve against the engine and the tree, with no local machine path; the three manifests require python >=3.11; CLAUDE.md is exactly '@AGENTS.md' and a newline; README names Python 3.11; git diff --check. Not in this task: the README consistency update and the 2.0.0 version fields, each its own task after this one.",
+  "closes": [],
+  "contract": {},
+  "checks": [
+    [
+      "python3",
+      "<tmp>",
+      "README.md",
+      "AGENTS.md",
+      "CLAUDE.md"
+    ],
+    [
+      "python3",
+      "-c",
+      "import json; m=[json.load(open(f)) for f in (\"plugin.json\", \".claude-plugin/plugin.json\", \".codex-plugin/plugin.json\")]; assert all(x[\"engines\"][\"python\"]==\">=3.11\" for x in m), [x[\"engines\"] for x in m]; assert open(\"CLAUDE.md\",\"rb\").read()==b\"@AGENTS.md\\n\"; assert \"Python 3.11 or newer\" in open(\"README.md\").read(); print(\"three manifests python >=3.11; CLAUDE.md is exactly @AGENTS.md; README names Python 3.11\")"
+    ],
+    [
+      "git",
+      "diff",
+      "--check",
+      "--",
+      "README.md",
+      "plugin.json",
+      ".claude-plugin/plugin.json"
+    ]
+  ],
+  "tests": [],
+  "response": "./.chongdae/run-20261030-091750-7101/local/adopt-prior-docs.verify.response.json",
+  "touched": [
+    ".claude-plugin/plugin.json",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "README.md",
+    "plugin.json"
+  ],
+  "built": null,
+  "excluded": {
+    "record-paths": [
+      "reviews/review-20261030-181048-64f0.json"
+    ]
+  },
+  "attribution": {
+    "adopted": [
+      ".claude-plugin/plugin.json",
+      "AGENTS.md",
+      "CLAUDE.md",
+      "README.md",
+      "plugin.json"
+    ]
+  },
+  "since": {
+    ".": "852b8522c44844240f0f22067f264a6aa9d3955d"
+  },
+  "checked": [
+    {
+      "command": "python3 <tmp> README.md AGENTS.md CLAUDE.md",
+      "exit": 0,
+      "tail": [
+        "docs ok: README.md, AGENTS.md, CLAUDE.md — links and anchors resolve, command names are engine subcommands (19), no trailing whitespace, no local machine path"
+      ],
+      "at": "2026-10-30T11:38:24+00:00",
+      "chongdae": "chongdae 1.24.0",
+      "source": "the task's checks, run by chongdae to decide it",
+      "changed_since": []
+    },
+    {
+      "command": "python3 -c 'import json; m=[json.load(open(f)) for f in (\"plugin.json\", \".claude-plugin/plugin.json\", \".codex-plugin/plugin.json\")]; assert all(x[\"engines\"][\"python\"]==\">=3.11\" for x in m), [x[\"engines\"] for x in m]; assert open(\"CLAUDE.md\",\"rb\").read()==b\"@AGENTS.md\\n\"; assert \"Python 3.11 or newer\" in open(\"README.md\").read(); print(\"three manifests python >=3.11; CLAUDE.md is exactly @AGENTS.md; README names Python 3.11\")'",
+      "exit": 0,
+      "tail": [
+        "three manifests python >=3.11; CLAUDE.md is exactly @AGENTS.md; README names Python 3.11"
+      ],
+      "at": "2026-10-30T11:38:24+00:00",
+      "chongdae": "chongdae 1.24.0",
+      "source": "the task's checks, run by chongdae to decide it",
+      "changed_since": []
+    },
+    {
+      "command": "git diff --check -- README.md plugin.json .claude-plugin/plugin.json",
+      "exit": 0,
+      "tail": [
+        ""
+      ],
+      "at": "2026-10-30T11:38:24+00:00",
+      "chongdae": "chongdae 1.24.0",
+      "source": "the task's checks, run by chongdae to decide it",
+      "changed_since": []
+    }
+  ]
+}

@@ -240,6 +240,8 @@ def split_private(o):
 
 
 def merge_private(pub, priv):
+    if isinstance(priv, str):
+        return priv
     if isinstance(pub, list) and isinstance(priv, dict) and "[]" in priv:
         for i, q in priv["[]"].items():
             if int(i) < len(pub):
@@ -262,7 +264,7 @@ def load_state(d):
         def read(name):
             return json.loads(json.dumps(changes[name] or {})) if name in changes else load(os.path.join(d, name))
 
-        state = read("state.json")
+        state = merge_private(read("state.json"), read(LOCAL + "/state.json"))
         tasks = state.get("tasks") or {}
         folder = os.path.join(d, "tasks")
         names = set(os.listdir(folder)) if os.path.isdir(folder) else set()
@@ -276,6 +278,21 @@ def load_state(d):
         # published or finished another generation while we read the files outside that transaction.
         if before == load(journal):
             return state
+
+
+def load_plan(d):
+    """Read the plan's raw view without repairing a prepared transaction or taking a lock."""
+    journal = os.path.join(d, LOCAL, "state-transaction.json")
+    while True:
+        before = load(journal)
+        changes = before.get("files", {}) if before.get("phase") == "prepared" else {}
+
+        def read(name):
+            return json.loads(json.dumps(changes[name] or {})) if name in changes else load(os.path.join(d, name))
+
+        plan = merge_private(read("plan.json"), read(LOCAL + "/plan.json"))
+        if before == load(journal):
+            return plan
 
 
 def recover_state(d):
@@ -304,10 +321,11 @@ def recover_project_states(target):
         cleanup_completion_acks(d, load_state(d))
 
 
-def save_state(d, state):
+def save_state(d, state, plan=None):
     """The record and the work, written apart: tasks/<id>.json is the record (one file per task, so tasks done on different
-    branches merge as distinct files; never a PRIVATE_KEYS key), local/tasks/<id>.json this machine's overlay of exactly
-    those keys. state.json keeps only the run's own fields. A file is written only when what it says changed: rewriting
+    branches merge as distinct files; never a PRIVATE_KEYS key), local/tasks/<id>.json this machine's overlay of private
+    keys and raw paths. state.json keeps only the run's own fields, with local/state.json its overlay.
+    A file is written only when its raw content changed: rewriting
     every task file stamped the running version on records it did not touch — guin-site d281c8a, a `did` on one task,
     changed `written_by` 1.19.0 -> 1.20.0 in six done and dropped tasks nobody had judged again."""
     import uuid
@@ -328,11 +346,26 @@ def save_state(d, state):
                 normalized["written_by"] = engine()
             files[name] = normalized
 
+    parent = os.path.dirname(os.path.abspath(d))
+    target = os.path.dirname(parent) if os.path.basename(parent) == RUNS else None
+
+    def record(name, data):
+        local = LOCAL + "/" + name
+        old = merge_private(load(os.path.join(d, name)), load(os.path.join(d, local)))
+        normalized = json.loads(json.dumps(data, ensure_ascii=False))
+        if old and {k: v for k, v in old.items() if k != "written_by"} == {k: v for k, v in normalized.items() if k != "written_by"}:
+            return
+        pub, priv = split_private(normalized)
+        pub, raws = public_projection(pub, target)
+        changed(name, pub)
+        changed(local, merge_private(raws, priv) or None)
+
+    if plan is not None:
+        record("plan.json", plan)
     for tid, ts in state.get("tasks", {}).items():
-        pub, priv = split_private({k: v for k, v in ts.items() if k not in ("artifact-type", "written_by")})
-        changed("tasks/" + tid + ".json", {"artifact-type": "chongdae/task@1", **pub})
-        changed(LOCAL + "/tasks/" + tid + ".json", priv or None)
-    changed("state.json", {"artifact-type": "chongdae/run@1", **{k: v for k, v in state.items() if k != "tasks"}})
+        record("tasks/" + tid + ".json", {"artifact-type": "chongdae/task@1",
+               **{k: v for k, v in ts.items() if k not in ("artifact-type", "written_by")}})
+    record("state.json", {"artifact-type": "chongdae/run@1", **{k: v for k, v in state.items() if k != "tasks"}})
     if files:
         save(os.path.join(d, LOCAL, "state-transaction.json"), {"id": uuid.uuid4().hex, "phase": "prepared", "files": files})
         recover_state(d)
@@ -560,27 +593,85 @@ def neutral_path(text, target):
     """This machine taken out of a string: the project -> `.`, a host's installed plugin -> `<plugin:NAME@VERSION>` (which
     marketplace it came from is this machine's business, which version it was is the record's), a temporary directory ->
     `<tmp>`, the home directory -> `~`."""
+    return path_prefixes(text, target, narrow=False)
+
+
+def path_prefixes(text, target, narrow=True):
+    """Shared machine-path policy; narrow projections exclude account names and require path boundaries."""
     import tempfile
     text = str(text)
-    for root in sorted({os.path.abspath(target), os.path.realpath(target)}, key=len, reverse=True):
-        text = text.replace(root + os.sep, "./").replace(root, ".")
+    start = r"(?<![^\s\"'`=(\[,:;|&>])" if narrow else ""
+    wrapped_start = start + r"(?P<strong>\*\*)?"
+
+    def keep_wrapper(replacement):
+        return lambda m: (m.group("strong") or "") + replacement
+
+    def boundary(prefix):
+        separators = {"/", os.sep, os.altsep} - {None}
+        if "\\" in prefix:
+            separators.add("\\")
+        return r"(?=$|[\s\"'`;|&),:" + re.escape("".join(sorted(separators))) + r"]|(?(strong)\*\*|(?!)))"
+    roots = {os.path.abspath(target), os.path.realpath(target)} if target is not None else set()
+    for root in sorted(roots, key=len, reverse=True):
+        if narrow:
+            text = re.sub(wrapped_start + re.escape(root) + boundary(root), keep_wrapper("."), text)
+        else:
+            text = text.replace(root + os.sep, "./").replace(root, ".")
     home = os.path.expanduser("~")
-    text = re.sub(r"(?:%s|~)/\.(?:claude|codex)/plugins/cache/[^/\s\"']+/([^/\s\"']+)/([^/\s\"']+)" % re.escape(home),
+    text = re.sub(start + r"(?:%s|~)/\.(?:claude|codex)/plugins/cache/[^/\s\"']+/([^/\s\"']+)/([^/\s\"']+)" % re.escape(home),
                   lambda m: "<plugin:%s@%s>" % (m.group(1), m.group(2)), text)
     # a path above one plugin's version — a marketplace's cache or checkout — names only this machine's marketplaces
-    text = re.sub(r"(?:%s|~)/\.(claude|codex)/plugins/(?:cache|marketplaces)(?:/[^/\s\"']+)?" % re.escape(home),
+    text = re.sub(start + r"(?:%s|~)/\.(claude|codex)/plugins/(?:cache|marketplaces)(?:/[^/\s\"']+)?" % re.escape(home),
                   lambda m: "<%s-plugins>" % m.group(1), text)
     tmps = {tempfile.gettempdir(), os.path.realpath(tempfile.gettempdir()), "/private/tmp", "/tmp"}
+    # In public projections a temp prefix must begin a path, not a relative path's segment.
+    temp_start = wrapped_start if narrow else ""
+    temp_tail = r"(?:(?(strong)(?!\*\*))[^\s\"'`;|&)])*" if narrow else r"[^\s\"'`;|&)]*"
+    temp_replacement = keep_wrapper("<tmp>") if narrow else "<tmp>"
     for t in sorted(tmps, key=len, reverse=True):
-        text = re.sub(r"%s/[^\s\"'`;|&)]*" % re.escape(t.rstrip("/")), "<tmp>", text)   # the whole path under it, not its first segment
-    text = re.sub(r"/(?:private/)?var/folders/[^\s\"'`;|&)]*", "<tmp>", text)
+        text = re.sub(temp_start + re.escape(t.rstrip("/")) + "/" + temp_tail, temp_replacement, text)   # the whole path under it, not its first segment
+    text = re.sub(temp_start + r"/(?:private/)?var/folders/" + temp_tail, temp_replacement, text)
     user = os.path.basename(home.rstrip(os.sep)) if home else ""
     if home and home != "~":
+        if narrow:
+            return re.sub(wrapped_start + re.escape(home) + boundary(home), keep_wrapper("~"), text)
         # a host that names folders after paths (Claude Code: ~/.claude/projects/-Users-me-src-app) carries the home in the name
         text = text.replace(home.replace(os.sep, "-"), "~").replace(home, "~")
-    if len(user) >= 3:
+    if not narrow and len(user) >= 3:
         text = re.sub(r"(?<![\w-])%s(?![\w-])" % re.escape(user), "<user>", text)   # the account's name, even written on its own
     return text
+
+
+class MachinePathKey(SystemExit):
+    """A machine-path dictionary key cannot be published or renamed safely."""
+
+
+def public_projection(obj, target, _location=""):
+    """Copy public values and retain changed strings in a mirror that merge_private can restore."""
+    if isinstance(obj, dict):
+        public, raws = {}, {}
+        for key, value in obj.items():
+            projected_key = path_prefixes(key, target) if isinstance(key, str) else key
+            if projected_key != key:
+                raise MachinePathKey("machine-path key at %s: %s" % (_location or "<root>", projected_key))
+            location = (_location + "." if _location else "") + str(key)
+            public[key], raw = public_projection(value, target, location)
+            if raw:
+                # merge_private restores PRIVATE_KEYS wholesale, even for a standalone derived export.
+                raws[key] = json.loads(json.dumps(value)) if key in PRIVATE_KEYS else raw
+        return public, raws
+    if isinstance(obj, list):
+        public, raws = [], {}
+        for i, value in enumerate(obj):
+            projected, raw = public_projection(value, target, "%s[%d]" % (_location, i))
+            public.append(projected)
+            if raw:
+                raws[str(i)] = raw
+        return public, {"[]": raws} if raws else {}
+    if isinstance(obj, str):
+        public = path_prefixes(obj, target)
+        return public, obj if public != obj else {}
+    return obj, {}
 
 
 def head_sha(target):
@@ -1712,6 +1803,32 @@ def make_worktree(main, run_name, base=None):
     return path
 
 
+def landing_raws(public, child, target):
+    """Only projection-matching strings cross from a child; private state never does.
+
+    Compare each leaf with the merged public record, so a merge's changed values win.
+    This is a projection mirror, not a copy of the child's local directory.
+    """
+    if isinstance(public, dict) and isinstance(child, dict):
+        raws = {}
+        for key in public.keys() & child.keys():
+            if key not in PRIVATE_KEYS:
+                raw = landing_raws(public[key], child[key], target)
+                if raw:
+                    raws[key] = raw
+        return raws
+    if isinstance(public, list) and isinstance(child, list):
+        raws = {}
+        for i, (value, original) in enumerate(zip(public, child)):
+            raw = landing_raws(value, original, target)
+            if raw:
+                raws[str(i)] = raw
+        return {"[]": raws} if raws else {}
+    if isinstance(child, str) and public != child and public == path_prefixes(child, target):
+        return child
+    return {}
+
+
 def merge_back(wt_path, wt, run_name):
     wt_path = os.path.abspath(wt_path)   # every git call below runs in main: a relative path (`--target .` from inside the worktree) would name main
     """Commit the worktree and merge its branch into main. Exit 0: landed, worktree removed. Exit 2: a human or a
@@ -1734,12 +1851,28 @@ def merge_back(wt_path, wt, run_name):
     if done.returncode:
         git(main, "merge", "--abort")
         return stop("merge of %s conflicts — resolve it in main (`git merge %s`, fix, commit), then `chongdae init --merge`; the worktree stays at %s" % (branch, branch, wt_path.replace(os.sep, "/")))
+    # close already holds the destination lock. Bring only this run's matching raw
+    # strings across, preserving any overlay the destination already owns.
+    child = load_state(os.path.join(wt_path, RUNS, run_name))
+    landing = os.path.join(main, RUNS, run_name)
+    state = load_state(landing)
+
+    def restore(name, original):
+        public = load(os.path.join(landing, name))
+        raws = landing_raws(public, original, wt_path)
+        return merge_private(merge_private(public, raws), load(os.path.join(landing, LOCAL, name)))
+
+    for tid in state.get("tasks", {}):
+        state["tasks"][tid] = restore("tasks/" + tid + ".json", child.get("tasks", {}).get(tid, {}))
+    state = {**restore("state.json", child), "tasks": state["tasks"]}
+    plan = restore("plan.json", load_plan(os.path.join(wt_path, RUNS, run_name)))
+    save_state(landing, state, plan=plan)
     failed = []
     for r in all_runs(main):
         st = load_state(r)
         if st.get("status") != "complete":
             continue
-        for task in all_tasks(load(os.path.join(r, "plan.json")), st):
+        for task in all_tasks(load_plan(r), st):
             ts = st["tasks"].get(task["id"], {})
             if ts.get("status") == "done" and task.get("checks"):
                 failed += run_checks(main, [c for c in task["checks"] if not is_self_recheck(c)])   # a merge run's own `chongdae recheck` would recurse here
@@ -1752,9 +1885,9 @@ def merge_back(wt_path, wt, run_name):
     landed = (git(main, "rev-parse", "HEAD").stdout or "").strip()
     rec = os.path.join(main, RUNS, run_name, "state.json")
     if landed and os.path.exists(rec):
-        st = load(rec)
+        st = load_state(landing)
         st["landed"] = {**stamp(), "commit": landed}
-        save(rec, st)
+        save_state(landing, st)
         commit_record(main, run_name, "landed as %s" % landed[:12])
     print("merged %s into main and removed the worktree — recheck green" % branch)
     return 0
@@ -1869,7 +2002,7 @@ def reader_checks(plan, state, task):
 def contract_fingerprint(target, d, tid):
     """The text a `before` role answered: the task's brief and checks and the plan sections it closes, hashed."""
     import hashlib
-    plan = load(os.path.join(d, "plan.json")); state = load_state(d)
+    plan = load_plan(d); state = load_state(d)
     task = next((t for t in all_tasks(plan, state) if t["id"] == tid), {})
     text = json.dumps({"brief": task.get("brief"), "checks": task.get("checks"), "tests": task.get("tests")}, sort_keys=True)
     if plan.get("from") and os.path.exists(os.path.join(target, plan["from"])):
@@ -3200,7 +3333,7 @@ def run_pass(args):
     d = run_dir(target)
     if not d:
         raise SystemExit("no run — `chongdae init --goal ...`")
-    plan, state = load(os.path.join(d, "plan.json")), load_state(d)
+    plan, state = load_plan(d), load_state(d)
     if state["status"] != "running":
         print("run %s is %s" % (os.path.basename(d), state["status"]))
         return 0
@@ -3623,7 +3756,7 @@ def hiring_stop(ctx, task, ts, response, caps, lines):
             entry = next((t for t in plan.get("tasks", []) if t.get("id") == tid), None)
             if entry is not None:
                 entry["requires"] = want
-                save(os.path.join(d, "plan.json"), plan)
+                save_state(d, state, plan=plan)
         n = resend(ctx["target"], d, state, tid, {"by": "chongdae", "auto": why, "requires": want}, "hire %s for %s: %s" % (alt, tid, why))
         print("  %s: %s — it requires %s now and goes to %s (attempt %d kept)" % (tid, why, ", ".join(want), alt, n))
         setattr(args, "continuing", True)
@@ -4753,7 +4886,7 @@ def cmd_init(args):
         raise SystemExit("a run is already in progress: %s (%s; last written %s) — add this work to it as its own task "
                          "(`chongdae add TASK --brief … --scope PATH…`: a run holds any session's tasks, the scopes keep them apart), "
                          "or wait for its `close`; remove it only if nobody works in it any more"
-                         % (d, cut(load(os.path.join(d, "plan.json")).get("goal") or "-", 80),
+                         % (d, cut(load_plan(d).get("goal") or "-", 80),
                             "%d min ago" % idle if idle is not None else "at an unknown time"))
     parent = parent_link(args) if getattr(args, "parent", None) else None   # a child of the running run may start beside it
     # Run ids are unique across machines (date + random), so runs made on different branches merge as distinct directories.
@@ -4797,7 +4930,6 @@ def cmd_init(args):
     else:
         plan = {"artifact-type": "chongdae/plan@1", "goal": args.goal, "kind": "bootstrap", "tasks": BOOTSTRAP,
                 "providers": {"questions": "session", "plan": "session"}}   # the plan says who provides; chongdae assumes nothing
-    save(os.path.join(d, "plan.json"), plan)
     state = {"status": "running", "tasks": {t["id"]: {"status": "todo"} for t in plan["tasks"]}, "non-claims": list(plan.get("non-claims", []))}
     state["created"] = {**stamp(), "based_on": head_sha(target), **({"nested": nested_heads(target)} if nested_repos(target) else {})}   # the commit this run starts from: its place in history is ancestry, not its id's timestamp
     locked = locked_versions(target)
@@ -4810,7 +4942,7 @@ def cmd_init(args):
         state["parent"] = parent   # the parent's `show` finds its children by this link; nothing is written into the parent
         if scopes:
             save(work_path(d, "parent-lease.json"), {"scopes": scopes})
-    save_state(d, state)
+    save_state(d, state, plan=plan)
     commit_record(target, run_name, "init (%s) — %s" % (plan.get("kind", "?"), plan.get("goal", "")))
     print("run %s: goal %r — %s plan (%s). Now %s."
           % (os.path.basename(d), plan["goal"], plan.get("kind", "?"), " -> ".join(t["id"] for t in plan["tasks"]) or "no tasks yet",
@@ -4832,7 +4964,7 @@ def parent_link(args):
     pd = os.path.join(args.target, RUNS, run)
     if not os.path.isdir(pd):
         raise SystemExit("--parent %s: no run %s in this tree's record (pull it first)" % (args.parent, run))
-    plan, state = load(os.path.join(pd, "plan.json")), load_state(pd)
+    plan, state = load_plan(pd), load_state(pd)
     task = next((t for t in all_tasks(plan, state) if t.get("id") == tid), None)
     if not task:
         raise SystemExit("--parent %s: %s has no task %s" % (args.parent, run, tid))
@@ -4858,7 +4990,7 @@ def cmd_add(args):
     d = run_dir(args.target)
     if not d:
         raise SystemExit("no run in progress — `chongdae init --session`")
-    plan, state = load(os.path.join(d, "plan.json")), load_state(d)
+    plan, state = load_plan(d), load_state(d)
     if state.get("status") != "running":
         raise SystemExit("no run in progress — `chongdae init --session`")
     if plan.get("kind") != "session":
@@ -4868,7 +5000,7 @@ def cmd_add(args):
         r = remote_before(args.target, "`add`")
         if r is not None:
             return r
-        plan, state = load(os.path.join(d, "plan.json")), load_state(d)
+        plan, state = load_plan(d), load_state(d)
     checks = [portable_argv(shlex.split(c)) for c in args.check or []]
     if args.id in state["tasks"] and checks:
         return add_checks(args, d, plan, state, checks)
@@ -5091,7 +5223,7 @@ def cmd_take(args):
     done work (2026-09-30). The task becomes the session's: self-performed instead of its role, with the reason; the stopped
     attempt stays in `attempts`; `run` then decides it like any session task — its checks, the verifier, the gate."""
     d = run_dir(args.target)
-    plan, state = (load(os.path.join(d, "plan.json")), load_state(d)) if d else ({}, {})
+    plan, state = (load_plan(d), load_state(d)) if d else ({}, {})
     if state.get("status") != "running":
         raise SystemExit("no session run in progress — `take` is for a session run's own tasks")
     ts = state["tasks"].get(args.task)
@@ -5258,7 +5390,7 @@ def cmd_did(args):
     answered, or where the person agreed to the ones that cannot be undone. `--each FILE` runs several, one per line, as one
     judgment: guin-site's R2 emptying and deletion, and D1's, were one decision recorded as separate commits."""
     d = run_dir(args.target)
-    plan, state = (load(os.path.join(d, "plan.json")), load_state(d)) if d else ({}, {})
+    plan, state = (load_plan(d), load_state(d)) if d else ({}, {})
     if state.get("status") != "running":
         raise SystemExit("no run in progress — `did` records an operation on a task of the running run (`chongdae init --session`, then `add`)")
     ts = state["tasks"].get(args.task)
@@ -5610,7 +5742,7 @@ def cmd_drop(args):
     stays in the record as `dropped`. Without this the cheap way out of a task was to close the run around it (or start a
     new run), which left it open forever and nobody looking; a drop is a decision, written down."""
     d = run_dir(args.target)
-    plan, state = (load(os.path.join(d, "plan.json")), load_state(d)) if d else ({}, {})
+    plan, state = (load_plan(d), load_state(d)) if d else ({}, {})
     if plan.get("kind") != "session" or state.get("status") != "running":
         raise SystemExit("no session run in progress — only a session run's own tasks can be dropped; a plan's tasks are the plan's")
     ts = state["tasks"].get(args.task)
@@ -5667,7 +5799,7 @@ def cmd_unstage(args):
     d = run_dir(args.target)
     if not d:
         raise SystemExit("no run")
-    plan, state = load(os.path.join(d, "plan.json")), load_state(d)
+    plan, state = load_plan(d), load_state(d)
     ts = state["tasks"].get(args.task)
     task = next((t for t in all_tasks(plan, state) if t.get("id") == args.task), None)
     if not ts or not task:
@@ -5704,7 +5836,7 @@ def cmd_claim(args):
         raise SystemExit("no run")
     state = load_state(d)
     if args.list:
-        plan = load(os.path.join(d, "plan.json"))
+        plan = load_plan(d)
         rows = [(t["id"], state["tasks"].get(t["id"], {})) for t in all_tasks(plan, state)]
         rows = [(tid, ts) for tid, ts in rows if ts.get("claimed_by")]
         for tid, ts in rows:
@@ -5760,7 +5892,7 @@ def claim_lease(args, leases):
         d = run_dir(target)
         if not d:
             raise SystemExit("no run")
-        plan, state = load(os.path.join(d, "plan.json")), load_state(d)
+        plan, state = load_plan(d), load_state(d)
         ts = state["tasks"].get(args.task)
         task = next((t for t in all_tasks(plan, state) if t.get("id") == args.task), None)
         if not ts or not task:
@@ -5874,7 +6006,7 @@ def cmd_close(args):
     a conflict or a red recheck leaves the branch for a merge run (`init --merge` in main). The worktree is removed
     only when the merge landed; otherwise it stays, and the record says why."""
     d = run_dir(args.target, getattr(args, "run", None))
-    plan, state = (load(os.path.join(d, "plan.json")), load_state(d)) if d else ({}, {})
+    plan, state = (load_plan(d), load_state(d)) if d else ({}, {})
     wt = state.get("worktree")
     if plan.get("kind") != "session":
         # a plan/bootstrap run in a worktree ends by `run` (complete); `close` is then its way back to main
@@ -5959,7 +6091,7 @@ def cmd_confirm(args):
         raise SystemExit("%s is not waiting for confirmation (status: %s)" % (args.task, ts["status"] if ts else "unknown"))
     if not (args.by or args.delegated):
         raise SystemExit("say who confirmed (--by) or why the human delegated it (--delegated)")
-    plan = load(os.path.join(d, "plan.json"))
+    plan = load_plan(d)
     task = next((t for t in all_tasks(plan, state) if t.get("id") == args.task), ts.get("def") or {"id": args.task})
     code = produced_freshness({"target": args.target, "d": d, "plan": plan, "state": state}, task, ts)
     if code is not None:
@@ -6021,7 +6153,7 @@ def cmd_retry(args):
         raise SystemExit("%s is not stopped on a provider response or a rejection (status %s, response %s)" % (args.task, ts.get("status"), (ts.get("response") or {}).get("status")))
     # not a gate: a retry the session decides alone is signed by the session (`--by NAME` when a person decided it)
     judgment = delegation_record(d, args.delegated, "retry") if args.delegated else {"by": signer(args)}
-    plan, to = load(os.path.join(d, "plan.json")), ""
+    plan, to = load_plan(d), ""
     checked = run_checked(args.target, args.checked, args.checked_red) if (args.checked or args.checked_red) else None   # before anything is recorded: a failing one refuses the retry
     if args.requires:
         # what the work requires of its sandbox, said on the task now that a member's sandbox lacked it: the request names it
@@ -6032,7 +6164,7 @@ def cmd_retry(args):
         task["requires"] = list(dict.fromkeys(list(task.get("requires") or []) + list(args.requires)))
         judgment["requires"] = task["requires"]
         if "def" not in ts:
-            save(os.path.join(d, "plan.json"), plan)
+            save_state(d, state, plan=plan)
         key, who = hire(providers(args.target, plan), task)
         if ts.get("taken") and key != task["role"] and who not in SESSION_HANDS:
             # asking for a capability the lock's alternate has is asking for that hand: a take stood in its way, and `run`
@@ -6082,7 +6214,7 @@ def cmd_dispute(args):
     reopened with the dispute (or a tests task is made when none is on record), and once it is done the build takes the
     amended files as its contract, so its next judgment keeps the fix."""
     d = run_dir(args.target)
-    plan, state = (load(os.path.join(d, "plan.json")), load_state(d)) if d else ({}, {})
+    plan, state = (load_plan(d), load_state(d)) if d else ({}, {})
     if state.get("status") != "running":
         raise SystemExit("no run in progress")
     ts = state["tasks"].get(args.task)
@@ -6137,7 +6269,7 @@ def cmd_adopt(args):
     every other task's `touched` (and pinned into an open one's start), out of TASK's start, into TASK's own — recorded as a
     judgment, with who and why."""
     d = run_dir(args.target)
-    plan, state = (load(os.path.join(d, "plan.json")), load_state(d)) if d else ({}, {})
+    plan, state = (load_plan(d), load_state(d)) if d else ({}, {})
     if state.get("status") != "running":
         raise SystemExit("no run in progress — `adopt` moves attribution between the tasks of a running run; a closed run's record stands as it was judged")
     ts = state["tasks"].get(args.task)
@@ -6301,7 +6433,7 @@ def cmd_report(args):
     # committed only after REV now shows as outside-run: a change the reviewer looks at, rather than one nobody sees.
     since_runs = runs_since(target, args.since) if args.since else None
     for r in all_runs(target):
-        name, plan, state = os.path.basename(r), load(os.path.join(r, "plan.json")), load_state(r)
+        name, plan, state = os.path.basename(r), load_plan(r), load_state(r)
         if state.get("status") != "complete" or (since_runs is not None and name not in since_runs):
             continue
         for task in all_tasks(plan, state):
@@ -6320,7 +6452,7 @@ def cmd_report(args):
     # what no human decided, and what nobody claims
     seen_where, seen_count = [], 0
     for r in all_runs(target):
-        name, plan, state = os.path.basename(r), load(os.path.join(r, "plan.json")), load_state(r)
+        name, plan, state = os.path.basename(r), load_plan(r), load_state(r)
         if since_runs is not None and name not in since_runs:
             continue   # --since: what happened since that revision — a run whose record already existed there was reviewed then
 
@@ -6498,7 +6630,7 @@ def cmd_recheck(args):
     target = args.target
     red, green, unchecked = [], [], []
     for r in all_runs(target):
-        plan, state = load(os.path.join(r, "plan.json")), load_state(r)
+        plan, state = load_plan(r), load_state(r)
         if state.get("status") != "complete":
             continue
         for task in all_tasks(plan, state):
@@ -6529,7 +6661,7 @@ def cmd_status(args):
     if not d:
         print("no run — `init --session --goal \"...\"` for a piece of work, `init --goal \"...\"` for the bootstrap plan, `init --plan FILE`, `init --merge` after a merge")
         return 0
-    plan, state = load(os.path.join(d, "plan.json")), load_state(d)
+    plan, state = load_plan(d), load_state(d)
     open_ = open_tasks(plan, state)
     print("run %s (%s: %r) is %s — %d task(s), %d open: %s%s" % (os.path.basename(d), plan.get("kind", "?"), plan.get("goal", ""), state.get("status"),
                                                                  len(state["tasks"]), len(open_), ", ".join(open_) or "-",
@@ -6874,7 +7006,7 @@ def show_note(target, want):
         return any(f == want or f.startswith(want + "/") for f in files or [])
     last, loose = None, None
     for r in all_runs(target):
-        plan, state = load(os.path.join(r, "plan.json")), load_state(r)
+        plan, state = load_plan(r), load_state(r)
         created = run_created(r, state)
         for t in all_tasks(plan, state):
             ts = state["tasks"].get(t["id"], {})
@@ -6930,7 +7062,7 @@ def show_map(target):
                 closed = (str(as_utc(end) or ""), r, end)
     line = "%d run%s (%d this week)" % (len(runs), "" if len(runs) == 1 else "s", recent)
     if closed:
-        line += ", last closed: %s (%s)" % (cut(load(os.path.join(closed[1], "plan.json")).get("goal") or "(no goal)", 80), day_of(closed[2]))
+        line += ", last closed: %s (%s)" % (cut(load_plan(closed[1]).get("goal") or "(no goal)", 80), day_of(closed[2]))
     else:
         line += ", none closed yet"
     print(line)
@@ -6958,7 +7090,7 @@ def show_hands(target, after, paths):
             ended = as_utc((head.get("ended") or {}).get("at"))
             if head.get("status") != "running" and (ended is None or ended < since):
                 continue   # only a run that is open, or closed within the window, can have changed the tree since then
-            plan, state, rid = load(os.path.join(r, "plan.json")), load_state(r), os.path.basename(r)
+            plan, state, rid = load_plan(r), load_state(r), os.path.basename(r)
             if prov is None:
                 prov = providers(target, plan)
             tasks = {t["id"]: t for t in all_tasks(plan, state)}
@@ -7020,7 +7152,7 @@ def cmd_show(args):
         for r in all_runs(target):
             if os.path.basename(r) not in names:
                 continue
-            plan, state = load(os.path.join(r, "plan.json")), load_state(r)
+            plan, state = load_plan(r), load_state(r)
             t = run_tally(r, plan, state)
             tot = {k: (tot or {}).get(k, 0) + v for k, v in t.items()}
             created, _, ended, e_src = run_times(target, r, state)
@@ -7042,7 +7174,7 @@ def cmd_show(args):
         want = want.rstrip("/")
         found = 0
         for r in reversed(all_runs(target)):
-            plan, state = load(os.path.join(r, "plan.json")), load_state(r)
+            plan, state = load_plan(r), load_state(r)
             hits = [(t, state["tasks"].get(t["id"], {})) for t in all_tasks(plan, state)]
             hits = [(t, ts) for t, ts in hits if any(f == want or f.startswith(want + "/") for f in ts.get("touched") or [])]
             if not hits:
@@ -7062,7 +7194,7 @@ def cmd_show(args):
     if not d:
         print("no run")
         return 0
-    plan, state = load(os.path.join(d, "plan.json")), load_state(d)
+    plan, state = load_plan(d), load_state(d)
     created, c_src, ended, e_src = run_times(target, d, state)
     day = as_utc(created).strftime("%Y-%m-%d") if as_utc(created) else None
     print("run %s — %s, %s" % (os.path.basename(d), plan.get("kind", "?"), state.get("status", "?")))
@@ -7302,7 +7434,7 @@ def main(argv=None):
                 return stop(refused)
             if args.cmd == "close":
                 d = run_dir(args.target, getattr(args, "run", None))
-                main = (load(os.path.join(d, "state.json")).get("worktree") or {}).get("main") if d else None
+                main = (load_state(d).get("worktree") or {}).get("main") if d else None
                 if main and os.path.realpath(main) != os.path.realpath(args.target):
                     # Landing changes the destination checkout too. Acquire before close changes either record;
                     # a busy destination must leave the child running so the same close can be retried.

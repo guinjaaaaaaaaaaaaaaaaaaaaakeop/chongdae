@@ -1,0 +1,10 @@
+{
+  "artifact-type": "chongdae/plan@1",
+  "written_by": "chongdae 1.24.0",
+  "goal": "Self-host stage (owner-authorized): adopt the environment bootstrapped by session adedcf9a with honest provenance, and have the lock's Codex implementer write a new SELFHOSTING.md maintenance entry, reviewed by the lock's Claude verifier and the close reviewer; prior README/AGENTS/manifest edits stay outside this run; no version bump, push or release.",
+  "kind": "session",
+  "tasks": [],
+  "providers": {
+    "session": "session"
+  }
+}
