@@ -14,7 +14,8 @@ import tempfile
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, HERE)
+PLUGIN = os.path.join(HERE, "plugin")   # the installable payload: engine, hooks and manifests are tested there (K8)
+sys.path.insert(0, PLUGIN)
 import chongdae  # noqa: E402
 
 # Recorded from real provider runs, trimmed. The runner is tested against what a real provider said.
@@ -346,7 +347,7 @@ def did_command(argv, target):
 
 
 def hook(name, payload, **env):
-    done = subprocess.run([sys.executable, os.path.join(HERE, "hooks", name)], input=json.dumps(payload), capture_output=True, text=True, encoding="utf-8",
+    done = subprocess.run([sys.executable, os.path.join(PLUGIN, "hooks", name)], input=json.dumps(payload), capture_output=True, text=True, encoding="utf-8",
                           env=session_env(**env))
     return done.returncode, done.stdout + done.stderr
 
@@ -472,7 +473,7 @@ def test_performed_by_is_recorded_like_an_author_line():
             assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
             # the model is not in the env; the SessionStart hook records where the host keeps the transcript, and the transcript names it
             transcript = os.path.join(pj.dir, "host-transcript.jsonl")
-            hook = os.path.join(HERE, "hooks", "session_start.py")
+            hook = os.path.join(PLUGIN, "hooks", "session_start.py")
             done = subprocess.run([sys.executable, hook], input=json.dumps({"cwd": pj.dir, "session_id": "sess-123", "transcript_path": transcript, "source": "startup"}),
                                   capture_output=True, text=True, encoding="utf-8", env=session_env(**NORMAL_SESSION))
             assert done.returncode == 0 and os.path.exists(os.path.join(pj.dir, ".chongdae", "sessions", "sess-123.json")), done.stderr
@@ -534,7 +535,7 @@ def test_provider_survives_the_runner_and_a_second_run_consumes_its_response():
         write(os.path.join(pj.dir, "plan.json"), plan)
         assert run("init", "--plan", "plan.json", "--target", pj.dir)[0] == 0
         # first `run` is killed 1s in — after the provider is spawned+detached, before it answers
-        runner = subprocess.Popen([sys.executable, os.path.join(HERE, "chongdae.py"), "run", "--target", pj.dir],
+        runner = subprocess.Popen([sys.executable, os.path.join(PLUGIN, "chongdae.py"), "run", "--target", pj.dir],
                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         import time
         time.sleep(1.5)
@@ -2894,7 +2895,7 @@ def test_run_waits_well_under_a_hosts_ten_minute_tool_limit_by_default():
     """guin-site, 2026-10-12: `run` blocked ~8 minutes on a provider against a 10-minute tool limit, and the session wrapped it
     in polling loops. The default budget is four minutes; CHONGDAE_WAIT still overrides it."""
     env = {k: v for k, v in os.environ.items() if k != "CHONGDAE_WAIT"}
-    said = lambda e: subprocess.run([sys.executable, "-c", "import chongdae; print(chongdae.WAIT_BUDGET)"], cwd=HERE, env=e,
+    said = lambda e: subprocess.run([sys.executable, "-c", "import chongdae; print(chongdae.WAIT_BUDGET)"], cwd=PLUGIN, env=e,
                                     capture_output=True, text=True).stdout.strip()
     assert said(env) == "240", said(env)
     assert said(dict(env, CHONGDAE_WAIT="17")) == "17"
@@ -2987,7 +2988,7 @@ def test_c1_two_machines_claim_one_task_one_holds_it_the_other_is_told_who_and_t
         procs = []
         for who, tree in (("A", m.a), ("B", m.b)):
             env = dict(os.environ, CHONGDAE_MACHINE=who, CHONGDAE_SESSION="s1")
-            procs.append(subprocess.Popen([sys.executable, os.path.join(HERE, "chongdae.py"), "claim", "T1", "--target", tree], env=env,
+            procs.append(subprocess.Popen([sys.executable, os.path.join(PLUGIN, "chongdae.py"), "claim", "T1", "--target", tree], env=env,
                                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True))
         outs = [(p.wait(), p.stdout.read()) for p in procs]
         winners = [i for i, (code, _) in enumerate(outs) if code == 0]
@@ -3470,7 +3471,7 @@ def test_the_calls_budget_covers_chongdaes_own_checks_and_the_next_call_resumes_
                 "tasks": [{"id": "T1", "role": "builder", "checks": [[sys.executable, "-c", "pass"]]}]}
         write(os.path.join(pj.dir, "plan.json"), plan)
         assert run("init", "--plan", "plan.json", "--target", pj.dir)[0] == 0
-        done = subprocess.run([sys.executable, os.path.join(HERE, "chongdae.py"), "run", "--target", pj.dir], capture_output=True, text=True,
+        done = subprocess.run([sys.executable, os.path.join(PLUGIN, "chongdae.py"), "run", "--target", pj.dir], capture_output=True, text=True,
                               env=dict(os.environ, CHONGDAE_WAIT="1"))
         assert done.returncode == chongdae.WAITING == 4 and done.stdout.startswith("still working: "), (done.returncode, done.stdout)
         assert chongdae.WAITING not in (0, chongdae.DECISION, chongdae.DISPATCH)
@@ -4098,7 +4099,7 @@ def test_operation_words_are_report_hints_and_a_bash_operation_gets_a_did_nudge(
         assert "record it:" in ctx and "after `close`" not in ctx, ctx
         write(os.path.join(pj.dir, "hunsu.json"), {"settings": {"chongdae": {"ops-patterns": [r"\bmake\s+release\b"]}}})
         assert hook("pre_bash.py", payload("git push"), **NORMAL_SESSION) == (0, "") and "make release" in hook("pre_bash.py", payload("make release"), **NORMAL_SESSION)[1]
-        hooks = json.load(open(os.path.join(HERE, "hooks", "hooks.json"), encoding="utf-8"))["hooks"]["PreToolUse"]
+        hooks = json.load(open(os.path.join(PLUGIN, "hooks", "hooks.json"), encoding="utf-8"))["hooks"]["PreToolUse"]
         assert any(h["matcher"] == "Bash" and "pre_bash.py" in h["hooks"][0]["command"] for h in hooks), hooks
 
 
@@ -4333,7 +4334,7 @@ def test_the_hands_read_names_a_hired_provider_out_now_or_answered_since_and_nev
         assert "a.py" not in hands(after, "a.py")
         # the declared read, as jokbo calls it: one argument per path
         for m in ("plugin.json", os.path.join(".claude-plugin", "plugin.json"), os.path.join(".codex-plugin", "plugin.json")):
-            argv = json.load(open(os.path.join(HERE, m), encoding="utf-8"))["reads"]["hands"]
+            argv = json.load(open(os.path.join(PLUGIN, m), encoding="utf-8"))["reads"]["hands"]
             assert argv[2:] == ["show", "--target", "{target}", "--after", "{after}", "--hands", "{paths}"], (m, argv)
 
 
@@ -4359,6 +4360,7 @@ if __name__ == "__main__":
         "test_state_recovery", "test_completion_recovery", "test_mutation_ownership", "test_operation_recovery",
         "test_operation_handover",
         "test_public_projection",
+        "test_payload",
     ])
     concurrent = unittest.TextTestRunner(verbosity=2).run(suite)
     failed += len(concurrent.failures) + len(concurrent.errors)

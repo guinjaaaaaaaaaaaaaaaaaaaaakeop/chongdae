@@ -15,7 +15,7 @@ import time
 import unittest
 
 
-ENGINE = Path(__file__).resolve().with_name("chongdae.py")
+ENGINE = Path(__file__).resolve().parent / "plugin" / "chongdae.py"   # the payload's engine (K8)
 sys.path.insert(0, str(ENGINE.parent))
 import chongdae  # noqa: E402
 

@@ -5,13 +5,13 @@
   },
   "metadata": {
     "description": "chongdae on its own: `claude plugin marketplace add guinjaaaaaaaaaaaaaaaaaaaaakeop/chongdae` then `claude plugin install chongdae@chongdae`.",
-    "version": "2.0.0"
+    "version": "2.1.0"
   },
   "plugins": [
     {
       "name": "chongdae",
-      "source": "./",
-      "version": "2.0.0",
+      "source": "./plugin",
+      "version": "2.1.0",
       "description": "The orchestrator for an era where development is split into parts done by agents."
     }
   ]

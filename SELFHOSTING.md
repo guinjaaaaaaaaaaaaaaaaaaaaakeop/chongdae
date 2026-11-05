@@ -1,26 +1,26 @@
 # Maintaining chongdae with chongdae
 
-Start with [AGENTS.md](AGENTS.md) for source maintenance and [README.md](README.md)
-for contracts, [providers](README.md#providers), and [limits](README.md#limits).
-Follow the shared [run skill](skills/run/SKILL.md) for orchestration.
+Start with [AGENTS.md](AGENTS.md) for source maintenance and [plugin/README.md](plugin/README.md)
+for contracts, [providers](plugin/README.md#providers), and [limits](plugin/README.md#limits).
+Follow the shared [run skill](plugin/skills/run/SKILL.md) for orchestration.
 This entry records this checkout's environment and maintenance constraints.
 
 ## Installed release and working source
 
 [hunsu.json](hunsu.json) declares the environment; [hunsu.lock.json](hunsu.lock.json)
-locks hunsu 1.15.1, chongdae 1.24.0, mangsang 1.19.3, jokbo 1.8.1,
-hacheong 1.12.1, and dwitbuk 1.16.0, installed at project scope for Claude Code.
+locks hunsu 2.1.0, chongdae 2.0.0, mangsang 2.0.1, jokbo 2.0.0,
+hacheong 2.1.0, and dwitbuk 2.0.2, installed at project scope for Claude Code.
 Use each locked plugin's `<root>` from the SessionStart line to call its engine;
 never select an engine with a glob over the plugin cache.
 
 This checkout is the source of the next chongdae. The installed locked release N
-(currently chongdae 1.24.0) orchestrates every change to it, producing N+1;
-never orchestrate with this checkout's `./chongdae.py`.
+(currently the locked chongdae 2.0.0) orchestrates every change to it, producing N+1;
+never orchestrate with this checkout's `plugin/chongdae.py` (or the root shim that runs it).
 N+1 manages nothing, not even the next change, until it is bumped in every manifest,
 published, installed, re-locked by hunsu, and loaded by a new session.
 Follow [versioning](README.md#versioning); version bump, push, and release are separate steps.
-`source_revision` in `chongdae.py` marks an engine run from working source with
-`+g<sha>[-dirty]`; `.chongdae/run-*/state.json` records its writer in `written_by`.
+`source_revision` in `plugin/chongdae.py` marks an engine run from working source with
+`+g<sha>[-dirty]`, with `-dirty` counting only the payload; `.chongdae/run-*/state.json` records its writer in `written_by`.
 Testing working source with `python3 test_chongdae.py`, as AGENTS.md requires for
 behavior changes, is not orchestration; see [self-check](README.md#self-check).
 

@@ -3,44 +3,44 @@
   "host": "claude-code",
   "engines": {
     "python": "3.12.15",
-    "claude-code": "2.1.314"
+    "claude-code": "2.1.318"
   },
   "plugins": {
     "hunsu": {
-      "version": "1.15.1",
+      "version": "2.1.0",
       "source": "github:guinjaaaaaaaaaaaaaaaaaaaaakeop/hunsu",
       "marketplace": "hunsu",
-      "fingerprint": "506135a169ad"
+      "fingerprint": "310b5dbf5696"
     },
     "chongdae": {
-      "version": "1.24.0",
+      "version": "2.0.0",
       "source": "github:guinjaaaaaaaaaaaaaaaaaaaaakeop/chongdae",
       "marketplace": "chongdae",
-      "fingerprint": "2ebc633b588f"
+      "fingerprint": "452a812a258f"
     },
     "mangsang": {
-      "version": "1.19.3",
+      "version": "2.0.1",
       "source": "github:guinjaaaaaaaaaaaaaaaaaaaaakeop/mangsang",
       "marketplace": "mangsang",
-      "fingerprint": "16820498c0f4"
+      "fingerprint": "2b9b432a8913"
     },
     "jokbo": {
-      "version": "1.8.1",
+      "version": "2.0.0",
       "source": "github:guinjaaaaaaaaaaaaaaaaaaaaakeop/jokbo",
       "marketplace": "jokbo",
-      "fingerprint": "e29b4880489d"
+      "fingerprint": "afb66aff05e8"
     },
     "hacheong": {
-      "version": "1.12.1",
+      "version": "2.1.0",
       "source": "github:guinjaaaaaaaaaaaaaaaaaaaaakeop/hacheong",
       "marketplace": "hacheong",
-      "fingerprint": "cda16204ca77"
+      "fingerprint": "c15e4569d2ca"
     },
     "dwitbuk": {
-      "version": "1.16.0",
+      "version": "2.0.2",
       "source": "github:guinjaaaaaaaaaaaaaaaaaaaaakeop/dwitbuk",
       "marketplace": "dwitbuk",
-      "fingerprint": "51128fee56ee"
+      "fingerprint": "439dabd0d093"
     }
   },
   "skills": [
@@ -52,7 +52,7 @@
     "mangsang:operate"
   ],
   "denied": [],
-  "skills-fingerprint": "fc6974514c9c",
+  "skills-fingerprint": "1bd277a5f7b5",
   "hooks": [
     {
       "event": "SessionStart",
@@ -361,6 +361,14 @@
       "note": "judge's proposal, applied by the chongdae setup session under the owner's delegated setup; no person read it",
       "reviewed": false
     },
+    "asking what was decided, why, or what stands on a file": {
+      "order": [
+        "jokbo:read",
+        "mangsang:operate"
+      ],
+      "note": "judge's proposal from the 2.0.0 re-judge (the overlap was duplicate under 1.x, authority now), applied unchanged by the chongdae v2 adoption session under the owner's adoption instruction; no person read it",
+      "reviewed": false
+    },
     "before a merge": {
       "order": [
         "plugin:chongdae",
@@ -511,5 +519,7 @@
     }
   },
   "judge": "judged",
-  "warnings": []
+  "warnings": [
+    "engine codex: the workers of implementer, newbie run on it, and `engines` does not require it — add a floor (nothing checks its version)"
+  ]
 }
