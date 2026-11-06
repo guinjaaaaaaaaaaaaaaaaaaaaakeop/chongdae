@@ -136,7 +136,7 @@ class ReviewFreshness(CommandFixture):
                           "while not pathlib.Path(sys.argv[3]).exists(): time.sleep(.02)\n"
                           "sys.exit(0 if good else 1)\n")
         check = shlex.join([sys.executable, str(script), str(source), str(ready), str(release)])
-        self.call("add", "a", "--check", check, code=0)
+        self.call("add", "a", "--check", check, "--allow-outside", code=0)   # contract C7: the script is outside the project
         proc = self.start("run", "a")
         self.wait_for(ready, proc)
         source.write_text("bad\n")

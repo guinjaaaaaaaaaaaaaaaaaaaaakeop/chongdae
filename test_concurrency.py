@@ -109,7 +109,8 @@ class CommandFixture(unittest.TestCase):
                           "pathlib.Path(sys.argv[1]).touch()\n"
                           "while not pathlib.Path(sys.argv[2]).exists(): time.sleep(.02)\n")
         command = shlex.join([sys.executable, str(script), str(ready), str(release)])
-        self.call("add", tid, "--role", "session", "--check", command, project=project, code=0)
+        # contract C7: the check's script lives outside the project
+        self.call("add", tid, "--role", "session", "--check", command, "--allow-outside", project=project, code=0)
         return ready, release
 
 

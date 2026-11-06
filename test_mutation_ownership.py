@@ -128,9 +128,14 @@ class MutationOwnership(unittest.TestCase):
                 self.assertEqual(run("add", "mine", "--target", pj.dir)[0], 0)
                 before = pj.state()
                 code, out = run("adopt", "mine", "source.py", "--why", "mine", "--target", pj.dir)
-                self.assertNotEqual(code, 0, out)
-                self.assertIn("adopt would also change work", out)
-                self.assertEqual(pj.state(), before)
+                if done:
+                    # C1.3: a closed task of another session changes in nothing, so it does not refuse the adopt
+                    self.assertEqual(code, 0, out)
+                    self.assertEqual(pj.state()["tasks"]["work"], before["tasks"]["work"])
+                else:
+                    self.assertNotEqual(code, 0, out)
+                    self.assertIn("adopt would also change work", out)
+                    self.assertEqual(pj.state(), before)
 
     def test_generated_amendment_keeps_the_disputing_sessions_ownership(self):
         with Project() as pj:

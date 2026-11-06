@@ -76,8 +76,7 @@ mangsang, and jokbo: their Codex installs add root `.codex-marketplace-install.j
 which hunsu 1.15.1 counts in its content fingerprint. This awaits a hunsu repair;
 do not use `--take-content` to bypass it. The recorded Claude-host check passes.
 Codex project hooks (`.codex/hooks.json`) are written only by `hunsu lock` from a
-Codex session; this project has none. `{plugin:NAME}` resolves through Claude's
-install records; Codex-only installs need `hunsu.local.json` links (see README limits).
+Codex session; this project has none. `{plugin:NAME}` uses the vendored resolver: local links, chongdae itself, then the declared marketplace on the current host (see README limits).
 
 mangsang has no model here yet: no concepts and nothing registered.
 An impact report of 0 unresolved therefore means nothing is watched, not coverage.

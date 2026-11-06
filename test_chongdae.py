@@ -1437,16 +1437,20 @@ def test_a_plugin_resolves_to_the_copy_this_project_declares_not_the_first_insta
     with Project() as pj:
         home = os.path.join(pj.dir, "claude-home")
         other = os.path.join(pj.dir, "elsewhere")
+        # an install record names a copy on this machine: the resolver takes a record only when its directory exists (C9)
+        old_copy, pub_copy = os.path.join(pj.dir, "old", "w", "1.0.0"), os.path.join(pj.dir, "pub", "w", "1.2.0")
+        os.makedirs(old_copy); os.makedirs(pub_copy)
         write(os.path.join(home, "plugins", "installed_plugins.json"), {"plugins": {
-            "w@oldmarket": [{"scope": "project", "projectPath": other, "installPath": "/old/w/1.0.0"}],
-            "w@pub": [{"scope": "project", "projectPath": pj.dir, "installPath": "/pub/w/1.2.0"}]}})
+            "w@oldmarket": [{"scope": "project", "projectPath": other, "installPath": old_copy}],
+            "w@pub": [{"scope": "project", "projectPath": pj.dir, "installPath": pub_copy}]}})
         devsrc = os.path.join(pj.dir, "devmarket")
         os.makedirs(os.path.join(devsrc, "w"))
         write(os.path.join(home, "plugins", "known_marketplaces.json"), {"devm": {"source": {"source": "directory", "path": devsrc}}})
         write(os.path.join(pj.dir, "hunsu.json"), {"plugins": {"w": {"marketplace": "pub", "version": "1.2.0"}}})
         old = os.environ.get("HUNSU_CLAUDE_DIR"); os.environ["HUNSU_CLAUDE_DIR"] = home
+        host = os.environ.pop("AGENT_HOST", None)   # the Claude Code host's records: a Codex host would read its own (C9)
         try:
-            assert chongdae.plugin_root(pj.dir, "w") == "/pub/w/1.2.0"
+            assert chongdae.plugin_root(pj.dir, "w") == pub_copy
             write(os.path.join(pj.dir, "hunsu.local.json"), {"dev": {"w": "devm"}})
             assert chongdae.plugin_root(pj.dir, "w") == os.path.join(devsrc, "w"), "in development: the source, in place"
             write(os.path.join(pj.dir, "hunsu.local.json"), {})
@@ -1457,6 +1461,8 @@ def test_a_plugin_resolves_to_the_copy_this_project_declares_not_the_first_insta
                 assert "not installed for it here" in str(err)
         finally:
             os.environ.pop("HUNSU_CLAUDE_DIR") if old is None else os.environ.__setitem__("HUNSU_CLAUDE_DIR", old)
+            if host is not None:
+                os.environ["AGENT_HOST"] = host
 
 
 def test_the_record_carries_what_replays_a_run_and_nothing_of_this_machine():
@@ -1473,6 +1479,10 @@ def test_the_record_carries_what_replays_a_run_and_nothing_of_this_machine():
         os.environ["AGENT_HOST"] = "claude-code"   # the simulated host identity is independent of the test runner's host
         try:
             write(os.path.join(pj.dir, "hunsu.lock.json"), {"roles": {"implementer": pj.fake_provider(RESPONSE_DONE)}})
+            # the check below names {plugin:mangsang}: resolved through a link here, never through this machine's own installs
+            # (the resolver takes no copy installed only for another project)
+            os.makedirs(os.path.join(pj.dir, "linked", "mangsang"))
+            write(os.path.join(pj.dir, "hunsu.local.json"), {"links": {"mangsang": os.path.join(pj.dir, "linked")}})
             write(os.path.join(pj.dir, "unrelated.png"), "not this run's\n")   # dirt before the run: nobody's business
             assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
             # a check given with this machine's paths is recorded portably, and still runs here
@@ -2503,16 +2513,20 @@ def test_two_open_session_tasks_the_first_to_finish_does_not_silently_own_the_ot
             assert code == 0 and "measured now: nothing" in out and "src/out.ts: already changed when escape-build was added" in out and "chongdae adopt escape-build src/out.ts" in out, out
             assert pj.state()["tasks"]["escape-build"]["attempts"][-1]["retried"]["measured"] == [], pj.state()["tasks"]["escape-build"]["attempts"]
             assert run("adopt", "escape-build", "nope.ts", "--why", "x", "--target", pj.dir)[0] != 0, "nothing changed it: nothing to attribute"
+            # escape-tests is done: adopt (C1) leaves its record as it was judged and records the adoption beside it, on escape-build
+            done_before = dict(pj.state()["tasks"]["escape-tests"])
             code, out = run("adopt", "escape-build", "src/out.ts", "--why", "written for it before it was added", "--target", pj.dir)
-            assert code == 0 and "adopted src/out.ts into escape-build (from escape-tests: src/out.ts)" in out and "`chongdae run` decides it" in out, out
+            assert code == 0 and "adopted src/out.ts into escape-build" in out and "beside done escape-tests: src/out.ts" in out and "`chongdae run` decides it" in out, out
             st = pj.state()["tasks"]
-            assert "src/out.ts" not in st["escape-tests"]["touched"] and st["escape-tests"]["gave"][0]["to"] == "escape-build" and "shared" not in st["escape-tests"], st["escape-tests"]
-            assert chongdae.is_agent(st["escape-build"]["adopted"][0]["by"]) and st["escape-build"]["adopted"][0]["from"] == {"escape-tests": ["src/out.ts"]}, st["escape-build"]
+            assert st["escape-tests"] == done_before and "src/out.ts" in st["escape-tests"]["touched"] and "gave" not in st["escape-tests"], st["escape-tests"]
+            assert st["escape-tests"]["shared"] == {"src/out.ts": ["escape-build"]}, st["escape-tests"]
+            assert chongdae.is_agent(st["escape-build"]["adopted"][0]["by"]) and st["escape-build"]["adopted"][0]["beside"] == {"escape-tests": ["src/out.ts"]}, st["escape-build"]
+            assert "from" not in st["escape-build"]["adopted"][0], st["escape-build"]
             code, out = run("run", "--target", pj.dir)
             assert code == 0 and "done escape-build" in out, out
             assert pj.state()["tasks"]["escape-build"]["touched"] == ["src/out.ts"], pj.state()["tasks"]["escape-build"]
             code, out = run("show", "--target", pj.dir)
-            assert "adopted src/out.ts (from escape-tests: src/out.ts) — by the session (" in out and "gave src/out.ts to escape-build at" in out, out
+            assert "adopted src/out.ts" in out and "beside" in out and "later adopted by escape-build: src/out.ts" in out and "gave src/out.ts to escape-build at" not in out, out
             # the brief reads (jokbo): a note on the file, the map
             code, out = run("show", "--path", "src/out.ts", "--brief", "--target", pj.dir)
             lines = out.strip().splitlines()
@@ -2531,7 +2545,9 @@ def test_two_open_session_tasks_the_first_to_finish_does_not_silently_own_the_ot
 def test_a_file_both_open_tasks_measure_is_said_and_left_to_both_until_adopted():
     """The other order: both tasks open, the file written after both were added, the second one's brief naming it. The first to
     finish counts it and says so; it is not pinned away from the second (a guess), which keeps measuring it; a file the second
-    does not name is pinned as before. `adopt` settles it; a dropped or open task that changed a file is the note's second line."""
+    does not name is pinned as before. `adopt` settles it while the other task is open; once both are done their records
+    stand as judged (C1: a closed task's record is never rewritten, and nothing is adopted into it); a dropped or open task
+    that changed a file is the note's second line."""
     with Project() as pj:
         os.environ["CHONGDAE_USER"] = "kim"
         try:
@@ -2547,14 +2563,17 @@ def test_a_file_both_open_tasks_measure_is_said_and_left_to_both_until_adopted()
             assert out.startswith("open now: task b in run-") or out.startswith("open now: task a in run-"), out
             code, out = run("run", "--target", pj.dir)
             assert code == 0 and "done a" in out and "done b" in out and "note: src/x.py changed after b was added, and b's brief names it" in out, out
+            assert "to settle it as a's" not in out, "a is closed once done: the note offers no adopt into it (C1)"
             st = pj.state()["tasks"]
             assert st["a"]["touched"] == ["PLAN.md", "src/x.py"] and st["a"]["shared"] == {"src/x.py": ["b"]}, st["a"]
             assert "src/x.py: also b's by its own word — whose it is was not settled (`adopt`)" in run("show", "--target", pj.dir)[1]
             assert st["b"]["touched"] == ["src/x.py"] and st["b"]["pinned"] == {"PLAN.md": "a"}, st["b"]
+            # both are done: adopt into b is refused and nothing is written (C1.4); a keeps the file and its shared mark
+            before = pj.state()
             code, out = run("adopt", "b", "src/x.py", "--why", "b's work", "--delegated", "owner: settle it", "--target", pj.dir)
-            assert code == 0 and "from a: src/x.py" in out, out
+            assert code != 0 and "b is done" in out and "a closed task's record stands as it was judged" in out, out
             st = pj.state()["tasks"]
-            assert st["a"]["touched"] == ["PLAN.md"] and "shared" not in st["a"] and st["b"]["adopted"][0]["delegated"] == "owner: settle it", st
+            assert pj.state() == before and st["a"]["touched"] == ["PLAN.md", "src/x.py"] and st["a"]["shared"] == {"src/x.py": ["b"]} and "adopted" not in st["b"], st
             assert run("add", "c", "--brief", "try README", "--target", pj.dir)[0] == 0
             write(os.path.join(pj.dir, "README.md"), "# r2\n")
             assert run("drop", "c", "--why", "superseded", "--target", pj.dir)[0] == 0
@@ -4361,6 +4380,8 @@ if __name__ == "__main__":
         "test_operation_handover",
         "test_public_projection",
         "test_payload",
+        "test_verifier_reads", "test_close_review", "test_worktree_host", "test_adopt_record",
+        "test_amend", "test_outside_checks", "test_check_plan", "test_inspection",
     ])
     concurrent = unittest.TextTestRunner(verbosity=2).run(suite)
     failed += len(concurrent.failures) + len(concurrent.errors)

@@ -25,10 +25,10 @@ REPO_REAL = os.path.realpath(REPO)
 PLUGIN = os.path.join(REPO, "plugin")
 HOME_DIR = os.path.expanduser("~")
 
-COMMANDS = sorted("accept add adopt claim close confirm delegate did dispute drop init recheck report retry run show status take unstage".split())
+COMMANDS = sorted("accept add adopt amend claim close confirm delegate did dispute drop init recheck report retry run show status take unstage".split())
 HOOK_FILES = ("hooks.json", "codex.json", "pre_bash.py", "pre_write.py", "session_start.py")
 MANIFESTS = ("plugin.json", os.path.join(".claude-plugin", "plugin.json"), os.path.join(".codex-plugin", "plugin.json"))
-K1_FILES = (["chongdae.py", "README.md", "LICENSE", os.path.join("skills", "run", "SKILL.md")] + list(MANIFESTS)
+K1_FILES = (["chongdae.py", "pluginroot.py", "README.md", "LICENSE", os.path.join("skills", "run", "SKILL.md")] + list(MANIFESTS)
             + [os.path.join("hooks", h) for h in HOOK_FILES] + [os.path.join("commands", c + ".md") for c in COMMANDS])
 DEV_NAMES = ("test_*.py", "*_test.py", "tests", "AGENTS.md", "CLAUDE.md", "SELFHOSTING.md", "hunsu.json", "hunsu.lock.json",
              "hunsu.local.json", "hunsu-judgments.json", "hunsu-conflicts.md", ".chongdae", "reviews", ".dwitbuk", ".jokbo",
@@ -37,6 +37,9 @@ DEV_NAMES = ("test_*.py", "*_test.py", "tests", "AGENTS.md", "CLAUDE.md", "SELFH
 STRIP = ("AGENT_WORKER", "PYTHONPATH", "CLAUDE_PLUGIN_ROOT", "PLUGIN_ROOT", "CODEX_THREAD_ID", "PWD", "OLDPWD")
 IDENTITY = {"GIT_AUTHOR_NAME": "payload test", "GIT_AUTHOR_EMAIL": "payload@test.invalid",
             "GIT_COMMITTER_NAME": "payload test", "GIT_COMMITTER_EMAIL": "payload@test.invalid"}
+# C9: plugin/pluginroot.py is the plugin family's shared resolver, vendored byte-identical from dwitbuk 2.2.1
+PLUGINROOT = os.path.join(PLUGIN, "pluginroot.py")
+PLUGINROOT_SHA256 = "6318838886010a99b209728af9368d4a7c816bd7b4266fb69bef3d36e23eb35e"
 MD_LINK = re.compile(r"!?\[[^\]]*\]\(\s*<?([^)\s>]+)>?(?:\s+\"[^\"]*\")?\s*\)")
 
 
@@ -54,6 +57,12 @@ def write(path, text):
 def load(path):
     with open(path, encoding="utf-8") as fh:
         return json.load(fh)
+
+
+def plugin_manifest(directory, name, version=None):
+    """A plugin manifest (`.claude-plugin/plugin.json`) in `directory` naming `name`: a directory a catalog selects is a
+    plugin the shared resolver can read (its catalog rule takes only manifest-bearing directories)."""
+    write(os.path.join(directory, ".claude-plugin", "plugin.json"), dict({"name": name}, **({"version": version} if version else {})))
 
 
 def walk_payload(root):
@@ -374,9 +383,19 @@ class Payload(unittest.TestCase):
             for needle in {REPO, REPO_REAL, HOME_DIR, os.path.realpath(HOME_DIR)}:
                 if needle.encode() in data:
                     found.append((os.path.relpath(f, PLUGIN), needle))
-            if b"../" in data:
+            # C9: the vendored resolver's docstring cites a parent-directory path from a review; its bytes are the
+            # vendored digest instead (test_k3_the_vendored_resolver_is_byte_identical); the machine-path rules above still apply
+            if b"../" in data and os.path.realpath(f) != os.path.realpath(PLUGINROOT):
                 found.append((os.path.relpath(f, PLUGIN), "../"))
         self.assertEqual(found, [])
+
+    def test_k3_the_vendored_resolver_is_byte_identical(self):
+        """K3/C9.1: plugin/pluginroot.py, exempt from the `../` text rule, is the vendored file (its sha256)."""
+        self.need_payload()
+        import hashlib
+        self.assertTrue(os.path.isfile(PLUGINROOT), "no plugin/pluginroot.py")
+        with open(PLUGINROOT, "rb") as fh:
+            self.assertEqual(hashlib.sha256(fh.read()).hexdigest(), PLUGINROOT_SHA256)
 
     def test_k3_copy_runs_outside_the_repository(self):
         copy = self.copy_payload()
@@ -683,6 +702,7 @@ class Payload(unittest.TestCase):
 
         def build(d):
             os.makedirs(os.path.join(d, "plugin"))
+            plugin_manifest(os.path.join(d, "plugin"), "w")
             os.makedirs(os.path.join(d, "w"))   # the catalog wins over the old D/name rule
             write(os.path.join(d, ".claude-plugin", "marketplace.json"), {"name": "m", "plugins": [{"name": "w", "source": "./plugin"}]})
         d, got = self.linked(env, build)
@@ -693,6 +713,7 @@ class Payload(unittest.TestCase):
 
         def build(d):
             os.makedirs(os.path.join(d, "plugin"))
+            plugin_manifest(os.path.join(d, "plugin"), "w")
             write(os.path.join(d, ".agents", "plugins", "marketplace.json"),
                   {"name": "m", "plugins": [{"name": "w", "source": {"source": "local", "path": "./plugin"}}]})
         d, got = self.linked(env, build)
@@ -703,6 +724,7 @@ class Payload(unittest.TestCase):
 
         def build(d):
             os.makedirs(os.path.join(d, "plugin"))
+            plugin_manifest(os.path.join(d, "plugin"), "w")
             os.makedirs(os.path.join(d, "elsewhere"))
             write(os.path.join(d, ".claude-plugin", "marketplace.json"), {"name": "m", "plugins": [{"name": "other", "source": "./elsewhere"}]})
             write(os.path.join(d, ".agents", "plugins", "marketplace.json"),
@@ -751,6 +773,7 @@ class Payload(unittest.TestCase):
 
         def build(d):
             os.makedirs(os.path.join(d, "plugin"))
+            plugin_manifest(os.path.join(d, "plugin"), "w")
             write(os.path.join(d, ".claude-plugin", "marketplace.json"), {"name": "devm", "plugins": [{"name": "w", "source": "./plugin"}]})
         d, got = self.directory_marketplace(env, build)
         self.assertEqual(got, os.path.realpath(os.path.join(d, "plugin")))
@@ -772,6 +795,7 @@ class Payload(unittest.TestCase):
         env = self.env()
         d = self.tmp("chongdae-payload-linked-")
         os.makedirs(os.path.join(d, "pkg"))
+        plugin_manifest(os.path.join(d, "pkg"), "zz-anything")
         write(os.path.join(d, ".claude-plugin", "marketplace.json"), {"name": "m", "plugins": [{"name": "zz-anything", "source": "./pkg"}]})
         target = self.tmp("chongdae-payload-target-")
         write(os.path.join(target, "hunsu.local.json"), {"links": {"zz-anything": d}})
@@ -973,11 +997,16 @@ class Payload(unittest.TestCase):
         return (("link", self.link_to), ("directory marketplace", self.market_to))
 
     def child(self, b, name, claude=None, codex=None, dirs=("plugin",)):
-        """B/name: a checkout holding the given catalogs (plugins[] lists) and directories."""
+        """B/name: a checkout holding the given catalogs (plugins[] lists) and directories. When an entry for `name` selects
+        ./plugin, plugin/ holds a manifest naming `name`, as a real payload does; no other selected directory gets one."""
         c = os.path.join(b, name)
         os.makedirs(c, exist_ok=True)
         for x in dirs:
             os.makedirs(os.path.join(c, x), exist_ok=True)
+        for entry in (claude or []) + (codex or []):
+            src = entry.get("source")
+            if entry.get("name") == name and src in ("./plugin", {"source": "local", "path": "./plugin"}) and os.path.isdir(os.path.join(c, "plugin")):
+                plugin_manifest(os.path.join(c, "plugin"), name)
         if claude is not None:
             write(os.path.join(c, ".claude-plugin", "marketplace.json"), {"name": "m", "plugins": claude})
         if codex is not None:
@@ -1007,6 +1036,7 @@ class Payload(unittest.TestCase):
                     self.child(b, name, claude=[{"name": name, "source": "./plugin"}])
                     if direct:
                         os.makedirs(os.path.join(b, "direct"))
+                        plugin_manifest(os.path.join(b, "direct"), name)
                         write(os.path.join(b, ".claude-plugin", "marketplace.json"), {"name": "devm", "plugins": [{"name": name, "source": "./direct"}]})
                 d, got = resolve(self.env(), name, build)
                 self.assertEqual(got, os.path.realpath(os.path.join(d, name, "plugin")), (how, name, "child only"))
@@ -1178,6 +1208,8 @@ class Payload(unittest.TestCase):
         parent = os.path.dirname(m)
         outside = parent if style == "dotdot" else os.path.join(parent, "outside")
         os.makedirs(os.path.join(outside, "plugin"), exist_ok=True)
+        # a plugin manifest naming probe: the directory the escaping catalog selects would be taken if that catalog were read
+        write(os.path.join(outside, "plugin", ".claude-plugin", "plugin.json"), {"name": "probe", "version": "1.0.0"})
         for _label, rel, body in catalogs:
             write(os.path.join(outside, *rel), body)
         if style == "relative":
@@ -1290,6 +1322,7 @@ sys.stdout.write(json.dumps({"root": root, "opened": opened}))
                 def build(m, style=style, rel=rel, body=body):
                     real = os.path.join(m, "checkouts", "probe")
                     os.makedirs(os.path.join(real, "plugin"))
+                    plugin_manifest(os.path.join(real, "plugin"), "probe")
                     write(os.path.join(real, *rel), body)
                     os.symlink(os.path.join("checkouts", "probe") if style == "relative" else real, os.path.join(m, "probe"))
                 for how, resolve in self.raw_resolvers():
@@ -1302,6 +1335,379 @@ sys.stdout.write(json.dumps({"root": root, "opened": opened}))
                 out = self.checkout_probe(m, self.env())
                 self.assertEqual(os.path.realpath(out["root"]), os.path.realpath(os.path.join(m, "checkouts", "probe", "plugin")),
                                  ("checkout_root", style, _label))
+
+    # ---------- C9 `{plugin:NAME}` through the vendored resolver ----------
+
+    C9_PROBE = r'''
+import json, os, sys
+where, target, name, calls, versions = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4]), sys.argv[5] == "1"
+sys.path.insert(0, where)   # plugin/ (as a hook or a test has it) or the repository root (the shim only)
+import chongdae
+out = {"roots": [], "error": None}
+try:
+    for _ in range(calls):
+        out["roots"].append(chongdae.plugin_root(target, name))
+except SystemExit as err:
+    out["error"] = "" if err.code is None else str(err.code)
+if versions:
+    out["versions"] = chongdae.plugin_versions(target, ["{plugin:%s}/x" % name])
+out["engine"] = os.path.realpath(chongdae.__file__)
+out["resolvers"] = sorted({os.path.realpath(m.__file__) for m in list(sys.modules.values())
+                           if getattr(m, "__file__", None) and os.path.basename(m.__file__).startswith("pluginroot")})
+sys.stdout.write(json.dumps(out))
+'''
+
+    def c9_env(self, host="claude-code", **extra):
+        """A stripped environment with its own (empty) Claude and Codex homes; host None leaves AGENT_HOST unset."""
+        env = self.env(**extra)
+        for k in ("HUNSU_CODEX_DIR", "AGENT_CODEX_HOME"):
+            env.pop(k, None)
+        env["CODEX_HOME"] = os.path.join(env["HOME"], ".codex")
+        os.makedirs(env["CODEX_HOME"], exist_ok=True)
+        if host is None:
+            env.pop("AGENT_HOST", None)
+        else:
+            env["AGENT_HOST"] = host
+        return env
+
+    def c9_codex_install(self, env, market, name, version, enabled=True):
+        """A Codex install: config.toml [plugins."NAME@MARKET"] enabled, and its cache copy with a Codex manifest."""
+        home = env["CODEX_HOME"]
+        root = os.path.join(home, "plugins", "cache", market, name, version)
+        write(os.path.join(root, ".codex-plugin", "plugin.json"), {"name": name, "version": version})
+        config = os.path.join(home, "config.toml")
+        text = open(config, encoding="utf-8").read() if os.path.isfile(config) else ""
+        write(config, text + '[plugins."%s@%s"]\nenabled = %s\n\n' % (name, market, "true" if enabled else "false"))
+        return root
+
+    def c9_claude_install(self, env, market, name, version):
+        """A Claude Code user-scope install: installed_plugins.json NAME@MARKET with an existing installPath."""
+        root = os.path.join(self.tmp("chongdae-payload-claude-cache-"), market, name, version)
+        write(os.path.join(root, ".claude-plugin", "plugin.json"), {"name": name, "version": version})
+        reg = os.path.join(env["HUNSU_CLAUDE_DIR"], "plugins", "installed_plugins.json")
+        doc = load(reg) if os.path.isfile(reg) else {"version": 2, "plugins": {}}
+        doc["plugins"].setdefault("%s@%s" % (name, market), []).append(
+            {"scope": "user", "installPath": root, "version": version, "installedAt": "2026-11-06T00:00:00.000Z"})
+        write(reg, doc)
+        return root
+
+    def c9_target(self, plugins=None, local=None):
+        target = self.tmp("chongdae-payload-target-")
+        if plugins is not None:
+            write(os.path.join(target, "hunsu.json"), {"plugins": plugins})
+        if local is not None:
+            write(os.path.join(target, "hunsu.local.json"), local)
+        return target
+
+    def c9_probe(self, target, name, env, where=PLUGIN, calls=1, versions=False):
+        """plugin_root (calls times) and optionally plugin_versions in one fresh process: (result dict, stderr)."""
+        self.need_payload()
+        d = self.sh([sys.executable, "-c", self.C9_PROBE, where, target, name, str(calls), "1" if versions else "0"], self.tmp(), env)
+        self.assertEqual(d.returncode, 0, ("the probe itself failed", d.stdout, d.stderr))
+        return json.loads(d.stdout), d.stderr
+
+    def assert_c9_root(self, out, err, want, what):
+        self.assertIsNone(out["error"], (what, "plugin_root raised", out["error"], err))
+        self.assertTrue(out["roots"], (what, out))
+        self.assertEqual(os.path.realpath(out["roots"][0]), os.path.realpath(want), (what, out, err))
+
+    def assert_c9_fails(self, out, err, what, *needles):
+        self.assertFalse(out["roots"], (what, "a root was returned", out, err))
+        self.assertIsNotNone(out["error"], (what, out, err))
+        said = out["error"] + "\n" + err
+        for n in needles:
+            self.assertIn(n, said, (what, said))
+        return said
+
+    W_DECL = {"w": {"marketplace": "m", "version": "1.0.0"}}
+
+    def test_C9_2_codex_only_reproducer_resolves_to_the_cache_copy(self):
+        """Log 48 finding 1: w@m declared, installed only on Codex (config.toml enabled, cache m/w/1.0.0), AGENT_HOST=codex →
+        the cache directory; today 'declared for this project but not installed for it here'."""
+        env = self.c9_env("codex")
+        cache = self.c9_codex_install(env, "m", "w", "1.0.0")
+        out, err = self.c9_probe(self.c9_target(self.W_DECL), "w", env)
+        self.assert_c9_root(out, err, cache, "codex-only")
+        self.assertNotIn("note:", err, "the copy is the pin: no note")
+
+    def test_C9_2_codex_only_check_runs_the_codex_copy_through_the_cli(self):
+        """C9.2 as a session meets it: a check `{plugin:w}/tool.py` in a project declaring w@m, w installed only on Codex,
+        AGENT_HOST=codex, the payload engine's init/add/run → the cache copy's tool runs and T1 is done."""
+        self.need_payload()
+        env = self.c9_env("codex")
+        cache = self.c9_codex_install(env, "m", "w", "1.0.0")
+        marker = os.path.join(self.tmp("chongdae-payload-marker-"), "ran.txt")
+        write(os.path.join(cache, "tool.py"),
+              "import os\nopen(%r, 'w').write(os.path.realpath(os.path.dirname(os.path.abspath(__file__))))\n" % marker)
+        proj = self.tmp("chongdae-payload-project-")
+        self.git(proj, env, "init", "-q")
+        write(os.path.join(proj, "README.md"), "a fixture project\n")
+        write(os.path.join(proj, "hunsu.json"), {"plugins": self.W_DECL})
+        self.git(proj, env, "add", "-A")
+        self.git(proj, env, "commit", "-qm", "base")
+        d, said = self.l3_workflow(env, proj, "w")
+        self.assertNotIn("not installed for it here", said)
+        self.assertTrue(os.path.isfile(marker), "the tool never ran from the Codex cache: exit %s\n%s" % (d.returncode, said))
+        with open(marker, encoding="utf-8") as fh:
+            self.assertEqual(fh.read(), os.path.realpath(cache))
+        self.assertEqual(d.returncode, 0, said)
+        self.assertIn("done T1", said)
+
+    def test_C9_2_codex_host_never_takes_the_claude_copy(self):
+        """C9.2: w@m installed only for Claude Code; AGENT_HOST=codex → no root, the reason says not installed here and names
+        the host — never the other host's copy."""
+        env = self.c9_env("codex")
+        claude = self.c9_claude_install(env, "m", "w", "1.0.0")
+        out, err = self.c9_probe(self.c9_target(self.W_DECL), "w", env)
+        said = self.assert_c9_fails(out, err, "claude copy under codex", "not installed for it here", "codex")
+        self.assertFalse(any(os.path.realpath(r) == os.path.realpath(claude) for r in out["roots"]))
+
+    def test_C9_2_claude_only_install_still_resolves(self):
+        """C9.2: w@m installed only for Claude Code (user scope), AGENT_HOST=claude-code or unset → its installPath."""
+        for host in ("claude-code", None):
+            env = self.c9_env(host)
+            claude = self.c9_claude_install(env, "m", "w", "1.0.0")
+            out, err = self.c9_probe(self.c9_target(self.W_DECL), "w", env)
+            self.assert_c9_root(out, err, claude, ("claude-only", host))
+            self.assertIn(os.path.realpath(PLUGINROOT), out["resolvers"], ("claude-only", host, "the vendored resolver is not what ran"))
+
+    def test_C9_2_installed_on_both_hosts_resolves_to_the_selected_hosts_copy(self):
+        """C9.2: w@m on both hosts → AGENT_HOST=codex gives the Codex cache copy; no AGENT_HOST (and claude-code) gives Claude's."""
+        for host in ("codex", None, "claude-code"):
+            env = self.c9_env(host)
+            cache = self.c9_codex_install(env, "m", "w", "1.0.0")
+            claude = self.c9_claude_install(env, "m", "w", "1.0.0")
+            out, err = self.c9_probe(self.c9_target(self.W_DECL), "w", env)
+            self.assert_c9_root(out, err, cache if host == "codex" else claude, ("both hosts", host))
+
+    def test_C9_2_the_same_name_in_two_marketplaces(self):
+        """C9.2: w in marketplaces m and n on the selected host → the declared one; undeclared → fails naming both."""
+        for host in ("codex", "claude-code"):
+            env = self.c9_env(host)
+            install = self.c9_codex_install if host == "codex" else self.c9_claude_install
+            in_m, in_n = install(env, "m", "w", "1.0.0"), install(env, "n", "w", "1.0.0")
+            for market, want in (("m", in_m), ("n", in_n)):
+                out, err = self.c9_probe(self.c9_target({"w": {"marketplace": market, "version": "1.0.0"}}), "w", env)
+                self.assert_c9_root(out, err, want, (host, "declared", market))
+            for plugins in ({"w": {"version": "1.0.0"}}, None):
+                out, err = self.c9_probe(self.c9_target(plugins), "w", env)
+                said = self.assert_c9_fails(out, err, (host, "undeclared", plugins), "m, n")
+                self.assertIn("marketplace", said)
+                self.assertIn(host, said, (host, "the reason names the host"))
+
+    def test_C9_3_a_copy_off_the_pin_resolves_with_one_note_on_stderr(self):
+        """C9.3: the Codex copy is 1.1.0, the pin 1.0.0 → the copy, and `note: <note>` on stderr exactly once in a process
+        that resolves it twice; the same for a Claude copy."""
+        for host in ("codex", "claude-code"):
+            env = self.c9_env(host)
+            root = (self.c9_codex_install if host == "codex" else self.c9_claude_install)(env, "m", "w", "1.1.0")
+            out, err = self.c9_probe(self.c9_target(self.W_DECL), "w", env, calls=2)
+            self.assert_c9_root(out, err, root, (host, "off the pin"))
+            notes = [ln for ln in err.splitlines() if ln.startswith("note: ")]
+            self.assertEqual(len(notes), 1, (host, err))
+            self.assertIn("hunsu.json declares w 1.0.0", notes[0], host)
+            self.assertIn("1.1.0", notes[0], host)
+            self.assertIn(host, notes[0], host)
+
+    def c9_note_texts(self, versions):
+        notes = versions.get("notes")
+        if isinstance(notes, dict):
+            return [v for v in strings(notes)]
+        if isinstance(notes, list):
+            return list(strings(notes))
+        return [] if notes is None else [str(notes)]
+
+    def test_C9_3_plugin_versions_carries_the_note_without_machine_paths(self):
+        """C9.3: plugin_versions(target, ["{plugin:w}/x"]) carries the off-pin note under `notes`, this machine's paths
+        taken out; still one `note:` line on stderr for the process."""
+        env = self.c9_env("codex")
+        cache = self.c9_codex_install(env, "m", "w", "1.1.0")
+        target = self.c9_target(self.W_DECL)
+        out, err = self.c9_probe(target, "w", env, calls=1, versions=True)
+        self.assert_c9_root(out, err, cache, "off the pin")
+        texts = self.c9_note_texts(out["versions"])
+        self.assertTrue(any("hunsu.json declares w 1.0.0" in t and "1.1.0" in t for t in texts), out["versions"])
+        blob = json.dumps(out["versions"].get("notes"))
+        for p in {cache, os.path.realpath(cache), env["HOME"], os.path.realpath(env["HOME"]), env["CODEX_HOME"], target}:
+            self.assertNotIn(p, blob, ("a machine path in notes", p))
+        self.assertEqual(len([ln for ln in err.splitlines() if ln.startswith("note: ")]), 1, err)
+
+    def test_C9_3_no_note_when_the_copy_is_the_pin_or_the_call_names_another_plugin(self):
+        """C9.3 control: a copy at the pin gives no note anywhere; an argv not naming the off-pin plugin carries none of its notes."""
+        env = self.c9_env("codex")
+        cache = self.c9_codex_install(env, "m", "w", "1.0.0")
+        out, err = self.c9_probe(self.c9_target(self.W_DECL), "w", env, versions=True)
+        self.assert_c9_root(out, err, cache, "at the pin")
+        self.assertNotIn("note:", err)
+        self.assertEqual(self.c9_note_texts(out["versions"]), [])
+        self.assertEqual(out["versions"]["used"].get("w", "").split("+")[0], "1.0.0", out["versions"])
+        env = self.c9_env("codex")
+        self.c9_codex_install(env, "m", "w", "1.1.0")
+        self.c9_codex_install(env, "m", "v", "1.0.0")
+        target = self.c9_target({"w": {"marketplace": "m", "version": "1.0.0"}, "v": {"marketplace": "m", "version": "1.0.0"}})
+        out, err = self.c9_probe(target, "v", env, versions=True)
+        self.assertIsNone(out["error"], (out, err))
+        self.assertFalse(any("declares w" in t for t in self.c9_note_texts(out["versions"])), out["versions"])
+        self.assertNotIn("declares w", err)
+        self.assertIn(os.path.realpath(PLUGINROOT), out["resolvers"], "the vendored resolver is not what ran")
+
+    def test_C9_2_a_link_to_a_missing_directory_fails_with_its_reason(self):
+        """C9.2: hunsu.local.json links w to a directory that does not exist → no root, the resolver's reason (link
+        directory is missing, naming it) — no fallback to an install, even one at the pin."""
+        for host in ("codex", "claude-code"):
+            env = self.c9_env(host)
+            (self.c9_codex_install if host == "codex" else self.c9_claude_install)(env, "m", "w", "1.0.0")
+            gone = os.path.join(self.tmp("chongdae-payload-gone-"), "absent")
+            out, err = self.c9_probe(self.c9_target(self.W_DECL, {"links": {"w": gone}}), "w", env)
+            self.assert_c9_fails(out, err, (host, "missing link"), "link directory is missing", gone)
+
+    def test_C9_2_a_link_wins_over_an_install_on_codex(self):
+        """C9.2 order: a hunsu.local.json link for w first, before the Codex install."""
+        env = self.c9_env("codex")
+        self.c9_codex_install(env, "m", "w", "1.0.0")
+        d = self.tmp("chongdae-payload-linked-")
+        write(os.path.join(d, ".codex-plugin", "plugin.json"), {"name": "w", "version": "1.0.0"})
+        out, err = self.c9_probe(self.c9_target(self.W_DECL, {"links": {"w": d}}), "w", env)
+        self.assert_c9_root(out, err, d, "link first")
+        self.assertIn(os.path.realpath(PLUGINROOT), out["resolvers"], "the vendored resolver is not what ran")
+
+    def test_C9_1_the_shim_imports_the_vendored_module_not_a_sibling(self):
+        """C9.1: the engine loaded through the root shim (the payload directory not on sys.path), with a decoy
+        `pluginroot.py` first on PYTHONPATH, resolves the Codex-only reproducer through plugin/pluginroot.py."""
+        decoy = self.tmp("chongdae-payload-decoy-")
+        write(os.path.join(decoy, "pluginroot.py"), "raise ImportError('the decoy pluginroot was imported')\n")
+        env = self.c9_env("codex", PYTHONPATH=decoy)
+        cache = self.c9_codex_install(env, "m", "w", "1.0.0")
+        out, err = self.c9_probe(self.c9_target(self.W_DECL), "w", env, where=REPO)
+        self.assertEqual(out["engine"], os.path.realpath(os.path.join(PLUGIN, "chongdae.py")))
+        self.assertEqual(out["resolvers"], [os.path.realpath(PLUGINROOT)], (out, err))
+        self.assert_c9_root(out, err, cache, "through the shim")
+
+    def test_C9_1_the_shim_cli_resolves_through_the_vendored_module(self):
+        """C9.1: `python3 <repo>/chongdae.py --help` loads plugin/pluginroot.py (and nothing named pluginroot elsewhere),
+        and a run started through the shim resolves a Codex-only `{plugin:w}`."""
+        self.need_payload()
+        decoy = self.tmp("chongdae-payload-decoy-")
+        write(os.path.join(decoy, "pluginroot.py"), "raise ImportError('the decoy pluginroot was imported')\n")
+        env = self.c9_env("codex", PYTHONPATH=decoy)
+        cache = self.c9_codex_install(env, "m", "w", "1.0.0")
+        shim = os.path.join(REPO, "chongdae.py")
+        spy = os.path.join(self.tmp(), "spy.py")
+        log = os.path.join(self.tmp(), "spy.json")
+        write(spy, "import json, os, runpy, sys\nLOG, SHIM = sys.argv[1], sys.argv[2]\nsys.argv = [SHIM] + sys.argv[3:]\n"
+                   "sys.path[0] = os.path.dirname(SHIM)\ncode = 0\n"
+                   "try:\n    runpy.run_path(SHIM, run_name='__main__')\n"
+                   "except SystemExit as e:\n    code = e.code if isinstance(e.code, int) else (0 if e.code is None else 1)\n"
+                   "finally:\n    json.dump(sorted({os.path.realpath(m.__file__) for m in list(sys.modules.values()) if getattr(m, '__file__', None)"
+                   " and os.path.basename(m.__file__).startswith('pluginroot')}), open(LOG, 'w'))\nsys.exit(code)\n")
+        d = self.sh([sys.executable, spy, log, shim, "--help"], self.tmp(), env)
+        self.assertEqual(d.returncode, 0, d.stdout + d.stderr)
+        self.assertEqual(load(log), [os.path.realpath(PLUGINROOT)], "--help through the shim")
+        proj = self.tmp("chongdae-payload-project-")
+        self.git(proj, env, "init", "-q")
+        write(os.path.join(proj, "README.md"), "a fixture project\n")
+        write(os.path.join(proj, "hunsu.json"), {"plugins": self.W_DECL})
+        self.git(proj, env, "add", "-A")
+        self.git(proj, env, "commit", "-qm", "base")
+        marker = os.path.join(self.tmp("chongdae-payload-marker-"), "ran.txt")
+        write(os.path.join(cache, "tool.py"), "open(%r, 'w').write('ran')\n" % marker)
+        said = ""
+        for args in (["init", "--session", "--goal", "through the shim on codex"],
+                     ["add", "T1", "--check", "%s {plugin:w}/tool.py" % shlex.quote(sys.executable)]):
+            d = self.sh([sys.executable, shim] + args, proj, env)
+            said += d.stdout + d.stderr
+            self.assertEqual(d.returncode, 0, said)
+        write(os.path.join(proj, "work.txt"), "the work of T1\n")
+        for _ in range(15):
+            d = self.sh([sys.executable, spy, log, shim, "run"], proj, env)
+            said += d.stdout + d.stderr
+            if d.returncode != 4:
+                break
+        self.assertNotIn("not installed for it here", said)
+        self.assertTrue(os.path.isfile(marker), "the shim's run never ran the Codex copy: exit %s\n%s" % (d.returncode, said))
+        self.assertEqual(d.returncode, 0, said)
+        self.assertIn("done T1", said)
+        self.assertEqual(load(log), [os.path.realpath(PLUGINROOT)], "run through the shim")
+
+    C9_WRAPPER_PROBE = r'''
+import json, os, sys
+sys.path.insert(0, sys.argv[1])
+import chongdae
+m, kind = sys.argv[2], sys.argv[3]
+mods = [x for x in list(sys.modules.values()) if getattr(x, "__file__", None)
+        and os.path.realpath(x.__file__) == os.path.realpath(os.path.join(sys.argv[1], "pluginroot.py"))]
+out = {"resolver": bool(mods)}
+if mods:
+    pr = mods[0]
+    sentinel = os.path.join(m, "SENTINEL")
+    calls = []
+    def fake(directory, name, errors=None):
+        calls.append([directory, name])
+        return sentinel
+    if kind == "sentinel":
+        pr.in_place = fake
+        pr.catalog_source = fake
+    out["calls"] = calls
+out["checkout"] = {n: chongdae.checkout_root(m, n) for n in ("probe", "sub/probe", "absent")}
+out["catalog_root"] = hasattr(chongdae, "catalog_root")
+if out["catalog_root"] and kind == "sentinel":
+    out["catalog"] = chongdae.catalog_root(m, "probe")
+sys.stdout.write(json.dumps(out))
+'''
+
+    def test_C9_4_checkout_root_is_the_resolvers_in_place_then_the_legacy_child(self):
+        """C9.4: checkout_root(root, name) is a thin wrapper — whatever the resolver's in_place returns wins (a sentinel
+        stands in for it); with in_place giving nothing, the one-component child that is a directory, else None; and
+        catalog_root is gone or only a call into the resolver."""
+        self.need_payload()
+        m = os.path.join(self.tmp("chongdae-payload-folder-"), "M")
+        os.makedirs(os.path.join(m, "probe"))
+        os.makedirs(os.path.join(m, "sub", "probe"))
+        env = self.env()
+        d = self.sh([sys.executable, "-c", self.C9_WRAPPER_PROBE, PLUGIN, m, "sentinel"], self.tmp(), env)
+        self.assertEqual(d.returncode, 0, d.stdout + d.stderr)
+        out = json.loads(d.stdout)
+        self.assertTrue(out["resolver"], "the engine did not load plugin/pluginroot.py")
+        self.assertEqual(out["checkout"]["probe"], os.path.join(m, "SENTINEL"), out)
+        if out["catalog_root"]:
+            self.assertEqual(out["catalog"], os.path.join(m, "SENTINEL"), "catalog_root kept its own catalog reading")
+        d = self.sh([sys.executable, "-c", self.C9_WRAPPER_PROBE, PLUGIN, m, "real"], self.tmp(), env)
+        self.assertEqual(d.returncode, 0, d.stdout + d.stderr)
+        out = json.loads(d.stdout)
+        self.assertEqual(out["checkout"], {"probe": os.path.join(m, "probe"), "sub/probe": None, "absent": None}, out)
+
+    def test_C9_4_an_escaping_child_with_a_manifest_outside_is_still_taken_as_named(self):
+        """C9.4/M1 through the resolver: outside/plugin holds a manifest naming probe, every escape style and catalog kind,
+        a link and a directory marketplace on either host → M/probe; and the resolver is what ran."""
+        for how, resolve in self.raw_resolvers():
+            for style, label, cats in self.m1_cases(("relative", "absolute", "dotdot", "chain")):
+                env = self.env()
+                box = {}
+                m, got = resolve(env, lambda m, style=style, cats=cats: box.update(outside=self.m1_escape(m, style, cats)))
+                self.assertTrue(os.path.isfile(os.path.join(box["outside"], "plugin", ".claude-plugin", "plugin.json")))
+                self.assert_m1_legacy(m, box["outside"], got, (how, style, label))
+        m = os.path.join(self.tmp("chongdae-payload-linked-"), "M")
+        os.makedirs(m)
+        self.m1_escape(m, "relative", self.M1_CATALOGS)
+        out, err = self.c9_probe(self.c9_target(None, {"links": {"probe": m}}), "probe", self.c9_env("codex"))
+        self.assertEqual(out["roots"], [os.path.join(m, "probe")], (out, err))
+        self.assertIn(os.path.realpath(PLUGINROOT), out["resolvers"], "the vendored resolver is not what ran")
+
+    def test_C9_5_the_documents_stop_sending_codex_only_installs_to_links(self):
+        """C9.5: README's host entry points and Limits, and SELFHOSTING's observed limits, no longer say Codex-only installs
+        need local links; README names plugin/pluginroot.py as the family's shared file, vendored byte-identical."""
+        with open(os.path.join(PLUGIN, "README.md"), encoding="utf-8") as fh:
+            readme = re.sub(r"\s+", " ", fh.read())
+        with open(os.path.join(REPO, "SELFHOSTING.md"), encoding="utf-8") as fh:
+            selfhosting = re.sub(r"\s+", " ", fh.read())
+        for stale in ("Codex-only installations need local links", "installed only in Codex, provide their actual roots",
+                      "does not switch plugin-path lookup to the Codex registry"):
+            self.assertNotIn(stale, readme)
+        self.assertNotIn("Codex-only installs need", selfhosting)
+        self.assertIn("pluginroot.py", readme)
+        self.assertRegex(readme, r"(?i)byte-identical")
+        self.assertIn("pluginroot.py", re.search(r"## Limits(.*?)(## |$)", readme).group(1)
+                      + re.search(r"## Shared instructions and host entry points(.*?)## ", readme).group(1))
 
     # ---------- K7 version ----------
 

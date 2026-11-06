@@ -26,10 +26,10 @@ class LaunchRecovery(CommandFixture):
         argv = [sys.executable, str(worker), str(calls), str(ready), str(release)]
         if stage == "verify":
             (self.project / "hunsu.lock.json").write_text(json.dumps({"roles": {"verifier": argv + ["{response}"]}}))
-            check = shlex.join([sys.executable, "-c", "pass"])
+            check, outside = shlex.join([sys.executable, "-c", "pass"]), ()
         else:
-            check = shlex.join(argv)
-        self.call("add", "a", "--role", "session", "--check", check, code=0)
+            check, outside = shlex.join(argv), ("--allow-outside",)   # contract C7: the worker is outside the project
+        self.call("add", "a", "--role", "session", "--check", check, *outside, code=0)
         suffix = "a.%s.pending.json" % stage
         injector = self.base / "crash.py"
         injector.write_text(

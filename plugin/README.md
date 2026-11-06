@@ -35,15 +35,14 @@ The `.claude-plugin/plugin.json` and `.codex-plugin/plugin.json` manifests expos
 Either host can call `python3 <plugin-root>/chongdae.py <command> --target <project>` directly;
 replace the angle-bracket placeholders with actual values and quote paths containing spaces.
 For Codex, set `AGENT_HOST=codex` when calling the engine from a shell to identify the session host and select
-the host argument for native role adapters. This does not switch plugin-path lookup to the Codex registry:
-`plugin_root()` checks project-local links, recognizes its own chongdae root, then uses Claude's installation and
-marketplace records. A local link or directory marketplace follows its own catalog, then, for a folder of checkouts,
-one level into the child named for the plugin, using
-`.claude-plugin/marketplace.json` (else `.agents/plugins/marketplace.json` when the name has no entry)
-to select an existing directory from a relative local source inside that catalog's root; remote or URI sources select
-nothing, and otherwise the earlier rules apply.
-For other plugins installed only in Codex, provide their actual roots through
-`hunsu.local.json` links before resolving `{plugin:NAME}` arguments.
+the host argument for native role adapters and the Codex plugin registry; other values select Claude Code.
+`{plugin:NAME}` resolves through the family's shared file, `plugin/pluginroot.py` in the source repository
+([pluginroot.py](pluginroot.py) in this payload), vendored byte-identical and edited only by vendoring a new release.
+`plugin_root()` checks `hunsu.local.json` links first, then recognizes its own chongdae root, then resolves the
+project's declared marketplace on the host this process runs on. It never uses another host's or marketplace's copy.
+A link follows its own catalog, then an inside child's catalog, then the child directory, then the link itself;
+a directory marketplace uses the same order without the link fallback. Catalog sources must stay inside their folder.
+A version different from the pin is returned with a note, printed once on stderr and kept in the call's versions.
 Use explicit task names when advancing parallel host workers, as the shared run skill describes.
 
 ## Runs
@@ -62,6 +61,20 @@ gate inside the worktree is that worktree's own run. `close` merges it back — 
 or bootstrap run once `run` completed it: commit the worktree, `--no-ff` merge into main, recheck there. Clean merge +
 green recheck removes the worktree and branch; a conflict or a red recheck comes back as a `decision:` — resolve in
 main and `init --merge`, and the worktree stays until the merge landed.
+The landing runs equivalent checks on unchanged source once, in runs, tasks, then checks order.
+Equivalence uses resolved argv (including the Python fallback), the working directory's real path,
+an environment digest of all variables passed to the check, and a source digest of `source_tree`.
+Source is measured again after every execution; records do not count. A task with `"repeat-checks": true`
+(`add TASK --repeat-checks`) runs independently and shares no result. When any result is shared, an extra
+line says how many executions served how many task checks, as in `recheck` below.
+
+The worktree gets `hunsu.local.json` and main's ignored host configuration files:
+`.codex/hooks.json`, `.codex/config.toml`, `.claude/settings.json`, `.claude/settings.local.json`.
+They are copied byte-for-byte as they were at `init`, including paths in their contents; later changes in main do not
+follow. A host file the branch tracks comes from the branch. An untracked host file that main does not ignore is
+not copied, and `init` says why; it names the copied files in one line when there are any. Copies stay ignored in the
+worktree, outside task measurements and the landing commit. Nothing is regenerated: a host whose hooks are generated
+per project regenerates them with its own tool.
 
 `init ... --parent RUN/TASK` starts a **child** run: it does task TASK of run RUN (typically a worktree run on its own
 branch, on whichever machine took the task). The child records `parent: {run, task[, gen]}`; the parent's `show` lists its
@@ -210,13 +223,13 @@ of another run (above: Runs)
 
 ### `/chongdae:add`
 
-A task in the session run — `--brief`, `--closes`, `--check` (repeatable argv), `--tests`, `--gate
+A task in the session run — `--brief` (or `--brief-file PATH`, `-` for stdin), `--closes`, `--check` (repeatable argv), `--tests`, `--gate
 human`; its start snapshot is taken now. `--tests` is two things, and `add` prints which: for a nitpick task (or any task
 no `--check` decides) the tests it writes; for a task with a `--check`, files it may not change — its judgment restores
 them if it does. A task that corrects tests therefore names them without a check: guin-site's `tests-fix` (2026-10-02)
 named the files it corrected with `--tests` and a check, and its own judgment restored its fix. `add` refuses that shape
 when an open build's judgment just restored those files, and points at `dispute`. Who does it is the lock's to say: a task with `--check` goes to the lock's
-`implementer`, a task that writes `--tests` that do not exist yet to its `nitpick`, anything else (a plan section, a
+`implementer`, a task that writes `--tests` — new files or existing ones — to its `nitpick`, anything else (a plan section, a
 model) to this session. `--requires network loopback` says what the work requires of the sandbox its hands run in: it
 travels in the request as `needs` (a task's `needs` in a plan already names the tasks it waits for), and a hired member
 that cannot give it refuses before starting — chongdae sends it to the lock's alternate that can, or the session takes it
@@ -297,6 +310,32 @@ section to the document, or put the section's text in the brief and drop `--clos
 run-20261012-052024-de21: a session run started without `--from`; the quibble got `contract: {}` and answered that the
 contract was empty
 
+`--brief-file` reads UTF-8 verbatim except one trailing newline removed. An empty file or stdin is refused, as is
+combining it with `--brief`. Only the text is recorded; the scratch path is not.
+
+`--check` refuses an existing program or file argument outside the project before writing anything. Put the
+program in the project to keep it reproducible, or use `--allow-outside` to record its digest. Interpreters
+and binaries, `{plugin:NAME}` paths and inline code are exempt. Paths expand `~` and resolve against the
+project’s real path. An allowed program keeps its small, non-secret text under the same rules as `did`;
+file arguments keep no content. Replacing checks with `amend --check … --allow-outside --why …` records
+the files anew, even when the argv is unchanged.
+
+`add ID --inspect PATH… --evidence PATH… [--brief TEXT | --brief-file FILE] [--role subagent]`
+adds an inspection: a read-only review by the session or its sub-agent. Its `reads` are project-relative files or
+directories (`.` reads the whole project), cleaned like `--scope`; it owns nothing, takes no tree snapshot and always
+records `touched: []`. It refuses `--check`, `--tests`, `--scope`, `--before`, `--after`, `--requires`,
+`--allow-outside`, `--repeat-checks` and roles other than `session` or `subagent`. Evidence is required and must be
+under a record path from `record_paths` (the lock's declarations, with the usual fallback), excluding chongdae's own
+record: a consumed review or eyes answer, never source. `adopt` into an inspection is refused; `amend` changes its
+brief only, and `drop` works as usual, with the same session ownership rules.
+
+At add, every evidence file's sha256 is kept in the machine-local overlay, including ignored files. `run ID` or a
+bare `run` completes it only when an evidence file is new or changed, recording those files' sorted project-relative
+paths and sha256 digests as `evidence-read` with the committed task record. Otherwise it stays open: a named run stops
+for the session; an unnamed pass says to consume the review or eyes answer and continues with other tasks. No verifier
+or after-role is placed for it, and no no-check non-claim is recorded. Its finish attributes and pins no source files;
+`show` says what it read and which evidence decided it. `close` leaves an unfinished inspection open in the record.
+
 ### `/chongdae:claim`
 
 Take a task for this machine (`--by NAME`; left out, the session claims it on this machine, signed as itself; an empty
@@ -352,15 +391,39 @@ not the contract — change it in this task, as its work
 session tasks share one tree and each measures `touched` from its own `add`, so the tree cannot say whose a change is when
 both were open — nor whose work was written before its task was added (the contract edited before its task, the order slip
 every guin-site review found: it sits in that task's start snapshot, and its measure counts nothing there). `adopt` moves
-the attribution: out of every other task's `touched` (each keeps a `gave` record), pinned into an open one's start, out of
-TASK's own start, and into TASK (`adopted`, with who and why, and where from). A file nothing in the run or the tree
+the attribution between open tasks: out of every other open task's `touched` (each keeps a `gave` record), pinned into
+its start, out of TASK's own start, and into TASK (`adopted`, with who and why, and where `from`). A closed task
+(done, skipped or dropped) keeps every part of its record as judged; a later adoption of a file it holds is recorded
+on TASK's `adopted` entry as `beside: {closed task id: [files]}`. `show` reads that entry to tell the later adoption on
+both tasks. Adopting into a closed task is refused: add a task for the later work. A file nothing in the run or the tree
 changed is refused. `run` says when it cannot tell: a finishing task that counted a file another open session task's brief
 (or the tests it writes) names, and that changed after that task was added or was already changed when it was, prints a
-`note:` with both `adopt` commands — and the file is not pinned away from the other task (that would be a guess); it stays
+`note:` with the `adopt` into that other open task — and the file is not pinned away from the other task (that would be a guess); it stays
 in both measures until the judgment. A verify request carries `attribution` (adopted, pinned at another task's finish,
 held at start) when `touched` alone would mislead. guin-site run-20261002-065900-f588: escape-tests finished first and
 counted `src/lib/outputs.ts`, written for escape-build before it was added; escape-build's diff was empty, the verifier
 rejected it on every retry, and the drop-and-add that followed recorded nothing
+
+### `/chongdae:amend`
+
+`amend TASK --why WHY [--brief TEXT | --brief-file PATH|-] [--check C]… [--by NAME | --delegated WHY]`:
+correct an open task's brief or checks without dropping the work. Repeated `--check` replaces the whole list,
+parsed as for `add`. At least one changed value is required. The judgment is signed by the session unless `--by`
+names the person who said it or `--delegated` gives their delegation (or its reference).
+
+`--check` follows `add`'s rule for a file outside the project: refused before anything is written unless
+`--allow-outside`, which records the files anew, even when the argv is unchanged.
+
+Only a running session run's `todo` task can be amended: a plan's tasks belong to its plan, and a produced, done,
+skipped or dropped task keeps the contract it was judged against. Work in flight must answer first; another
+session's ownership, a held lease or claim, and an unresolved `did` operation refuse the change. A task with no
+checks gets one through `chongdae add TASK --check C`, under that command's rules. Role, hands, tests, scope,
+closes and gate stay as they were.
+
+Each `amended` entry keeps only the old fields replaced, the reason, signer and time. Old check and review evidence
+moves whole under that entry's `superseded`, along with each `before` role's answer whose contract fingerprint no
+longer matches. `show` tells every amendment with its reason and signer. `chongdae run` sends or decides the task
+with the amended contract; a stopped hired task still needs `retry`. The judgment is committed like `adopt`.
 
 ### `/chongdae:drop`
 
@@ -438,6 +501,8 @@ non-claim), and what it answered before it came off stays under `stages-taken-of
 
 End the session run (open tasks recorded as open); the lock's `reviewer` is placed (below); a worktree run merges back
 — `--run ID` names a completed one. The commit names the goal: `run-…: close — <goal> (N done, M open)`
+Every `{since}` in the reviewer argv becomes the run's base commit (empty when the run has no git base), even after
+a review in between or a stopped close. Without it the reviewer chooses its own range: a non-claim on the run.
 
 Three stops before it is final, all the session's (`decision: session agent: …`), never a person's question:
 
@@ -634,7 +699,21 @@ the same empty `touched` only gets the same reject
 
 ### `/chongdae:recheck`
 
-Re-run every completed run's checks on this tree (the merge plan's first check); exit 1 if any is red now
+Re-run every completed run's checks on this tree (the merge plan's first check); exit 1 if any is red now.
+Done tasks' equivalent checks on unchanged source run once only where the source can be measured (a git work tree).
+Without git each check runs independently, taking and giving no shared result.
+The key is resolved argv (including the
+`python`/`python3` fallback), the working directory's real path, a digest of the environment variables
+passed to the check, and the source digest of `source_tree`. Source is measured again after every execution;
+a source-writing check changes the next key, while records do not count. First executions follow runs,
+then tasks, then checks. Each task keeps its own green or red line, including shared failure output.
+A plan task's `"repeat-checks": true`, or `add TASK --repeat-checks`, opts out: each check runs independently,
+taking and giving no shared result. `show` tells the opt-out on that task. A task's own checks at `run` are unchanged.
+When any result was shared, just before the unchanged final totals, one line says, for example:
+`  ran 1 check for 3 task checks (equivalent checks on unchanged source run once)`.
+A recorded outside program or file argument that changed or is missing is red without running its check.
+The line names the file, old and current digest, and the amend command that records the replacement.
+The task’s `run` and a landing’s re-run compare the same digests before executing checks.
 
 ## Files in your project
 
@@ -663,7 +742,16 @@ the intent: goal, tasks (role, what closes, checks or artifact path, gate), prov
 
 ### `.chongdae/run-<id>/tasks/<id>.json`
 
+An inspection's definition has `kind` (`"inspection"`), `reads` (its read scope) and `evidence` (the record paths it
+consumes). On completion, `evidence-read` holds sorted `{path, sha256}` entries for new or changed evidence files;
+`touched` is always empty. Its add-time evidence digests are private, in the machine-local overlay, like a work task's
+start snapshot; they are not committed.
+
 Committed: yes.
+
+`def.checks-outside` records allowed outside check files: `check` (index in `checks`), `arg`, `name`,
+`role` (`program` or `argument`), `sha256`, `size`, and eligible program `content`. The check argv
+stays portable as before; amendments keep the previous outside records with the previous checks.
 
 one file per task (so two people's tasks in one run merge as distinct files): status, claim, touched, response,
 review, `stages` (the before/after roles' answers and who gave them), attempts, confirmation, non-claims,
@@ -679,6 +767,15 @@ by) — what this machine holds now (`lease-held`) stays in `local/`,
 `performed_by` and `verified_by` —
 each author line with its `trace` (the files that call changed, how many commands it ran and how many failed) — and
 for session tasks the task's own definition
+
+`adopted` keeps each attribution judgment's files, who and why: `from` names the open tasks it moved files from;
+`beside` names closed tasks and the files their records still hold. Only open givers lose attribution and gain a
+`gave` entry. A closed task's record is never rewritten by adoption; its later adoptions are read from the adopters.
+
+`verified_by.trace.opened` keeps the paths the verifier opened, once each in first-opened order: paths only,
+project files and directories only (the project itself is `.`). Search patterns stay in the local `read` list;
+paths outside the project are counted under `opened-outside` when nonzero. Absence of `opened` means the host's
+transcript did not say what was read, not that nothing was read. A retried attempt keeps its verifier's trace.
 
 ### `.chongdae/run-<id>/asked/<tag>.json`
 
@@ -893,8 +990,12 @@ build that changes them, or puts them back to HEAD, is rejected by chongdae, whi
 
 **The reviewer is placed by the runner.** A review that waits for someone to ask for it is never asked for (a site
 went 22 runs without one). When a run ends — a session run's `close`, a plan run's `complete` — chongdae runs the
-lock's `reviewer` role in the project (a command, like `coherence`: `"reviewer": ["python3",
-"{plugin:dwitbuk}/dwitbuk.py", "review", "--target", "."]` in hunsu.json `roles`). Whatever it wrote there is part of
+lock's `reviewer` role in the project (a command, like `coherence`:
+`"reviewer": ["python3", "{plugin:dwitbuk}/dwitbuk.py", "review", "--since", "{since}", "--target", "."]` in hunsu.json `roles`).
+Every `{since}` in that argv becomes the run's base commit (`created.based_on`, empty without a git base), whatever
+reviews ran in between; `reviewed.since` records it. Without `{since}`, the command runs as declared and the reviewer
+chooses its own range, which a review in between can leave empty: a non-claim about the lock, printed only when the
+previous ended run did not carry it. Whatever it wrote there is part of
 the closing record and goes into the close commit with it; what it said last is kept in state.json `reviewed`. No
 `reviewer` in the lock: a non-claim on the run, printed at its close only when the run that ended before it did not
 carry it — it is the lock's, the same until the lock changes (a day's ten closes said it ten times), and `hunsu check`
@@ -925,16 +1026,20 @@ the role again only when it changed.
 
 ## Limits
 
+- The outside-check refusal covers session `add --check` and `amend --check`, not plan files (`init --plan`)
+  or `retry`/`take --checked` commands. Older checks without `checks-outside` records run as before.
+
+- A worktree gets `hunsu.local.json` and main's ignored host configuration (`.codex/hooks.json`, `.codex/config.toml`,
+  `.claude/settings.json`, `.claude/settings.local.json`) as they were at `init`; later changes in main do not follow.
+  A host file the branch tracks comes from the branch. Nothing is regenerated or rewritten, including paths inside
+  copied files; a host whose hooks are generated per project regenerates them with its own tool.
 - No brain: chongdae never writes a plan, a question, or code. It refuses a plan whose tasks have no way to be
   decided.
 - Names no product: every provider — the bootstrap's `session`, a builder, a verifier, the merge's coherence check —
   comes from the plan's `providers` or the lock's `roles`. chongdae names only itself (`recheck`).
-- Checks and providers are argv that must exit 0. `{plugin:NAME}` uses local links, chongdae's own root, or the
-  Claude installation registry; Codex-only installations need local links as described in
-  [host entry points](#shared-instructions-and-host-entry-points). Links and directory marketplaces follow their own catalog,
-  then, for a folder of checkouts, one level into the child named for the plugin, using `.claude-plugin/marketplace.json`
-  (else `.agents/plugins/marketplace.json` when the name has no entry) to select an existing directory from a relative local
-  source inside that catalog's root; remote or URI sources select nothing, and otherwise the earlier rules apply.
+- Checks and providers are argv that must exit 0. `{plugin:NAME}` uses the vendored host-aware resolver: local links,
+  chongdae's own root, then the project's declared marketplace on the host this process runs on, as described in
+  [host entry points](#shared-instructions-and-host-entry-points).
   A plan never carries a machine path. A check that measures
   nothing passes; name what a check covers (a test runner that fails when a key selects no tests).
 - Not built yet: re-planning on failure, the ideation branch when the goal is under-shaped.

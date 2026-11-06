@@ -163,6 +163,32 @@ class OperationRecovery(CommandFixture):
             time.sleep(.02)
         self.reconcile(journal)
 
+    def test_operation_merge_publishes_each_completed_item_once_and_never_rewrites_history(self):
+        """recorded-operation's publishing step, called directly: a journal's completed items reach the task's `did`
+        exactly once — a second merge, as recovery after an interrupted state transaction runs it, adds nothing — the
+        first item without a result stops publishing, and a history that no longer matches the journal, or is missing
+        its earlier items, is refused with nothing written."""
+        d = chongdae.run_dir(str(self.project))
+        first, second = {"command": "one", "exit": 0}, {"command": "two", "exit": 1}
+        journal = {"record-start": 0, "items": [{"result": first}, {"result": second}, {"command": ["three"]}]}
+        chongdae.operation_merge(d, chongdae.load_state(d), "a", journal)
+        self.assertEqual(chongdae.load_state(d)["tasks"]["a"]["did"], [first, second])
+        chongdae.operation_merge(d, chongdae.load_state(d), "a", journal)
+        self.assertEqual(chongdae.load_state(d)["tasks"]["a"]["did"], [first, second], "published once, never twice")
+        # an item with no result stops publishing: a completed item after it is not published (it is not skipped over)
+        third = {"command": "four", "exit": 0}
+        chongdae.operation_merge(d, chongdae.load_state(d), "a", {"record-start": 2, "items": [{"command": ["three"]}, {"result": third}]})
+        self.assertEqual(chongdae.load_state(d)["tasks"]["a"]["did"], [first, second], "stopped at the item with no result")
+        state = chongdae.load_state(d)
+        state["tasks"]["a"]["did"][1] = {"command": "edited", "exit": 0}
+        with self.assertRaises(SystemExit) as changed:
+            chongdae.operation_merge(d, state, "a", journal)
+        self.assertIn("history changed at item 2", str(changed.exception))
+        with self.assertRaises(SystemExit) as missing:
+            chongdae.operation_merge(d, chongdae.load_state(d), "a", {"record-start": 3, "items": [{"result": first}]})
+        self.assertIn("earlier operation history is missing", str(missing.exception))
+        self.assertEqual(chongdae.load_state(d)["tasks"]["a"]["did"], [first, second], "a refused merge writes nothing")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
