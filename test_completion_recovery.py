@@ -30,6 +30,8 @@ class CompletionRecovery(CommandFixture):
         else:
             check, outside = shlex.join(argv), ("--allow-outside",)   # contract C7: the worker is outside the project
         self.call("add", "a", "--role", "session", "--check", check, *outside, code=0)
+        if stage == "verify":
+            (self.project / "work.py").write_text("work = 1\n")   # the task's own change: a task whose diff is empty has nothing for the verifier to read
         return calls, source
 
     def crash(self, stage, moment):

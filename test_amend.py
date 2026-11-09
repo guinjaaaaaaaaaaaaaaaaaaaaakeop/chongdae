@@ -39,7 +39,7 @@ class Base(unittest.TestCase):
         return c.run_dir(pj.dir)
 
     def add(self, pj, tid, *extra):
-        code, out = run("add", tid, *extra, "--target", pj.dir)
+        code, out = run("add", tid, "--why", "a test task: no check decides it", *extra, "--target", pj.dir)
         self.assertEqual(code, 0, out)
 
     def task(self, pj, tid="t"):
@@ -73,7 +73,7 @@ class C2_1_BriefFile(Base):
         with Project() as pj:
             self.session(pj)
             # the defect as a session meets it: the shell substitutes the backticked phrase before chongdae sees the brief
-            line = "%s %s add lost --brief \"%s\" --target %s" % (shlex.quote(sys.executable), shlex.quote(ENGINE), SHELL_BRIEF, shlex.quote(pj.dir))
+            line = "%s %s add lost --why 'a test task: no check decides it' --brief \"%s\" --target %s" % (shlex.quote(sys.executable), shlex.quote(ENGINE), SHELL_BRIEF, shlex.quote(pj.dir))
             res = self.shell(line)
             self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
             lost = self.task(pj, "lost")["def"]["brief"]
@@ -81,7 +81,7 @@ class C2_1_BriefFile(Base):
             self.assertIn(getpass.getuser(), lost)
             # the fix: the same text from a file reaches the record as written
             path = self.scratch("brief.txt", SHELL_BRIEF + "\n")
-            line = "%s %s add kept --brief-file %s --target %s" % (shlex.quote(sys.executable), shlex.quote(ENGINE), shlex.quote(path), shlex.quote(pj.dir))
+            line = "%s %s add kept --why 'a test task: no check decides it' --brief-file %s --target %s" % (shlex.quote(sys.executable), shlex.quote(ENGINE), shlex.quote(path), shlex.quote(pj.dir))
             res = self.shell(line)
             self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
             self.assertEqual(self.task(pj, "kept")["def"]["brief"], SHELL_BRIEF)
@@ -90,7 +90,7 @@ class C2_1_BriefFile(Base):
         with Project() as pj:
             self.session(pj)
             text = "한글 brief: say `whoami` and $(id -u) and $HOME here\n"
-            line = "%s %s add t --brief-file - --target %s" % (shlex.quote(sys.executable), shlex.quote(ENGINE), shlex.quote(pj.dir))
+            line = "%s %s add t --why 'a test task: no check decides it' --brief-file - --target %s" % (shlex.quote(sys.executable), shlex.quote(ENGINE), shlex.quote(pj.dir))
             res = self.shell(line, stdin=text)
             self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
             self.assertEqual(self.task(pj)["def"]["brief"], text[:-1])
@@ -123,7 +123,7 @@ class C2_1_BriefFile(Base):
             self.session(pj)
             before = pj.state()
             path = self.scratch("b.txt", "from file\n")
-            code, out = run("add", "t", "--brief", "inline", "--brief-file", path, "--target", pj.dir)
+            code, out = run("add", "t", "--why", "a test task: no check decides it", "--brief", "inline", "--brief-file", path, "--target", pj.dir)
             self.assertNotEqual(code, 0, out)
             self.assertEqual(pj.state(), before)
             self.assertNotIn("t", pj.state().get("tasks", {}))
@@ -133,7 +133,7 @@ class C2_1_BriefFile(Base):
             self.session(pj)
             before = pj.state()
             path = self.scratch("empty.txt", "")
-            code, out = run("add", "t", "--brief-file", path, "--target", pj.dir)
+            code, out = run("add", "t", "--why", "a test task: no check decides it", "--brief-file", path, "--target", pj.dir)
             self.assertNotEqual(code, 0, out)
             self.assertIn("the brief file is empty", out)
             self.assertEqual(pj.state(), before)
@@ -142,7 +142,7 @@ class C2_1_BriefFile(Base):
         with Project() as pj:
             self.session(pj)
             before = pj.state()
-            line = "%s %s add t --brief-file - --target %s" % (shlex.quote(sys.executable), shlex.quote(ENGINE), shlex.quote(pj.dir))
+            line = "%s %s add t --why 'a test task: no check decides it' --brief-file - --target %s" % (shlex.quote(sys.executable), shlex.quote(ENGINE), shlex.quote(pj.dir))
             res = self.shell(line, stdin="")
             self.assertNotEqual(res.returncode, 0, res.stdout + res.stderr)
             self.assertIn("the brief file is empty", res.stdout + res.stderr)
@@ -484,7 +484,7 @@ class C10_TestsRouting(Base):
     def test_C10_1_reproducer_existing_tests_file_goes_to_the_nitpick(self):
         with Project() as pj:
             self.project(pj)
-            code, out = run("add", "t", "--tests", "test_a.py", "--brief", "add a case", "--target", pj.dir)
+            code, out = run("add", "t", "--why", "a test task: no check decides it", "--tests", "test_a.py", "--brief", "add a case", "--target", pj.dir)
             self.assertEqual(code, 0, out)
             self.assertIn("nitpick does it (the lock's provider)", out)
             self.assertNotIn("Work, then", out, "the session was told to do the nitpick's task")
@@ -495,7 +495,7 @@ class C10_TestsRouting(Base):
     def test_C10_1_new_tests_file_still_goes_to_the_nitpick(self):
         with Project() as pj:
             self.project(pj)
-            code, out = run("add", "t", "--tests", "test_new.py", "--brief", "new suite", "--target", pj.dir)
+            code, out = run("add", "t", "--why", "a test task: no check decides it", "--tests", "test_new.py", "--brief", "new suite", "--target", pj.dir)
             self.assertEqual(code, 0, out)
             self.assertIn("nitpick does it (the lock's provider)", out)
             self.assertEqual(self.task(pj)["def"]["role"], "nitpick")
@@ -518,7 +518,7 @@ class C10_TestsRouting(Base):
     def test_C10_1_requires_loopback_hires_the_nitpick_alternate_for_existing_tests(self):
         with Project() as pj:
             self.project(pj, extra={"nitpick@loopback": pj.fake_provider(NITPICK_DONE, "teujip_loop")})
-            code, out = run("add", "t", "--tests", "test_a.py", "--brief", "add a case", "--requires", "loopback", "--target", pj.dir)
+            code, out = run("add", "t", "--why", "a test task: no check decides it", "--tests", "test_a.py", "--brief", "add a case", "--requires", "loopback", "--target", pj.dir)
             self.assertEqual(code, 0, out)
             self.assertIn("nitpick@loopback does it (the lock's alternate for loopback)", out)
             self.assertEqual(self.task(pj)["def"]["role"], "nitpick")
@@ -526,7 +526,7 @@ class C10_TestsRouting(Base):
     def test_C10_1_no_nitpick_in_the_lock_leaves_it_the_sessions(self):
         with Project() as pj:
             self.project(pj, roles=("implementer",))
-            code, out = run("add", "t", "--tests", "test_a.py", "--brief", "add a case", "--target", pj.dir)
+            code, out = run("add", "t", "--why", "a test task: no check decides it", "--tests", "test_a.py", "--brief", "add a case", "--target", pj.dir)
             self.assertEqual(code, 0, out)
             self.assertIn("Work, then", out)
             ts = self.task(pj)
@@ -587,7 +587,7 @@ class C10_TestsRouting(Base):
     def test_C10_3_no_tests_no_check_stays_the_sessions(self):
         with Project() as pj:
             self.project(pj)
-            code, out = run("add", "p", "--brief", "a plan section", "--target", pj.dir)
+            code, out = run("add", "p", "--why", "a test task: no check decides it", "--brief", "a plan section", "--target", pj.dir)
             self.assertEqual(code, 0, out)
             self.assertEqual(self.task(pj, "p")["def"]["role"], "session")
             self.assertNotIn("self-performed", self.task(pj, "p"))

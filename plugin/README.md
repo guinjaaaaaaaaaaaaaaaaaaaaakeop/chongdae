@@ -223,6 +223,13 @@ of another run (above: Runs)
 
 ### `/chongdae:add`
 
+A session task with no check and no `--inspect` needs `--why WHY`: why no check decides it.
+The task keeps `no-check` with the reason, signer and time; one reason also serves when the session replaces a
+declared role. Without it, add refuses before creating the task and offers `chongdae add ID --check "COMMAND" ...`
+(the exact command when the project declares one for its scope), or `--why "…"`.
+Attaching a check later moves this reason into the `checks-added` history.
+
+
 A task in the session run — `--brief` (or `--brief-file PATH`, `-` for stdin), `--closes`, `--check` (repeatable argv), `--tests`, `--gate
 human`; its start snapshot is taken now. `--tests` is two things, and `add` prints which: for a nitpick task (or any task
 no `--check` decides) the tests it writes; for a task with a `--check`, files it may not change — its judgment restores
@@ -263,8 +270,8 @@ needed `adopt` to split the files each had been told were its own
 
 A scope entry that is a record path — another product's files: `hunsu.json`, `hunsu.lock.json`, `mangsang`, … (the lock's
 `record-paths`) — makes those files the task's work: inside its own scope a record file is counted in `touched`, gets its
-commit lines, and does not leave the task held as changing nothing; outside every task's scope a record stays nobody's, as
-before. `add` says so when a scope names record paths. A no-check task held because what changed is records outside its
+commit lines, and does not leave the task held as changing nothing; outside every task's scope a record stays nobody's work. Its own records are listed beside `touched` as `records`,
+and run prints them after the commit lines, saying that `--scope` makes them work. `add` says so when a scope names record paths. A no-check task held because what changed is records outside its
 scope is told that, with the `adopt` that gives them to it. guin-site run-20261015-094800-de3e: `plugins-lock`
 (`--scope hunsu.json hunsu.lock.json …`) and `site-build-stale` (`--scope mangsang`) recorded `touched: []`, were held as
 "has changed nothing of its own", became the reviewer's objections, and got no commit lines.
@@ -364,11 +371,15 @@ run for, and a retry moves them there. On
 guin-site the session took a build, ran the full test run itself, and had nowhere to put it: the verifier rejected the
 builder's old claim three more times
 
-`--checked-red "COMMAND"` (repeatable, also on `retry`): a tests task's expected red run — `--checked` records only a pass,
-so the red run a tests task exists for had nowhere to go. chongdae runs it the same way; a non-zero exit is recorded as
-`red as expected`, a zero exit as `passed before the build` (both recorded, `expect: fail` and `outcome` on the entry); a
-command that is not there or times out did not run, and refuses. `take` without either prints both, so the session that
-ran something knows where it goes; `show` prints what was checked
+`--checked-red "COMMAND"` (repeatable, also on `retry`): a tests task's expected red run — a non-zero exit is
+recorded as `red as expected`, a zero exit as `passed before the build` (`expect: fail` and `outcome` on the entry).
+A missing program, timeout or signal is refused. Without a test result, a command's usage error, missing Python file
+or module, or interpreter error (a traceback not ending in AssertionError, or SyntaxError) is refused too; unittest
+loader failures alone do not count as tests reached. Test results take precedence over diagnostics from failing tests.
+An unknown runner's non-zero exit stays red as expected, with `result: none recognized` when no test result was found.
+For both flags the record keeps a bounded summary, first failures and tail; the whole output stays in the run's local
+storage. `take` and `retry` print the summary, and `show` prints it and the first failures. `take` without either flag
+prints both, so the session that ran something knows where it goes.
 
 ### `/chongdae:dispute`
 
@@ -753,7 +764,7 @@ Committed: yes.
 `role` (`program` or `argument`), `sha256`, `size`, and eligible program `content`. The check argv
 stays portable as before; amendments keep the previous outside records with the previous checks.
 
-one file per task (so two people's tasks in one run merge as distinct files): status, claim, touched, response,
+one file per task (so two people's tasks in one run merge as distinct files): status, claim, touched, `records`, `no-check`, `nothing-to-review`, response,
 review, `stages` (the before/after roles' answers and who gave them), attempts, confirmation, non-claims,
 `self-performed` (the session took a task the lock had hired someone for, and why), `dispatched` (a sub-agent stood where
 the lock declared someone else), `def.scope` (the files its hands own), `done` (when it became done),
@@ -767,6 +778,18 @@ by) — what this machine holds now (`lease-held`) stays in `local/`,
 `performed_by` and `verified_by` —
 each author line with its `trace` (the files that call changed, how many commands it ran and how many failed) — and
 for session tasks the task's own definition
+
+The task's `response` and historical `attempts` keep the worker's `validation.red_before_build` as given, including
+entries with no report. `show` prints it under the attempt that supplied it: the worker's evidence, not a check.
+It adds nothing to `checks`, `checks-passed` or `checked` and does not decide the task.
+
+Each entry of `checked.ran`, including those kept in attempts, carries `summary` (at most five result lines),
+`failures` (the first ten failing headers, each at most 300 characters), and `lines` (the whole output's line count),
+beside `command`, `exit`, `tail`, and, for expected red runs, `expect` and `outcome`. Summary, failures and tail total
+at most 21 lines; each tail line is also cut to 300 characters. Results recognize unittest's counts and verdicts or failure headers, pytest's final summary,
+and plain runners' PASS/FAIL/SKIP lines and totals. With no recognized result, `result` is `none recognized`.
+The private `kept-locally` key names the whole output file under the run's `local/` directory; only the local overlay
+holds that name, never the committed task file.
 
 `adopted` keeps each attribution judgment's files, who and why: `from` names the open tasks it moved files from;
 `beside` names closed tasks and the files their records still hold. Only open givers lose attribution and gain a
@@ -864,6 +887,12 @@ deploy, its push and its Done line. A session build's `--tests` must exist when 
 start is taken then); write them in their own task first. Bash writes are not covered; dwitbuk's `outside-run` catches
 them. A task claimed by someone else (`claim`) is not this machine's to advance.
 
+A held no-check task names only its own changed records, with the `adopt` line: records count as its work only
+when its own `--scope` names them. Those records and files its brief or tests name that were already changed at
+start do not finish an unnamed task. When finished by name, its non-claim names its own records and held-at-start
+files instead of saying the tree holds nothing of its own. They remain part of its own diff for the declared
+verifier; with nothing at all, the existing non-claim stands and the task records `nothing-to-review`.
+
 **An operation run as plain Bash reaches no record.** A second PreToolUse hook reads each Bash command while a run is in
 progress; one that reads as an operation outside the repository — `git push`, `npm run deploy`, `npm publish`, `wrangler
 deploy`/`publish`/`… delete`, `terraform apply`, `kubectl apply`, `gh release create`, `fly`/`vercel`/`netlify`/`firebase
@@ -960,11 +989,15 @@ host, model, …}`. Where `native:` relays a worker's prompt and its JSON answer
 dispatches and reads back; it is always at hand (`--role subagent`), and a lock role may name it.
 
 A plan may declare a `verifier` role — a command, never the hands that built (dwitbuk's `eyes_worker.py` is one).
-After a task's checks pass and before its gate, the verifier gets the contract, what the task touched (and what
-changed after the builder answered, told apart), what the record paths left out of `touched` (`excluded.record-paths`:
-the environment — hunsu's manifest, lock and judgments — and records such as `mangsang/`, which are never a task's work
-by rule; a task whose whole work is `hunsu lock` has `touched: []`, and without this the verifier read the changed tree as
-an undeclared edit) and the builder's report, and what chongdae itself ran on the tree and saw (`checked`: `{command, exit,
+After a task's own decision stands and before its after roles and gate, one rule places the verifier: a non-empty
+own diff goes to it, with or without checks and whoever did the work. An empty diff records `nothing-to-review`
+with its reason and time, shown by run and show; no request or verifier is spawned. A recorded operation is read through
+report. Inspections and artifacts at a `path` keep their own decision rules. Without a declared verifier nothing changes.
+The verifier gets the contract, what the task touched (and what changed after the builder answered, told apart),
+and only its own records under `excluded.record-paths` (`records`, excluding files already in `touched`).
+Records already changed and unchanged at start, another open task's scope, and unchanged files pinned by another
+task's finish stay out. The window includes committed changes; older records without a snapshot use `start-head`.
+It also gets the builder's report, and what chongdae itself ran on the tree and saw (`checked`: `{command, exit,
 tail, at, changed_since, source}` — the session's `--checked` and the task's own checks chongdae ran to decide it; guin-site
 run-20261015-054352-a0ec's verifier was told nothing of the suite chongdae had just run green), and answers `dwitbuk/review@1`: accept, or
 reject with findings quoted from both sides. Reject is the failed path: `retry`. Before acting on a reject chongdae holds each

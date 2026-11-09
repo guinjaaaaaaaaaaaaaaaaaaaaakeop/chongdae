@@ -40,6 +40,7 @@ class ReviewFreshness(CommandFixture):
         self.git(self.project, "commit", "-qm", "initial source")
         options = (["--after", after] if after else []) + (["--gate", "human"] if gate else [])
         self.call("add", "a", "--scope", "a.py", "--check", shlex.join([sys.executable, "-c", "pass"]), *options, code=0)
+        (self.project / "work.py").write_text("work = 1\n")   # the task's own change: a task whose diff is empty has nothing for the verifier to read
         return ready, release, calls
 
     def assert_stale_then_fresh(self, proc, release, calls):
@@ -111,17 +112,26 @@ class ReviewFreshness(CommandFixture):
         ready, release, calls = self.install_verifier()
         self.env["CHONGDAE_WAIT"] = "1"
         proc = self.start("run", "a")
-        self.wait_for(ready, proc)
-        out, err = proc.communicate(timeout=8)
+        # The detached verifier can become ready after run hands back.
+        # These ceilings detect hangs independently of the call's budget.
+        deadline = time.monotonic() + 60
+        while not ready.exists():
+            self.assertLess(time.monotonic(), deadline, "verifier never became ready")
+            time.sleep(0.02)
+        out, err = proc.communicate(timeout=60)
         self.assertEqual(proc.returncode, 4, out + err)
         (self.project / "a.py").write_text("value = 2\n")
         self.git(self.project, "commit", "-qam", "edit while review detached")
         release.touch()
         self.env["CHONGDAE_WAIT"] = "20"
-        result = self.call("run", "a", code=4)
-        self.assertIn("source changed", result.stdout)
+        proc = self.start("run", "a")
+        out, err = proc.communicate(timeout=60)
+        self.assertEqual(proc.returncode, 4, out + err)
+        self.assertIn("source changed", out)
         self.assertEqual(self.task("a")["status"], "todo")
-        self.call("run", "a", code=0)
+        proc = self.start("run", "a")
+        out, err = proc.communicate(timeout=60)
+        self.assertEqual(proc.returncode, 0, out + err)
         self.assertEqual(len(calls.read_text().splitlines()), 2)
 
     def test_source_changed_during_initial_check_is_rechecked_before_done(self):

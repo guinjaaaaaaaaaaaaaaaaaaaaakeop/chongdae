@@ -5,3 +5,5 @@ argument-hint: [TASK..]
 !`python3 "${CLAUDE_PLUGIN_ROOT}/chongdae.py" status`
 
 The line above is the run's state (no run, or which run and what is open). To advance it: `python "${CLAUDE_PLUGIN_ROOT}/chongdae.py" run $ARGUMENTS` — exit 2 means stopped, and the last line says who must act; exit 4 (`still working: …`) means repeat the same call. A task list selects only those tasks; finish their dependencies first or include them too. Naming a no-check task is the session's word that its work is finished. Show the output to the user as is. Do not interpret or act on it unless asked.
+
+A no-check task whose only changes are its own records or held-at-start files stays open unnamed. Its held line names only its own records, with `adopt`; records count as work only inside its own `--scope`. Finished by name, its non-claim names those records and held-at-start files. Its non-empty own diff reaches the declared verifier; with nothing at all, the existing non-claim stands and the task records `nothing-to-review`.

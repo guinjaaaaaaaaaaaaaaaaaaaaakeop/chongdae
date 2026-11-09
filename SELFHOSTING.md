@@ -8,13 +8,13 @@ This entry records this checkout's environment and maintenance constraints.
 ## Installed release and working source
 
 [hunsu.json](hunsu.json) declares the environment; [hunsu.lock.json](hunsu.lock.json)
-locks hunsu 2.1.0, chongdae 2.0.0, mangsang 2.0.1, jokbo 2.0.0,
-hacheong 2.1.0, and dwitbuk 2.0.2, installed at project scope for Claude Code.
+locks hunsu 2.4.0, chongdae 2.2.0, mangsang 2.3.0, jokbo 2.2.0,
+hacheong 2.2.1, and dwitbuk 2.2.1, installed at project scope for Claude Code.
 Use each locked plugin's `<root>` from the SessionStart line to call its engine;
 never select an engine with a glob over the plugin cache.
 
 This checkout is the source of the next chongdae. The installed locked release N
-(currently the locked chongdae 2.0.0) orchestrates every change to it, producing N+1;
+(currently the locked chongdae 2.2.0) orchestrates every change to it, producing N+1;
 never orchestrate with this checkout's `plugin/chongdae.py` (or the root shim that runs it).
 N+1 manages nothing, not even the next change, until it is bumped in every manifest,
 published, installed, re-locked by hunsu, and loaded by a new session.
@@ -42,7 +42,7 @@ The manifest and lock declare identical roles:
 | quibble | hacheong sibi on claude |
 | newbie | hacheong chojja on codex |
 | verifier | dwitbuk eyes_worker.py on claude |
-| reviewer | `dwitbuk review --target .`, run by chongdae at close |
+| reviewer | `dwitbuk review --since {since} --target .`, run by chongdae at close over the run's range from its base |
 | coherence | `mangsang impact --target .` |
 
 No role passes `--model`; model workers use their host's default model.
@@ -50,7 +50,7 @@ Reporters are `hunsu check --findings --target .`,
 `chongdae report --since {since} --target .`, and `mangsang impact --findings --target .`.
 These names denote the corresponding Python engines at their locked roots.
 Both `capabilities.loopback` and `capabilities.network` are `session`.
-All five resolutions are `reviewed: false`; `hunsu policy` prints them.
+All six resolutions are `reviewed: false`; `hunsu policy` prints them.
 
 ## Before future work
 
@@ -75,8 +75,11 @@ The recorded `AGENT_HOST=codex hunsu check` exits 1 with "content differs" for h
 mangsang, and jokbo: their Codex installs add root `.codex-marketplace-install.json`,
 which hunsu 1.15.1 counts in its content fingerprint. This awaits a hunsu repair;
 do not use `--take-content` to bypass it. The recorded Claude-host check passes.
-Codex project hooks (`.codex/hooks.json`) are written only by `hunsu lock` from a
-Codex session; this project has none. `{plugin:NAME}` uses the vendored resolver: local links, chongdae itself, then the declared marketplace on the current host (see README limits).
+Codex project hooks (`.codex/hooks.json`, ignored) are generated on this machine by
+`hunsu upgrade --hooks-only` on either host, or `hunsu lock` on Codex. Since hunsu 2.4.0 each
+generated group runs the ignored, version-independent `.codex/hunsu-dispatch.py`, which finds
+the copy installed for Codex at each event; no live Codex session has run one here yet.
+`{plugin:NAME}` uses the vendored resolver: local links, chongdae itself, then the declared marketplace on the current host (see README limits).
 
-mangsang has no model here yet: no concepts and nothing registered.
-An impact report of 0 unresolved therefore means nothing is watched, not coverage.
+chongdae's own mangsang model is a development record kept by its maintainers and is not published;
+in this repository mangsang watches nothing, so an impact report of 0 unresolved means nothing is watched, not coverage.

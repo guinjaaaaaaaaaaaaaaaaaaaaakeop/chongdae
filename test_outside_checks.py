@@ -61,7 +61,7 @@ class Base(unittest.TestCase):
         return pj.state()["tasks"][tid]
 
     def add(self, pj, tid, *extra):
-        code, out = run("add", tid, *extra, "--target", pj.dir)
+        code, out = run("add", tid, "--why", "a test task: no check decides it", *extra, "--target", pj.dir)
         self.assertEqual(code, 0, out)
         return out
 

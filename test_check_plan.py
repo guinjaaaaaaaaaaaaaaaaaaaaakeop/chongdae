@@ -93,7 +93,7 @@ class Base(unittest.TestCase):
             if not target or not os.path.isdir(target):
                 target = os.path.join(wt_root, sorted(os.listdir(wt_root))[-1])
         for tid, checks, extra in tasks:
-            argv = ["add", tid]
+            argv = ["add", tid, "--why", "a test task: no check decides it"]
             for ch in checks:
                 argv += ["--check", ch]
             if not checks:

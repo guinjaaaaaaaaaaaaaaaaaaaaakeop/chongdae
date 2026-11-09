@@ -47,7 +47,7 @@ class Base(unittest.TestCase):
         return c.run_dir(pj.dir)
 
     def add(self, pj, tid, *extra):
-        code, out = run("add", tid, *extra, "--target", pj.dir)
+        code, out = run("add", tid, "--why", "a test task: no check decides it", *extra, "--target", pj.dir)
         self.assertEqual(code, 0, out)
         return out
 
@@ -90,7 +90,7 @@ class Base(unittest.TestCase):
         """An add the contract refuses: not argparse's 'unknown option', nothing written, the reason given; then the
         same id as a proper inspection is accepted (the refusal was C4.1's, not the option's absence)."""
         before, head = self.snapshot(pj), self.head(pj)
-        code, out = run("add", "ui-review", *argv, "--target", pj.dir)
+        code, out = run("add", "ui-review", "--why", "a test task: no check decides it", *argv, "--target", pj.dir)
         self.assertNotEqual(code, 0, out)
         self.assertNotIn("unrecognized arguments", out, "`add --inspect` is not an option yet: " + out)
         for word in reason:

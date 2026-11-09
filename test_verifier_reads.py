@@ -69,6 +69,9 @@ def provider_script(path, responses, transcript_lines, counter):
           "    with open(os.path.join(os.path.dirname(sys.argv[2]), name), 'w') as fh:\n"
           "        fh.write(''.join(json.dumps(l) + '\\n' for l in lines))\n"
           "    resp['worker'] = {'host': 'claude-code', 'model': 'claude-test', 'session': 's-%%d' %% n, 'transcript': name}\n"
+          "req = json.load(open(sys.argv[1]))\n"
+          "if req.get('stage') != 'verify':\n"
+          "    open(os.path.join(req['target'], 'built.py'), 'a').write('n = %%d\\n' %% n)   # the build's own change: a verifier reads a non-empty diff\n"
           "json.dump(resp, open(sys.argv[2], 'w'))\n"
           % (counter, json.dumps(responses), json.dumps(transcript_lines)))
     return [sys.executable, path, "{request}", "{response}"]

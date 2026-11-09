@@ -1,5 +1,5 @@
 ---
-description: Take over stopped hired work, or explicitly hand an unfinished task from another session to this one with --why. Running checks/providers, unanswered native dispatches and another live lease must finish or be released first. Existing session/subagent hands are preserved on handover; taking hired work is recorded as self-performed. No --by signs as the session. --checked COMMAND runs and records a check; --checked-red COMMAND records an expected red check.
+description: Take over stopped hired work, or explicitly hand an unfinished task from another session to this one with --why. Running checks/providers, unanswered native dispatches and another live lease must finish or be released first. Existing session/subagent hands are preserved on handover; taking hired work is recorded as self-performed. No --by signs as the session. --checked COMMAND runs and records a check; --checked-red COMMAND records an expected red check. A --checked-red run that never reached its tests is refused.
 argument-hint: <id> --why ".." [--by NAME] [--checked "COMMAND"].. [--checked-red "COMMAND"]..
 ---
 !`python3 "${CLAUDE_PLUGIN_ROOT}/chongdae.py" take $ARGUMENTS`

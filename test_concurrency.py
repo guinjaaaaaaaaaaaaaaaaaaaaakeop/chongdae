@@ -117,7 +117,7 @@ class CommandFixture(unittest.TestCase):
 class ConcurrentCommands(CommandFixture):
     def test_check_attachment_is_not_lost_during_another_run(self):
         ready, release = self.waiting_check()
-        self.call("add", "b", "--brief", "still being implemented", code=0)
+        self.call("add", "b", "--why", "a test task: no check decides it", "--brief", "still being implemented", code=0)
         proc = self.start("run", "a")
         self.wait_for(ready, proc)
         check = shlex.join([sys.executable, "-c", "pass"])
@@ -145,6 +145,7 @@ class ConcurrentCommands(CommandFixture):
         (self.project / "hunsu.lock.json").write_text(json.dumps({"roles": {"verifier": [
             sys.executable, str(script), "{request}", "{response}", str(ready), str(release), str(calls)]}}))
         self.call("add", "a", "--check", shlex.join([sys.executable, "-c", "pass"]), code=0)
+        (self.project / "work.py").write_text("work = 1\n")   # the task's own change: a task whose diff is empty has nothing for the verifier to read
         proc = self.start("run", "a")
         self.wait_for(ready, proc)
         self.call("run", "a", code=4)
@@ -162,7 +163,7 @@ class ConcurrentCommands(CommandFixture):
         self.call("show", code=0)
         self.call("report", code=0)
         self.call("recheck", code=0)
-        self.call("add", "independent", "--brief", "another project", project=other, code=0)
+        self.call("add", "independent", "--why", "a test task: no check decides it", "--brief", "another project", project=other, code=0)
         release.touch()
         self.finish(proc)
 
@@ -172,7 +173,7 @@ class ConcurrentCommands(CommandFixture):
         self.wait_for(ready, proc)
         proc.kill()
         proc.communicate(timeout=5)
-        self.call("add", "b", "--brief", "parent resumed", code=0)
+        self.call("add", "b", "--why", "a test task: no check decides it", "--brief", "parent resumed", code=0)
         release.touch()
         # The original checks process is detached: the next run consumes its
         # result, rather than a process lifetime being mistaken for ownership.

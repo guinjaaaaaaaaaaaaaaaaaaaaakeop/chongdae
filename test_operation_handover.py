@@ -18,7 +18,7 @@ class OperationHandover(CommandFixture):
 
     def setUp(self):
         super().setUp()
-        self.call("add", "a", "--brief", "local operation", code=0)
+        self.call("add", "a", "--why", "a test task: no check decides it", "--brief", "local operation", code=0)
         self.calls = self.base / "effects"
         self.worker = self.base / "effect.py"
         self.worker.write_text("import pathlib,sys\nwith pathlib.Path(sys.argv[1]).open('a') as f: f.write(sys.argv[2]+'\\n')\n")

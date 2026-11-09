@@ -74,7 +74,7 @@ class Fixture(unittest.TestCase):
         """init --session; a task whose work is committed; a review run by hand in between; another commit."""
         code, out = run("init", "--session", "--goal", "g-" + name, "--target", pj.dir)
         self.assertEqual(code, 0, out)
-        code, out = run("add", name, "--brief", "write w", "--scope", name + ".txt", "--target", pj.dir)
+        code, out = run("add", name, "--why", "a test task: no check decides it", "--brief", "write w", "--scope", name + ".txt", "--target", pj.dir)
         self.assertEqual(code, 0, out)
         write(os.path.join(pj.dir, name + ".txt"), "work\n")
         git(pj.dir, "add", name + ".txt")

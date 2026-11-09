@@ -33,7 +33,7 @@ class AdoptRecord(unittest.TestCase):
     def done_a(self, pj):
         """Task A (no check) changes x.py and is run done; A's record lists x.py."""
         self.project(pj)
-        code, out = run("add", "A", "--brief", "write x.py", "--target", pj.dir)
+        code, out = run("add", "A", "--why", "a test task: no check decides it", "--brief", "write x.py", "--target", pj.dir)
         self.assertEqual(code, 0, out)
         write(os.path.join(pj.dir, "x.py"), "x = 1\n")
         code, out = run("run", "--target", pj.dir)
@@ -71,7 +71,7 @@ class AdoptRecord(unittest.TestCase):
     def test_C1_1_adopt_leaves_a_done_tasks_record_byte_identical(self):
         with Project() as pj:
             self.done_a(pj)
-            self.assertEqual(run("add", "B", "--brief", "own x.py", "--target", pj.dir)[0], 0)
+            self.assertEqual(run("add", "B", "--why", "a test task: no check decides it", "--brief", "own x.py", "--target", pj.dir)[0], 0)
             before = self.record_bytes(pj, "A")
             code, out = run("adopt", "B", "x.py", "--why", "B's work", "--target", pj.dir)
             self.assertEqual(code, 0, out)
@@ -86,14 +86,14 @@ class AdoptRecord(unittest.TestCase):
     def test_C1_1_adopt_leaves_a_dropped_task_holding_the_file_unchanged(self):
         with Project() as pj:
             self.project(pj)
-            self.assertEqual(run("add", "A", "--brief", "try x.py", "--target", pj.dir)[0], 0)
+            self.assertEqual(run("add", "A", "--why", "a test task: no check decides it", "--brief", "try x.py", "--target", pj.dir)[0], 0)
             write(os.path.join(pj.dir, "x.py"), "x = 1\n")
             code, out = run("drop", "A", "--why", "superseded", "--target", pj.dir)
             self.assertEqual(code, 0, out)
             st = pj.state()["tasks"]["A"]
             self.assertEqual(st["status"], "dropped", st)
             self.assertIn("x.py", st.get("touched", []), st)
-            self.assertEqual(run("add", "B", "--brief", "own x.py", "--target", pj.dir)[0], 0)
+            self.assertEqual(run("add", "B", "--why", "a test task: no check decides it", "--brief", "own x.py", "--target", pj.dir)[0], 0)
             before = self.record_bytes(pj, "A")
             code, out = run("adopt", "B", "x.py", "--why", "B's work", "--target", pj.dir)
             self.assertEqual(code, 0, out)
@@ -112,7 +112,7 @@ class AdoptRecord(unittest.TestCase):
             code, out = run("run", "--target", pj.dir)
             self.assertEqual(code, c.DECISION, out)
             self.assertEqual(pj.state()["tasks"]["A"]["status"], "todo")
-            self.assertEqual(run("add", "B", "--target", pj.dir)[0], 0)
+            self.assertEqual(run("add", "B", "--why", "a test task: no check decides it", "--target", pj.dir)[0], 0)
             code, out = run("adopt", "B", "x.py", "--why", "B's work", "--target", pj.dir)
             self.assertEqual(code, 0, out)
             self.assertIn("from A: x.py", out)
@@ -129,7 +129,7 @@ class AdoptRecord(unittest.TestCase):
     def test_C1_2_the_adopting_task_records_beside_the_done_task_not_from(self):
         with Project() as pj:
             self.done_a(pj)
-            self.assertEqual(run("add", "B", "--brief", "own x.py", "--target", pj.dir)[0], 0)
+            self.assertEqual(run("add", "B", "--why", "a test task: no check decides it", "--brief", "own x.py", "--target", pj.dir)[0], 0)
             code, out = run("adopt", "B", "x.py", "--why", "B's work", "--target", pj.dir)
             self.assertEqual(code, 0, out)
             entry = pj.state()["tasks"]["B"]["adopted"][-1]
@@ -143,7 +143,7 @@ class AdoptRecord(unittest.TestCase):
     def test_C1_2_adopt_prints_the_beside_files(self):
         with Project() as pj:
             self.done_a(pj)
-            self.assertEqual(run("add", "B", "--brief", "own x.py", "--target", pj.dir)[0], 0)
+            self.assertEqual(run("add", "B", "--why", "a test task: no check decides it", "--brief", "own x.py", "--target", pj.dir)[0], 0)
             code, out = run("adopt", "B", "x.py", "--why", "B's work", "--target", pj.dir)
             self.assertEqual(code, 0, out)
             self.assertIn("beside done A: x.py", out)
@@ -156,7 +156,7 @@ class AdoptRecord(unittest.TestCase):
         with Project() as pj:
             self.done_a(pj)                                    # A is owner-a's
             os.environ["CHONGDAE_SESSION"] = "owner-b"
-            self.assertEqual(run("add", "B", "--brief", "own x.py", "--target", pj.dir)[0], 0)
+            self.assertEqual(run("add", "B", "--why", "a test task: no check decides it", "--brief", "own x.py", "--target", pj.dir)[0], 0)
             before = self.record_bytes(pj, "A")
             code, out = run("adopt", "B", "x.py", "--why", "B's work", "--target", pj.dir)
             self.assertEqual(code, 0, out)
@@ -167,10 +167,10 @@ class AdoptRecord(unittest.TestCase):
     def test_C1_3_an_open_task_of_another_session_still_refuses_before_writing(self):
         with Project() as pj:
             self.project(pj)
-            self.assertEqual(run("add", "A", "--target", pj.dir)[0], 0)   # owner-a's, still open
+            self.assertEqual(run("add", "A", "--why", "a test task: no check decides it", "--target", pj.dir)[0], 0)   # owner-a's, still open
             write(os.path.join(pj.dir, "x.py"), "x = 1\n")
             os.environ["CHONGDAE_SESSION"] = "owner-b"
-            self.assertEqual(run("add", "B", "--target", pj.dir)[0], 0)
+            self.assertEqual(run("add", "B", "--why", "a test task: no check decides it", "--target", pj.dir)[0], 0)
             before = self.snapshot(pj)
             code, out = run("adopt", "B", "x.py", "--why", "B's work", "--target", pj.dir)
             self.assertNotEqual(code, 0, out)
@@ -192,7 +192,7 @@ class AdoptRecord(unittest.TestCase):
         with Project() as pj:
             self.done_a(pj)
             write(os.path.join(pj.dir, "y.py"), "y = 1\n")
-            self.assertEqual(run("add", "B", "--brief", "write y.py", "--target", pj.dir)[0], 0)
+            self.assertEqual(run("add", "B", "--why", "a test task: no check decides it", "--brief", "write y.py", "--target", pj.dir)[0], 0)
             before = self.snapshot(pj)
             code, out = run("adopt", "A", "y.py", "--why", "later work", "--target", pj.dir)
             self.assertNotEqual(code, 0, out)
@@ -203,7 +203,7 @@ class AdoptRecord(unittest.TestCase):
 
     def adopted_and_run(self, pj):
         self.done_a(pj)
-        self.assertEqual(run("add", "B", "--brief", "own x.py", "--target", pj.dir)[0], 0)
+        self.assertEqual(run("add", "B", "--why", "a test task: no check decides it", "--brief", "own x.py", "--target", pj.dir)[0], 0)
         code, out = run("adopt", "B", "x.py", "--why", "B's work", "--target", pj.dir)
         self.assertEqual(code, 0, out)
 

@@ -30,6 +30,8 @@ class LaunchRecovery(CommandFixture):
         else:
             check, outside = shlex.join(argv), ("--allow-outside",)   # contract C7: the worker is outside the project
         self.call("add", "a", "--role", "session", "--check", check, *outside, code=0)
+        if stage == "verify":
+            (self.project / "work.py").write_text("work = 1\n")   # the task's own change: a task whose diff is empty has nothing for the verifier to read
         suffix = "a.%s.pending.json" % stage
         injector = self.base / "crash.py"
         injector.write_text(

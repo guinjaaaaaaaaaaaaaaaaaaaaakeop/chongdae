@@ -141,7 +141,7 @@ c.save_state(d, state)
             subprocess.run(["git", "config", "user.name", "Test"], cwd=target, check=True)
             subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=target, check=True)
             self.assertEqual(fixture.run("init", "--session", "--goal", "recover", "--target", target)[0], 0)
-            self.assertEqual(fixture.run("add", "a", "--brief", "a", "--target", target)[0], 0)
+            self.assertEqual(fixture.run("add", "a", "--why", "a test task: no check decides it", "--brief", "a", "--target", target)[0], 0)
             d = c.run_dir(target)
             state = c.load_state(d)
             state["tasks"]["a"]["review-source"] = {"private.py": "private witness"}
@@ -154,7 +154,7 @@ c.save_state(d, state)
 
             with mock.patch.object(c, "save_changed", side_effect=interrupt), self.assertRaises(RuntimeError):
                 c.save_state(d, state)
-            code, out = fixture.run("add", "b", "--brief", "b", "--target", target)
+            code, out = fixture.run("add", "b", "--why", "a test task: no check decides it", "--brief", "b", "--target", target)
             self.assertEqual(code, 0, out)
             self.assertEqual(c.load_state(d)["tasks"]["a"]["review-source"], {"private.py": "private witness"})
             self.assertEqual(c.load(os.path.join(d, "local", "state-transaction.json"))["phase"], "committed")

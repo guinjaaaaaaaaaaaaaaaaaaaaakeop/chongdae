@@ -16,7 +16,7 @@ class MutationOwnership(unittest.TestCase):
 
     def setup_task(self, pj, *extra):
         self.assertEqual(run("init", "--session", "--goal", "ownership", "--target", pj.dir)[0], 0)
-        self.assertEqual(run("add", "work", *extra, "--target", pj.dir)[0], 0)
+        self.assertEqual(run("add", "work", "--why", "a test task: no check decides it", *extra, "--target", pj.dir)[0], 0)
         return c.run_dir(pj.dir)
 
     def test_foreign_judgments_refuse_before_checks_operations_or_record_changes(self):
@@ -99,7 +99,7 @@ class MutationOwnership(unittest.TestCase):
     def test_dispute_cannot_reopen_another_sessions_completed_test_writer(self):
         with Project() as pj:
             self.assertEqual(run("init", "--session", "--goal", "g", "--target", pj.dir)[0], 0)
-            self.assertEqual(run("add", "tests", "--tests", "test_a.py", "--target", pj.dir)[0], 0)
+            self.assertEqual(run("add", "tests", "--why", "a test task: no check decides it", "--tests", "test_a.py", "--target", pj.dir)[0], 0)
             write(os.path.join(pj.dir, "test_a.py"), "# wrong\n")
             self.assertEqual(run("run", "tests", "--target", pj.dir)[0], 0)
             os.environ["CHONGDAE_SESSION"] = "owner-b"
@@ -125,7 +125,7 @@ class MutationOwnership(unittest.TestCase):
                 if done:
                     self.assertEqual(run("run", "work", "--target", pj.dir)[0], 0)
                 os.environ["CHONGDAE_SESSION"] = "owner-b"
-                self.assertEqual(run("add", "mine", "--target", pj.dir)[0], 0)
+                self.assertEqual(run("add", "mine", "--why", "a test task: no check decides it", "--target", pj.dir)[0], 0)
                 before = pj.state()
                 code, out = run("adopt", "mine", "source.py", "--why", "mine", "--target", pj.dir)
                 if done:
