@@ -711,7 +711,9 @@ reviews before closing the shared run.
 A batch pre-approval declared once as its own judgment (`--scope confirm,accept,retry --why "…" --by NAME`; one
 record, one notary commit) — it prints `D-xxxx`, and every later judgment in that run references it with `--delegated
 D-xxxx` instead of pasting the reason. Per run: a delegation belongs to the run it was declared in. `report` flags one
-reason string stamped on 3+ judgments as `delegation-stamp`
+reason string stamped on 3+ judgments as `delegation-stamp`, and different reasons that share a leading clause
+across 3+ judgments. A known reason class followed by `:` is a category, not a clause that stamps: the text after
+it is compared, with the class kept in the lead. Sharing only a reason class is not a stamp.
 
 ### `/chongdae:confirm`
 

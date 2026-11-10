@@ -545,5 +545,136 @@ class T4_Documentation(unittest.TestCase):
         self.assertEqual(missing, [], "add --help does not name the reason classes %s:\n%s" % (missing, out))
 
 
+
+# ====================================================================== S: a reason class is a category, not a stamped clause
+
+class S_ClassIsNotAStamp(TaskWorkCase):
+    """Contract S: a self-performed task's `--why` opens with the reason class the engine requires; `report`'s count of reasons
+    that open with the same clause must compare the text after the class, not the class itself. Found when three tasks of one
+    run, done by the session under one class with three different reasons, were reported as one decision written as many."""
+
+    def init_hired(self):
+        self.init_session({"implementer": self.fake_answer(RESPONSE_BLOCKED, "builder"),
+                           "nitpick": self.fake_answer(RESPONSE_BLOCKED, "writer")})
+
+    def session_task(self, tid, why):
+        """A session task a passing check decides, with a classed `--why`, a small change of its own, finished by name."""
+        code, out = self.cli("add", tid, "--role", "session", "--check", PASS_CHECK, "--brief", "the work of %s" % tid, "--why", why)
+        self.assertEqual(code, 0, out)
+        write(self.path("src/%s.py" % tid), "# changed by %s\n" % tid)
+        code, out = self.cli("run", tid)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.task(tid).get("status"), "done", out)
+
+    def free_task(self, tid, why):
+        """A task no check decides, with a free `--why`, finished on the session's word by name."""
+        code, out = self.cli("add", tid, "--brief", "the work of %s" % tid, "--why", why)
+        self.assertEqual(code, 0, out)
+        code, out = self.cli("run", tid)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.task(tid).get("status"), "done", out)
+
+    def report_stamps(self):
+        code, out = self.cli("close", *UNCOMMITTED)
+        self.assertEqual(code, 0, out)
+        code, out = self.cli("report")
+        self.assertEqual(code, 0, out)
+        doc = json.loads(out)
+        self.assertIn("findings", doc, out)
+        return [f for f in doc["findings"] if f.get("kind") == "delegation-stamp"]
+
+    @staticmethod
+    def names(finding, tids):
+        where = str(finding.get("where", ""))
+        return all(re.search(r"/%s(?![\w-])" % re.escape(t), where) for t in tids)
+
+    def stamps_naming(self, stamps, tids):
+        return [f for f in stamps if self.names(f, tids)]
+
+    def stamps_naming_any(self, stamps, tids):
+        return [f for f in stamps if any(self.names(f, [t]) for t in tids)]
+
+    # -- S1 -------------------------------------------------------------------------------------------------------------
+
+    def test_S1_three_session_reasons_sharing_only_the_class_are_not_a_delegation_stamp(self):
+        self.init_hired()
+        self.session_task("sa", "project-rule: the model is the owning session's")
+        self.session_task("sb", "project-rule: the version decision belongs to the release")
+        self.session_task("sc", "project-rule: the source is kept for the push")
+        stamps = self.report_stamps()
+        false = self.stamps_naming_any(stamps, ["sa", "sb", "sc"])
+        self.assertEqual(false, [], "three different reasons under one reason class are reported as a stamp: %s" % false)
+
+    def test_S1_three_reasons_sharing_the_class_and_the_clause_after_it_are_a_stamp_led_with_the_class(self):
+        self.init_hired()
+        self.session_task("sa", "project-rule: the same decision — one")
+        self.session_task("sb", "project-rule: the same decision — two")
+        self.session_task("sc", "project-rule: the same decision — three")
+        stamps = self.stamps_naming(self.report_stamps(), ["sa", "sb", "sc"])
+        self.assertTrue(stamps, "three reasons sharing the class and the clause after it are no delegation-stamp")
+        led = [f for f in stamps if "project-rule: the same decision" in str(f.get("text", ""))]
+        self.assertTrue(led, "the stamp does not name its lead with the class ('project-rule: the same decision'): %s" % stamps)
+        f = led[0]
+        self.assertIn("open with the same clause", f["text"], f)       # the finding's text as today
+        self.assertIn("3 delegated reasons", f["text"], f)             # the count as today
+        self.assertIn("(3 judgments)", f["text"], f)
+
+    def test_S1_a_class_shared_with_different_reasons_does_not_hide_a_real_stamp_beside_it(self):
+        """The class is a category: two tasks with a different reason each and three with one clause after the class give one
+        stamp, naming only the three."""
+        self.init_hired()
+        self.session_task("da", "project-rule: the model is the owning session's")
+        self.session_task("db", "project-rule: the source is kept for the push")
+        self.session_task("sa", "project-rule: the same decision — one")
+        self.session_task("sb", "project-rule: the same decision — two")
+        self.session_task("sc", "project-rule: the same decision — three")
+        stamps = self.report_stamps()
+        mixed = self.stamps_naming_any(stamps, ["da", "db"])
+        self.assertEqual(mixed, [], "tasks sharing only the class with the stamped ones are counted with them: %s" % mixed)
+        self.assertTrue(self.stamps_naming(stamps, ["sa", "sb", "sc"]), stamps)
+
+    def test_S1_a_class_word_not_followed_by_a_colon_is_led_as_today(self):
+        """As today (a free reason that opens with a class word and a dash, not a colon): may pass before the build."""
+        self.init_hired()
+        self.free_task("fa", "project-rule — the first piece")
+        self.free_task("fb", "project-rule — the second piece")
+        self.free_task("fc", "project-rule — the third piece")
+        stamps = self.stamps_naming(self.report_stamps(), ["fa", "fb", "fc"])
+        self.assertTrue(stamps and any("project-rule" in str(f.get("text", "")) for f in stamps),
+                        "a class word with no colon after it is no longer led as today: %s" % stamps)
+
+    # -- S2 -------------------------------------------------------------------------------------------------------------
+
+    def test_S2_the_same_whole_classed_reason_on_three_tasks_is_still_a_stamp_by_the_exact_string(self):
+        """Unchanged behaviour: may pass before the build."""
+        self.init_hired()
+        for tid in ("sa", "sb", "sc"):
+            self.session_task(tid, "latency: three lines")
+        stamps = self.stamps_naming(self.report_stamps(), ["sa", "sb", "sc"])
+        exact = [f for f in stamps if "latency: three lines" in str(f.get("text", "")) and "stamped on 3 judgments" in str(f.get("text", ""))]
+        self.assertTrue(exact, "the same whole classed reason on three tasks is no exact-string stamp: %s" % stamps)
+
+    def test_S2_a_reason_with_no_class_still_leads_by_its_first_clause(self):
+        """Unchanged behaviour: may pass before the build."""
+        self.init_hired()
+        self.free_task("fa", "a day's repair: each piece one")
+        self.free_task("fb", "a day's repair: each piece two")
+        self.free_task("fc", "a day's repair: each piece three")
+        stamps = self.stamps_naming(self.report_stamps(), ["fa", "fb", "fc"])
+        led = [f for f in stamps if "a day's repair" in str(f.get("text", "")) and "open with the same clause" in str(f.get("text", ""))]
+        self.assertTrue(led, "a reason with no class no longer leads by its first clause: %s" % stamps)
+
+    # -- S3 -------------------------------------------------------------------------------------------------------------
+
+    def test_S3_readme_says_a_reason_class_is_compared_by_the_text_after_it_where_the_stamp_is_described(self):
+        with open(os.path.join(HERE, "plugin", "README.md"), encoding="utf-8") as fh:
+            text = fh.read()
+        paras = [p for p in re.split(r"\n\s*\n", text) if "delegation-stamp" in p]
+        self.assertTrue(paras, "the README no longer describes `delegation-stamp`")
+        said = [p for p in paras if re.search(r"reason class", p, re.IGNORECASE) and re.search(r"\bafter\b", p, re.IGNORECASE)]
+        self.assertTrue(said, "no paragraph describing `delegation-stamp` says a reason class is compared by the text after it:\n"
+                        + "\n---\n".join(paras))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -7508,11 +7508,16 @@ def cmd_report(args):
                                                                                 for (role, cap, dec) in sorted(lack, key=str)))})
         for tid, ts in state.get("tasks", {}).items():   # a drop's reason is a judgment like the rest
             stamp((ts.get("dropped") or {}).get("why"), "%s/%s drop" % (name, tid))
-        # one reason stamped across judgments with a different tail each time: guin-site opened ten reasons with the same clause
-        # ("소유자가 구현을 맡김"), each with its own suffix, and the exact-string count saw ten judgments
+        # One reason with different tails is still one judgment; exact-string counts miss the shared clause.
         leads = {}
         for reason, wheres in stamps.items():
-            lead = re.split(r"[:(（—–]", " ".join(str(reason).split()), 1)[0].strip()
+            text = " ".join(str(reason).split())
+            because, sep, rest = text.partition(":")
+            # A required reason class is a category: compare the clause after it, keeping the class in the lead.
+            if sep and because in SELF_REASONS:
+                lead = because + ": " + re.split(r"[:(（—–]", rest, 1)[0].strip()
+            else:
+                lead = re.split(r"[:(（—–]", text, 1)[0].strip()
             if len(lead) >= 8 and lead != reason.strip():
                 leads.setdefault(lead, set()).add(reason)
         for lead, reasons in sorted(leads.items()):
