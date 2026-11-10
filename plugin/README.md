@@ -194,7 +194,19 @@ approximate. `git log -- .chongdae/run-<id>` joins the record to the changes.
 
 The work itself is the session's to commit, and its subject has its own form: `run-<id>/<task> (session): <what>` — never
 the engine's `run-<id>: …`, which is chongdae's record commits only. `run` (when it makes a task done) and `close` (when it
-stops on uncommitted work) print the exact `git add -- FILE…` and `git commit -m "…" -- FILE…` for each task.
+stops on uncommitted work) print the exact `git add -- FILE…` and `git commit -m SUBJECT -m BODY -- FILE…` for each task.
+
+A session task's `done` or `produced` line says **NOT committed** when its work is still uncommitted, before printing
+its commit lines. Run those lines before another task changes the files. `add` warns when the next task's scope or
+words overlap that work; `run` warns when its measured changes overlap. If the finished version has been overwritten,
+the note says so. These are notes, not refusals.
+
+A work line's subject keeps the task's session prefix and adds
+only the brief's complete first sentence when the result fits in 100 characters. Otherwise it keeps just the prefix.
+The whole brief goes in the body unless the subject already holds it all. Record commit subjects name the action and
+task; their detail goes whole in the body. Neither kind cuts a word or adds an ellipsis. This does not change the number
+of record commits; `settings.chongdae.commit-records: false` already turns them off. An operation goes before `close`:
+a push after `close` is outside any run and is not recorded.
 
 ## Commands
 
@@ -247,9 +259,27 @@ key does it, and the record keeps it (`performed_by.as`; `show` prints `implemen
 keys through to the lock unchanged. A check is one command: a shell line (`sh -c 'a && b'`) is refused — give each command its own
 `--check`. `--role nitpick` with a `--check` is refused (a nitpick task is decided by its tests being red before the
 build; a task with a check is a build). `--role` names a declared role outright; `--role session` where the lock
-declares a provider needs `--why` (and `--by`) — recorded on the task as `self-performed`, reported as an observation,
+declares a provider needs `--why "CLASS: text"` explaining why the worker was not hired — recorded on the task as `self-performed`, reported as an observation,
 its reason counted like a delegation's (one reason stamped on task after task is one decision claiming to be many).
 `--before`/`--after` name the roles hired around it.
+
+The reason classes are `owner-dialogue` (the person shapes the work turn by turn), `latency` (a worker's round trip costs more than the change),
+`capability` (the worker's sandbox lacks what the task needs — name it), `provider-unavailable` (the declared provider
+cannot run here now), `operation` (an operation outside the repository), `project-rule` (the project's rules give it to
+the owning session), or `worker-contract` (the worker's contract cannot take it, such as tests that must pass before the build).
+An absent class or empty explanation is refused. The whole reason and `self-performed.because` are kept; `show` and
+`report` name the class. A capability handover the engine makes records `because: capability`. With no role due,
+`--why` still says freely why no check decides the task; `take --why` is unchanged.
+
+A session or sub-agent task added with `--scope` carries unclaimed files already changed inside that scope as
+`held-at-add`, including record files. Another open task claims a file by an equally narrow or narrower scope, by
+naming it in its brief or tests, or by measuring it as its own; a finished task claims its uncommitted work. `add`
+names the held files and the files claimed by other tasks, with `chongdae adopt OTHER FILE --why WHY` to move one.
+Held files go to the verifier in `touched` with their attribution, stay in the finished task and its commit lines,
+and drop out if restored to HEAD. They alone do not finish an unnamed no-check task: use `run TASK`; its non-claim
+names the work held at add. Unscoped tasks, hired tasks, files named by the task’s words (`held-at-start` and
+`contested`), and files changed after add keep their existing rules.
+
 
 `--role subagent` hands the task to **the session's own sub-agent** (the host's Agent tool): declared hands, not
 self-performed — recorded as `performed_by: {provider: subagent, host, model}` (the session's host and model; chongdae sees
@@ -647,12 +677,26 @@ Landing a worktree also acquires the destination project's lock before changing 
 temporary git index and advance HEAD only if it still names the commit they started from, so a concurrent source commit
 is preserved. If HEAD moved, the judgment stays on disk for the next record commit.
 
-Checks and verifier results belong to the source they examined. Content snapshots include ignored nested repositories
-and initialized submodules, including uncommitted changes; record-only changes and committing identical source content do
-not invalidate them. If source changes while checks, a verifier or an after-role runs, the old pass cannot finish the task.
-Resume the named task after its writers stop: checks and affected reviewers run again. The same rule applies while a
-produced task waits at its human gate: changed source returns it to work before a fresh confirmation. Scopes declare
-ownership rather than dependencies, so changes elsewhere in the source tree conservatively invalidate a running review.
+Checks and verifier results belong to what they examined. A verifier and the after roles stand on the task's
+review witness: source, including records inside its own scope, less files another open task's scope holds more
+narrowly (or holds while this task's scope does not). Those scope entries are fixed when the verifier is asked;
+the other task finishing does not change the witness. A change to a file left out does not void the verdict.
+The task's own measured files (including adopted files), held-at-start and held-at-add files, records,
+and tests it protects or writes stay in the witness whatever another task's scope says.
+Changes to its own files or files no other open task holds do void it, including records inside its own scope.
+Any source change runs checks again, even when the verdict stands. This applies during review and while a produced
+task waits at its human gate. `still working:` for a pending verifier names the other tasks and says this boundary;
+for pending checks it says any source change while they run runs them again.
+
+Within a run, a passing check on an identical tree is reused for the same resolved argv, including `--checked`
+commands. The identity includes every git-visible file, records and nested repositories, excluding `.chongdae/`.
+The cache stays in the run's local directory. The task's check record carries `reused` (`{task, at}`) and `run` says
+whose pass it reused and that the command was not run again. The verifier receives that evidence under `checked`.
+Failures, timeouts, `--checked-red`, tasks with `repeat-checks`, another run's results and different trees are never reused.
+
+Every check record, including landing, recheck and `--checked`, keeps `summary` (at most five lines) and `failures`
+(at most ten, each at most 300 characters), or `result: none recognized`. The tail leaves interpreter warnings and
+their source or tracing hints out, keeping the runner's answer among the last meaningful lines.
 
 **Parallel implementation and independent review.** Add each implementation task before dispatch, with disjoint scopes
 and `--role subagent`. Keep the task owned by its parent session; workers return their result to that parent. When A
@@ -759,6 +803,16 @@ consumes). On completion, `evidence-read` holds sorted `{path, sha256}` entries 
 start snapshot; they are not committed.
 
 Committed: yes.
+
+A task's `reinstated` keeps runner-dropped findings whose record quotes chongdae found, with `found-in`,
+`at` and `chongdae`; `unread-accepts` keeps each unread accept's files, summary and stamp.
+
+A task's `held-at-add` keeps its files, reason, time and engine version. `self-performed.because` keeps the reason
+class alongside the whole `why`. A session or sub-agent task that declares no tests and changes code but no test file
+keeps `untested` (the code paths, reason, time and engine version). `run` prints that limitation and keeps it as a
+non-claim for `close`. Documentation, data and records are not code; test names and test directories count as tests.
+The finished work's content hashes (`work-at-finish`) stay in the private overlay, so later work can be warned when
+it overwrites a finished version.
 
 `def.checks-outside` records allowed outside check files: `check` (index in `checks`), `arg`, `name`,
 `role` (`program` or `argument`), `sha256`, `size`, and eligible program `content`. The check argv
@@ -900,7 +954,9 @@ deploy` — gets one line of context: `record it: chongdae did TASK --why "…" 
 run and in a worker session (`AGENT_WORKER=1`), silent on `chongdae.py did` itself — the engine named or kept in a variable
 (`python3 $C did …`), the line read command by command with its quotes (sagoforce 10-26: a push given to `$C did` was told
 "record it", and pushes after `$C close` were not told they ran after close). hunsu.json
-`settings.chongdae.ops-patterns` (a list of regular expressions searched in the command) replaces the list; `[]` silences it.
+`settings.chongdae.ops-patterns` (a list of regular expressions searched in command words) replaces the list; `[]` silences it.
+Only unquoted command words are matched: heredoc bodies and quoted arguments, including multiline ones, are text.
+The shell lines passed to `bash -c`, `sh -c`, `zsh -c` and `eval` are read by the same rule.
 guin-site run-20261015-054352-a0ec ran `npm run deploy … | grep …; git push 2>&1 | tail -1` — both exits lost — and wrote
 the push into ATPROTO.md as prose. An operation that comes after a `chongdae … close` on the same line runs outside any
 run, where no `did` can record it: the line then says `this git push runs after close, outside any run — move it before
@@ -995,8 +1051,8 @@ with its reason and time, shown by run and show; no request or verifier is spawn
 report. Inspections and artifacts at a `path` keep their own decision rules. Without a declared verifier nothing changes.
 The verifier gets the contract, what the task touched (and what changed after the builder answered, told apart),
 and only its own records under `excluded.record-paths` (`records`, excluding files already in `touched`).
-Records already changed and unchanged at start, another open task's scope, and unchanged files pinned by another
-task's finish stay out. The window includes committed changes; older records without a snapshot use `start-head`.
+Records already changed and unchanged at start stay out unless the task carries them as `held-at-add`.
+Another open task's scope and unchanged files pinned by another task's finish stay out. The window includes committed changes; older records without a snapshot use `start-head`.
 It also gets the builder's report, and what chongdae itself ran on the tree and saw (`checked`: `{command, exit,
 tail, at, changed_since, source}` — the session's `--checked` and the task's own checks chongdae ran to decide it; guin-site
 run-20261015-054352-a0ec's verifier was told nothing of the suite chongdae had just run green), and answers `dwitbuk/review@1`: accept, or
@@ -1007,8 +1063,15 @@ not name — and a `claim-unverified` about a check `checked` shows passing with
 contract sentence the check may not decide), are overruled: printed, kept on the task (`overruled`: each finding and why) and
 said as a non-claim. A reject with nothing left standing goes on as accepted (a delegated `after-verifier` gate counts it so);
 otherwise only the standing findings are resent, each printed whole. guin-site: the verifier quoted "`built.non-claims` says: `I
-did not run the whole suite.`", a sentence only `tests_non_claims.cache-tests[8]` held, and the build was resent for it. What the
-verifier's own runner dropped as unfounded (`unfounded` in its answer) is printed and shown. What the verifier says it did not
+did not run the whole suite.`", a sentence only `tests_non_claims.cache-tests[8]` held, and the build was resent for it. A record quote is checked against whole files, whatever their size: the touched files, tests and files named by `where`.
+If an existing file cannot be read and the quote is not found elsewhere, the finding stands with a printed non-claim
+naming the file and reason. An elided quote (`…` or `...`), including a backticked quote, is matched piecewise;
+each piece of at least eight normalized characters must be found. A finding dropped by the verifier's runner is
+weighed against the same request words and files: a grounded finding is reinstated and handled as a reject, while the
+runner's review stays unchanged. A drop that cannot be grounded stays dropped; an accept reached through such drops
+keeps a printed non-claim with the findings and reasons, also listed by `close`.
+An accept without reading required files is not a verdict; `chongdae run TASK` asks the eyes again.
+`retry` names that command too. What the verifier says it did not
 do — the verdict's `non-claims`, such as dwitbuk's "accepted without reading the tree: …" — is printed, kept on the task as
 `(verifier) …` (a resend takes it off with the review it came with), and is an observation in `report`
 (`verifier-non-claim`), not a charge. A resent build's `touched` for the verifier is every attempt's: a file an earlier attempt
@@ -1056,6 +1119,11 @@ number; the next request carries every attempt's report and what the tree alread
 that spans two calls resumes from the tree and the record, not from anyone's memory. A retry keeps a `before` role's
 answer when the contract it answered — the brief, checks and the sections the task closes — is unchanged, and hires
 the role again only when it changed.
+
+A check's argv uses `{plugin:NAME}` for an installed plugin path argument and `~/` for another home path argument.
+Text inside an argument is kept as given when it names no account, temporary or project path; machine paths in text
+are neutralized in public records and retained in the private overlay. A `--check` text that does not parse is a usage
+error naming the flag, text and reason, before a task is created or changed.
 
 ## Limits
 

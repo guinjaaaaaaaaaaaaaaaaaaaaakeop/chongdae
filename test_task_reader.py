@@ -215,14 +215,14 @@ class R1_AddSaysWhy(TaskReaderCase):
         """A tests task the lock gives to the nitpick, taken by the session: `--role session --why W` records self-performed
         with W, as today, and no-check with W."""
         self.init_session({"nitpick": fake_answer(self.pj, RESPONSE_BLOCKED)})
-        code, out = self.cli("add", "T", "--role", "session", "--tests", "t.py", "--why", "w")
+        code, out = self.cli("add", "T", "--role", "session", "--tests", "t.py", "--why", "worker-contract: w")
         self.assertEqual(code, 0, out)
         ts = self.task("T")
         own = ts.get("self-performed")
         self.assertIsInstance(own, dict, "self-performed as today: %s" % sorted(ts))
-        self.assertEqual((own.get("instead-of"), own.get("why")), ("nitpick", "w"))
+        self.assertEqual((own.get("instead-of"), own.get("why")), ("nitpick", "worker-contract: w"))
         self.assertIn("no-check", ts, "the same --why is not recorded as no-check: %s" % sorted(ts))
-        self.assertEqual(ts["no-check"].get("why"), "w")
+        self.assertEqual(ts["no-check"].get("why"), "worker-contract: w")
         self.assertTrue(c.is_agent(ts["no-check"].get("by")), ts["no-check"])
 
     def test_R1_3_a_check_task_an_inspection_a_subagent_task_and_a_nitpick_task_need_no_why_while_the_sessions_own_does(self):
@@ -325,7 +325,7 @@ class R1_AddSaysWhy(TaskReaderCase):
         """Three tasks of one run with the same no-check reason are a delegation-stamp, as a repeated self-performed reason
         is; the task whose self-performed carries the same text is counted once, not twice."""
         self.init_session({"nitpick": fake_answer(self.pj, RESPONSE_BLOCKED)})
-        same = "a day's repair: each piece is a decision"
+        same = "worker-contract: a day's repair: each piece is a decision"
         for tid, argv, path in (("T1", ("--brief", "b"), "a1.md"), ("T2", ("--brief", "b"), "a2.md"),
                                 ("T3", ("--role", "session", "--tests", "t3.py"), "t3.py")):
             code, out = self.cli("add", tid, *argv, "--why", same)

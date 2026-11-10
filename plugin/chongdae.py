@@ -219,12 +219,12 @@ LOCAL = "local"
 
 
 PRIVATE_KEYS = ("records-start", "session", "transcript", "kept-locally", "start", "start-head", "start-heads",   # the host session behind an author line; the snapshot a task measures from, and the commit(s) it stood on
-                "evidence-start",                                   # add-time digests belong to this machine, like start
+                "work-at-finish", "evidence-start",                 # content digests belong to this machine, like start
                 "added-in",                                         # the session that added a session task: a run two sessions share tells each its own
                 "commands", "read",                                 # a worker's command lines and what it read: the record keeps the summary (`trace`)
                 "reported", "rebaseline",                           # flags the engine keeps between two `run` calls
                 "checked-tree", "checks-tree",                      # the tree a `--checked` command, or the task's own checks, ran on: what changed after is measured from it
-                "checks-source", "review-source", "after-source",   # complete source snapshots: an edit committed meanwhile is still a changed input
+                "checks-source", "review-source", "after-source", "review-excluded",   # complete source snapshots: an edit committed meanwhile is still a changed input
                 "completion-acks",                                 # launch tokens whose completed outcomes are durably applied to this task
                 "lease-held", "lease-work", "lease-established")    # local lease ownership/progress, including that an explicit hold superseded added-in
 
@@ -619,8 +619,8 @@ def neutral_path(text, target):
     return path_prefixes(text, target, narrow=False)
 
 
-def path_prefixes(text, target, narrow=True):
-    """Shared machine-path policy; narrow projections exclude account names and require path boundaries."""
+def path_prefixes(text, target, narrow=True, keep_tilde=False):
+    """Shared machine-path policy; narrow projections require boundaries; argv keeps anonymous tilde literals."""
     import tempfile
     text = str(text)
     start = r"(?<![^\s\"'`=(\[,:;|&>])" if narrow else ""
@@ -641,15 +641,16 @@ def path_prefixes(text, target, narrow=True):
         else:
             text = text.replace(root + os.sep, "./").replace(root, ".")
     home = os.path.expanduser("~")
-    text = re.sub(start + r"(?:%s|~)/\.(?:claude|codex)/plugins/cache/[^/\s\"']+/([^/\s\"']+)/([^/\s\"']+)" % re.escape(home),
+    cache_home = re.escape(home) if keep_tilde else r"(?:%s|~)" % re.escape(home)
+    text = re.sub(start + r"%s/\.(?:claude|codex)/plugins/cache/[^/\s\"'`)\],;]+/([^/\s\"'`)\],;]+)/([^/\s\"'`)\],;]+)" % cache_home,
                   lambda m: "<plugin:%s@%s>" % (m.group(1), m.group(2)), text)
     # a path above one plugin's version — a marketplace's cache or checkout — names only this machine's marketplaces
-    text = re.sub(start + r"(?:%s|~)/\.(claude|codex)/plugins/(?:cache|marketplaces)(?:/[^/\s\"']+)?" % re.escape(home),
+    text = re.sub(start + r"%s/\.(claude|codex)/plugins/(?:cache|marketplaces)(?:/[^/\s\"'`)\],;]+)?" % cache_home,
                   lambda m: "<%s-plugins>" % m.group(1), text)
     tmps = {tempfile.gettempdir(), os.path.realpath(tempfile.gettempdir()), "/private/tmp", "/tmp"}
     # In public projections a temp prefix must begin a path, not a relative path's segment.
     temp_start = wrapped_start if narrow else ""
-    temp_tail = r"(?:(?(strong)(?!\*\*))[^\s\"'`;|&)])*" if narrow else r"[^\s\"'`;|&)]*"
+    temp_tail = r"(?:(?(strong)(?!\*\*))[^\s\"'`;|&)\],])*" if narrow else r"[^\s\"'`;|&)\],]*"
     temp_replacement = keep_wrapper("<tmp>") if narrow else "<tmp>"
     for t in sorted(tmps, key=len, reverse=True):
         text = re.sub(temp_start + re.escape(t.rstrip("/")) + "/" + temp_tail, temp_replacement, text)   # the whole path under it, not its first segment
@@ -692,7 +693,9 @@ def public_projection(obj, target, _location=""):
                 raws[str(i)] = raw
         return public, {"[]": raws} if raws else {}
     if isinstance(obj, str):
-        public = path_prefixes(obj, target)
+        # Check argv is executable data; a tilde literal identifies no account.
+        argv = bool(re.search(r"(?:^|\.)checks\[\d+\]\[\d+\]$", _location))
+        public = path_prefixes(obj, target, keep_tilde=argv)
         return public, obj if public != obj else {}
     return obj, {}
 
@@ -730,7 +733,7 @@ def ensure_record_ignore(target):
             fh.write("\n".join(head + missing) + "\n")
 
 
-def commit_record(target, run_name, message, also=()):
+def commit_record(target, run_name, message, also=(), body=None):
     """A judgment was written into the run's record: commit that record, and only it, right now. git's immutability then
     notarizes the judgment — its content (the tree hash), its time (committer date), and any later edit (a visible diff).
     Without this the record's durability was a habit of whoever remembered to commit; now it is the engine's.
@@ -785,7 +788,11 @@ def commit_record(target, run_name, message, also=()):
         if wrote.returncode or not wrote.stdout.strip():
             return None
         tree = wrote.stdout.strip()
-        made = git("commit-tree", tree, *(["-p", base] if has_head else []), "-m", "%s: %s" % (run_name, message))
+        if body is None:
+            parts = re.split(r" — |: |\n", message, maxsplit=1)
+            message, body = parts[0], parts[1] if len(parts) > 1 else None
+        made = git("commit-tree", tree, *(["-p", base] if has_head else []), "-m", "%s: %s" % (run_name, message),
+                   *(["-m", body] if body else []))
         if made.returncode or not made.stdout.strip():
             return None
         # Other agents may commit source directly while a check runs. The command lock protects our record,
@@ -1164,6 +1171,14 @@ def native_argv(target, provider):
     return None
 
 
+def parse_check(text):
+    """Reject malformed check text before changing a task, with the offending flag visible."""
+    try:
+        return portable_argv(shlex.split(text))
+    except ValueError as err:
+        raise SystemExit("--check `%s`: does not parse (%s)" % (text, err)) from None
+
+
 def portable_argv(argv):
     """A check or provider as the record keeps it: an installed plugin's path -> `{plugin:NAME}`, anything else under this
     machine's home -> `~/…` (resolved again where it runs). A check given as `/Users/<me>/.claude/plugins/cache/…` was
@@ -1173,9 +1188,9 @@ def portable_argv(argv):
     for a in argv:
         a = str(a)
         if home and home != "~":
-            a = re.sub(r"(?:%s|~)/\.(?:claude|codex)/plugins/cache/[^/\s\"']+/([^/\s\"']+)/[^/\s\"']+" % re.escape(home),
+            a = re.sub(r"^(?:%s|~)/\.(?:claude|codex)/plugins/cache/[^/\s\"'`)\],;]+/([^/\s\"'`)\],;]+)/[^/\s\"'`)\],;]+" % re.escape(home),
                        lambda m: "{plugin:%s}" % m.group(1), a)
-            a = re.sub(r"%s(?=/|$)" % re.escape(home), "~", a)
+            a = re.sub(r"^%s(?=/|$)" % re.escape(home), "~", a)
         out.append(a)
     return out
 
@@ -1407,14 +1422,14 @@ def dirty(target, records_too=False, keep=()):
     return out
 
 
-def source_tree(target, keep=()):
+def source_tree(target, keep=(), all_files=False):
     """Content and executable bits of git-visible source, including nested repositories.
 
     A dirty-file snapshot alone cannot witness a review: a committed edit leaves it
     empty again. Record commits must not invalidate a review either. Read the files,
     not HEAD, and exclude records except the task's explicitly scoped record work.
-    Scopes name ownership, not dependencies: changes anywhere in this source tree
-    invalidate a check/review that was already in flight.
+    Review witnesses apply fixed scope exclusions to this snapshot. Checks use
+    all_files to include every git-visible record and host file as well.
     """
     import hashlib, stat, subprocess
     out, skip, repositories, seen = {}, record_paths(target), [""], set()
@@ -1430,8 +1445,8 @@ def source_tree(target, keep=()):
         for inner in set(done.stdout.split("\0")) - {""}:
             inner = inner.replace("\\", "/")
             path = repo + "/" + inner if repo else inner
-            if inner.startswith((RUNS + "/", ".claude/")) or ((inner.startswith(skip) and not in_entries(path, keep))) \
-                    or re.search(r"(^|/)__pycache__/|\.py[co]$", path):
+            if inner.startswith(RUNS + "/") or (not all_files and (inner.startswith(".claude/") or (inner.startswith(skip) and not in_entries(path, keep))
+                    or re.search(r"(^|/)__pycache__/|\.py[co]$", path))):
                 continue
             full = os.path.join(target, path)
             try:
@@ -1456,6 +1471,79 @@ def source_tree(target, keep=()):
                 out[path] = "gone"
         repositories.extend((repo + "/" if repo else "") + name for name in nested_repos(cwd))
     return out
+
+
+def check_source(target):
+    """Checks can read records too; only the run's own bookkeeping is excluded."""
+    return source_tree(target, all_files=True)
+
+
+def review_source(ctx, task, ts):
+    """Freeze scope entries with the witness so another task finishing cannot change it."""
+    if "review-excluded" not in ts:
+        ts["review-excluded"] = {t["id"]: t.get("scope", []) for t in all_tasks(ctx["plan"], ctx["state"])
+                                 if t["id"] != task["id"] and t["id"] in open_tasks(ctx["plan"], ctx["state"])}
+    target = ctx["target"]
+    prior = ts.get("review-source", ts.get("after-source"))
+    # Keep reviewed files even when an edit changes their attribution (for
+    # example, held-at-start work no longer equals its starting snapshot).
+    own = set(prior or {}) | set(ts.get("touched") or []) | adopted_files(ts) | set(task.get("tests") or [])
+    if prior is None:
+        own.update(scoped_measure(target, ctx["plan"], ctx["state"], task["id"], ts, ctx["providers"])[0] or [])
+        own.update(held_at_start(target, task, ts))
+        own.update(held_at_add(target, ts))
+        own.update(own_records(target, ctx["plan"], ctx["state"], task, ts))
+    own.update(ts.get("records") or [])
+    tree = source_tree(target, list(record_scope(target, task)) + sorted(own))
+    if tree is None:
+        return None
+    def included(path):
+        if path in own:
+            return True
+        mine = scope_depth(path, task.get("scope"))
+        return not any(depth is not None and (mine is None or depth > mine)
+                       for scope in ts["review-excluded"].values() for depth in [scope_depth(path, scope)])
+    return {p: h for p, h in tree.items() if included(p)}
+
+
+def cached_check(target, d, tid, given, repeat=False, output=None):
+    """Serialize cache lookup and execution across detached workers in this run."""
+    import time
+    while True:
+        with CommandLock(target, work_path(d, "check-passes.lock")) as lock:
+            if lock.acquired:
+                return cached_check_locked(target, d, tid, given, repeat, output)
+        time.sleep(0.05)
+
+
+def cached_check_locked(target, d, tid, given, repeat, output):
+    """Keep passing execution evidence and full output local, keyed by argv and all visible files."""
+    argv = resolve_check_argv(target, given)
+    before = check_source(target)
+    key = CheckPlan.digest([argv, before])
+    path = work_path(d, "check-passes.json")
+    cache = load(path) if not repeat and before is not None else {}
+    if key in cache:
+        entry = cache[key]
+        if output is not None:
+            output.append(entry.get("output", ""))
+        return [], {**entry["result"], "command": shlex.join(str(a) for a in given),
+                    "reused": {"task": entry["task"], "at": entry["result"]["at"]}}
+    said = []
+    if tid == "--checked":
+        code, text, ran = run_argv(target, argv)
+        said.append(text)
+        rec = {"command": shlex.join(str(a) for a in given), "exit": code,
+               "tail": [line[:300] for line in kept_tail(text)], **checked_results(text), **stamp()}
+        failed = [text] if code or not ran else []
+    else:
+        failed, rec = execute_check(target, given, argv, output=said)
+    if output is not None:
+        output.extend(said)
+    if not failed and not repeat and before is not None and before == check_source(target):
+        cache[key] = {"task": tid, "result": rec, "output": "".join(said)}
+        save(path, cache)
+    return failed, rec
 
 
 def record_changes(target):
@@ -1604,6 +1692,8 @@ def scoped_measure(target, plan, state, tid, ts, prov):
     found = measured(target, ts)
     if found is None:
         return None, [], {"settled": set(), "ties": {}}
+    carried = set((ts.get("held-at-add") or {}).get("files") or [])
+    found = sorted((set(found) - carried) | set(held_at_add(target, ts)))
     tasks = {t["id"]: t for t in all_tasks(plan, state)}
     mine = (tasks.get(tid) or ts.get("def") or {}).get("scope") or []
     others = []
@@ -1653,6 +1743,42 @@ def scoped_measure(target, plan, state, tid, ts, prov):
     # held: `settled`, the files this task's scope alone holds most narrowly (no brief contests them); `ties`, the files another
     # open task's scope holds as narrowly — not pinned away from it, which keeps measuring them until `adopt` settles them
     return sorted(keep), notes, {"settled": settled, "ties": {f: list(o) for o, fs in tie.items() for f in fs}}
+
+
+def held_at_add(target, ts):
+    """Carry scoped work already dirty at add, only while it still differs from HEAD."""
+    files = (ts.get("held-at-add") or {}).get("files") or []
+    return sorted(set(files) & set(dirty(target, records_too=True) or {})) if files else []
+
+
+def hold_at_add(target, plan, state, task, ts):
+    """Claim pre-existing scoped work only when no other task already owns it."""
+    loose = uncommitted_work(target, plan, state)
+    held, claimed = [], {}
+    for f in sorted(ts.get("start") or {}):
+        depth = scope_depth(f, task.get("scope"))
+        if depth is None:
+            continue
+        owners = set(loose.get(f, []))
+        for other in all_tasks(plan, state):
+            oid = other["id"]
+            ots = state["tasks"].get(oid, {})
+            if oid == task["id"] or ots.get("status") != "todo":
+                continue
+            od = scope_depth(f, other.get("scope"))
+            if ((od is not None and od >= depth) or names_file(other, f)
+                    or (isinstance(ots.get("start"), dict) and f in (measured(target, ots) or []))
+                    or f in held_at_add(target, ots)):
+                owners.add(oid)
+        if owners:
+            claimed[f] = sorted(owners)
+        else:
+            held.append(f)
+    if held or claimed:
+        ts["held-at-add"] = {"files": held, **({"claimed": claimed} if claimed else {}), "why": "changed before %s was added, inside its own scope, claimed by no other task" % task["id"], **stamp()}
+    if held or claimed:
+        print("  held-at-add: %s%s; `chongdae adopt OTHER FILE --why WHY` gives a file to another task" %
+              (", ".join(held) or "none", "; claimed: " + "; ".join("%s by %s" % (f, ", ".join(ids)) for f, ids in claimed.items()) if claimed else ""))
 
 
 def names_file(task, path):
@@ -1770,12 +1896,14 @@ def resolve_check_argv(target, given):
     return argv
 
 
-def execute_check(target, given, argv, env=None):
+def execute_check(target, given, argv, env=None, output=None):
     """Keep ordinary checks and planned checks' exits and output tails identical."""
     import subprocess
     done = subprocess.run(argv, cwd=target, env=env, capture_output=True, text=True, encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL)
-    tail = (done.stdout + done.stderr).strip().split("\n")[-6:]
-    result = {"command": shlex.join(str(a) for a in given), "exit": done.returncode, "tail": portable(kept_tail(done.stdout + done.stderr), target), **stamp()}
+    if output is not None:
+        output.append(done.stdout + done.stderr)
+    tail = kept_tail(done.stdout + done.stderr)
+    result = {"command": shlex.join(str(a) for a in given), "exit": done.returncode, "tail": portable(kept_tail(done.stdout + done.stderr), target), **checked_results(done.stdout + done.stderr), **stamp()}
     failed = ["%s -> exit %d\n      %s" % (" ".join(argv), done.returncode, "\n      ".join(tail))] if done.returncode else []
     return failed, result
 
@@ -1837,14 +1965,17 @@ def checks_worker(target, job):
     """`chongdae.py _checks TARGET JOB`: the task's checks, run by chongdae in a process of their own, so a `run` call can hand
     back while they run (budget_checks). Writes {failed, ran, tree} beside the job — `tree`, the tree they left."""
     spec = load(job)
-    source_before = source_tree(target, spec.get("keep") or ())
+    source_before = check_source(target)
     failed = changed_check_files(target, spec)
     ran = []
     if not failed:
-        failed, ran = check_runs(target, spec.get("checks") or [])
+        for given in spec.get("checks") or []:
+            bad, rec = cached_check(target, spec["run-dir"], spec["id"], given, spec.get("repeat-checks", False))
+            failed += bad
+            ran.append(rec)
     save(job[:-len(".json")] + ".result.json", {"failed": failed, "ran": ran, "tree": dirty(target) or {},
                                                "launch-token": os.environ.get("CHONGDAE_LAUNCH_TOKEN"),
-                                               "source-before": source_before, "source": source_tree(target, spec.get("keep") or ())})
+                                               "source-before": source_before, "source": check_source(target)})
     return 0
 
 
@@ -1878,7 +2009,7 @@ def budget_checks(target, d, task, again=True, result_source=None):
         if os.path.exists(res_path):
             os.remove(res_path)
         os.makedirs(os.path.dirname(job), exist_ok=True)
-        save(job, {"checks": checks, "id": task["id"], "checks-outside": task.get("checks-outside", []), "keep": record_scope(target, task)})
+        save(job, {"checks": checks, "id": task["id"], "checks-outside": task.get("checks-outside", []), "keep": record_scope(target, task), "run-dir": d, "repeat-checks": task.get("repeat-checks", False)})
         pending = launch_pending(pend_path, [sys.executable, os.path.abspath(__file__), "_checks", os.path.abspath(target), job],
                                  target, base + ".log", checks=checks)
     else:
@@ -1906,7 +2037,7 @@ def budget_checks(target, d, task, again=True, result_source=None):
     if not result:
         retire_check_completion(pend_path, res_path)
         return None, ["%s: chongdae's run of the checks left no result (see %s)" % (task["id"], base + ".log")], []
-    now = source_tree(target, record_scope(target, task))
+    now = check_source(target)
     if "source" not in result or result.get("source-before") != result.get("source") or result.get("source") != now:
         # Writers may change and commit while a check runs. Never stamp the new
         # tree with an old pass. Retry once, then yield the work back if it moves
@@ -1917,6 +2048,11 @@ def budget_checks(target, d, task, again=True, result_source=None):
         return None, ["%s: source changed while its checks ran; wait for the writers, then `chongdae run %s` again" % (task["id"], task["id"])], result.get("ran") or []
     if result_source is not None:
         result_source["source"] = result.get("source")
+    for rec in result.get("ran") or []:
+        if rec.get("reused"):
+            reused = rec["reused"]
+            print("  %s: `%s` — chongdae's pass at %s (%s) on this identical tree, reused; not run again" %
+                  (task["id"], rec["command"], reused["at"], reused["task"]))
     retain_completion(d, task["id"], pend_path, pending, "checks", result)
     return None, result.get("failed") or [], result.get("ran") or []
 
@@ -2459,7 +2595,8 @@ def spawn(target, run, task, provider, plan, attempts=(), stage="build", extra=N
         if attempts:
             # A slice that spans calls: the next call is a fresh process. It resumes from the tree as the last call left it and from
             # these reports — not from anyone's memory. `touched` is what the tree already differs in.
-            req["attempts"] = [{k: a.get(k) for k in ("status", "summary", "verified", "decisions", "non-claims", "retried", "review", "disputed-tests", "reopened") } for a in attempts]
+            # The runner's review stays unchanged; the hands also need the findings reinstated as standing rejects.
+            req["attempts"] = [{k: a.get(k) for k in ("status", "summary", "verified", "decisions", "non-claims", "retried", "review", "reinstated", "disputed-tests", "reopened") } for a in attempts]
             req["touched"] = touched_files(target)
         req.update(extra or {})
         gone = deleted_by_contract(target, plan, load_state(run), task)
@@ -2525,11 +2662,11 @@ def spawn(target, run, task, provider, plan, attempts=(), stage="build", extra=N
 def waiting_text(what, d):
     if d.get("checks"):
         return ("%s: chongdae's own run of its checks is still going (pid %s, since %s; its log: %s) — the call's budget (CHONGDAE_WAIT) is spent; "
-                "`chongdae run` again keeps waiting for the same run and reads what it found; do not background `run`"
+                "`chongdae run` again keeps waiting for the same run and reads what it found; any change to the source tree while checks run runs them again; do not background `run`"
                 % (what, d.get("pid"), d.get("since"), d.get("log")))
     return ("%s: the provider is still working (pid %s, since %s; its output so far: %s) — `chongdae run` again keeps waiting for the same work; "
             "keep `run` in the foreground and resume its pending record after an interruption"
-            % (what, d.get("pid"), d.get("since"), d.get("log")))
+            % (what, d.get("pid"), d.get("since"), d.get("log"))) + d.get("witness-note", "")
 
 
 def waiting_stop(what, d):
@@ -3656,6 +3793,10 @@ def run_pass(args):
             if code is not None:
                 return code
         if ts["status"] == "produced" and gate_of(task).get("human"):
+            done_line(target, plan, state, task, "produced")
+            mine = {f: [task["id"]] for f, ids in uncommitted_work(target, plan, state).items() if task["id"] in ids}
+            for line in work_commit_lines(os.path.basename(d), plan, state, mine, target):
+                print("    " + line)
             return stop("human: review %s (%s) — then `chongdae confirm %s --by <name>` or `--delegated \"<why the human handed this off>\"`"
                         % (task.get("produces", "task %s (checks passed: %s)" % (task["id"], "; ".join(" ".join(c) for c in task.get("checks", [])))), path or task.get("closes", ""), task["id"]))
         if _LEASE_CALL and ts.get("lease-held") and not state.get("parent"):
@@ -3671,8 +3812,8 @@ def run_pass(args):
         # done is a judgment — the checks', the verifier's, the agent's word — and is notarized when it is made: guin-site
         # run-20261015-054352-a0ec's contract, quibble, decide, tests and decide-2 became done in `run` calls that committed
         # nothing, and landed in a commit titled "accept decisions on cache-build (delegated)", 12 files
-        commit_record(target, os.path.basename(d), "done %s%s" % (task["id"], " — " + cut(task["brief"], 100) if task.get("brief") else ""))
-        print("  done %s" % task["id"])
+        commit_record(target, os.path.basename(d), "done %s%s" % (task["id"], " — " + task["brief"] if task.get("brief") else ""))
+        done_line(target, plan, state, task)
         offer = check_offer(target, task, ts.get("touched") or []) if hire(ctx["providers"], task)[1] in SESSION_HANDS else None
         if offer:
             print("    note: %s was done on your word: %s — next time, before `run`" % (task["id"], offer))
@@ -3885,7 +4026,8 @@ def checked_results(said):
         result = (re.match(r"^Ran \d+ tests? in ", text)
                   or re.match(r"^(?:OK(?: \(.*\))?|FAILED \(.*\))$", text)
                   or re.search(r"\b\d+ (?:failed|passed|errors?|skipped|xfailed|xpassed).* in \d+(?:\.\d+)?s\b", text)
-                  or re.match(r"^(?:\d+ failed|all passed)$", text))
+                  or re.match(r"^(?:\d+ failed|all passed)$", text)
+                  or re.match(r"^(?:[ℹ#] (?:tests|pass|fail) \d+|Tests:|Tests\s+\d+|Test Files\s+\d+|\d+ (?:passing|failing)\b|(?:ok|FAIL)\s+\S+\s+\d+(?:\.\d+)?s$|PASS$|FAIL$|test result:)", text))
         failure = re.match(r"^(?:FAIL: |ERROR: |FAILED |FAIL .+ -- )", text)
         if result:
             summary.append(text)
@@ -3937,11 +4079,21 @@ def run_checked(target, commands, red=()):
     verifier is told what changed after."""
     runs = [(c, one_command(c, "--checked"), None) for c in commands or []] + [(c, one_command(c, "--checked-red"), "fail") for c in red or []]
     out, refused, outputs = [], [], []
+    d = run_dir(target)
     for c, argv, expect in runs:
-        code, said, ran = run_argv(target, argv)
+        reused_rec = None
+        if d and not expect:
+            captured = []
+            _, reused_rec = cached_check(target, d, "--checked", argv, output=captured)
+            code, said, ran = reused_rec["exit"], "".join(captured), reused_rec["exit"] not in (124, 127)
+        else:
+            code, said, ran = run_argv(target, argv)
         results = checked_results(said)
         # A long failure also occurs in the tail; keep its full text only in the local output.
         rec = {"command": c, "exit": code, "tail": [line[:300] for line in kept_tail(said)], **results, **stamp()}
+        if reused_rec is not None:
+            rec.update(reused_rec)
+            rec["command"] = c
         if expect:
             rec["expect"] = expect
             rec["outcome"] = "red as expected" if code else "passed before the build"
@@ -4063,7 +4215,7 @@ def own_checks(ctx, task, ts):
     commands = [shlex.join(str(a) for a in c) for c in task.get("checks") or []]
     passed = ts.get("checks-passed")
     if (isinstance(passed, dict) and [r.get("command") for r in passed.get("ran") or []] == commands
-            and "checks-source" in ts and ts["checks-source"] == source_tree(target, record_scope(target, task))):
+            and "checks-source" in ts and ts["checks-source"] == check_source(target)):
         return None, []
     witness = {}
     code, failed, ran = budget_checks(target, d, task, result_source=witness)
@@ -4148,13 +4300,15 @@ def decide_task(ctx, task, ts, who, path):
         # tree, no `did` — is not done by a `run` that did not name it: guin-site run-20261015-054352-a0ec, the `run` for
         # cache-comment also made cache-ops done (06:36:15, touched [], no did) — its deploy, push and Done line came at
         # 06:37–06:39. It stays open, the pass goes on, and the call ends saying how to finish it
-        if who in SESSION_HANDS and not ts.get("did") and not gate_of(task).get("human") and not own_measure():   # a gated task's done is a person's confirm
+        if who in SESSION_HANDS and not ts.get("did") and not gate_of(task).get("human") and not (set(own_measure() or []) - (set(held_at_add(target, ts)) - set(measured(target, ts) or []))):   # a gated task's done is a person's confirm
             # Records and held-at-start files belong in the reader's diff, but do not make this task's work done.
             recs = own_records(target, plan, state, task, ts)
             if task["id"] not in ctx["named"]:
                 # when what changed is records, say that, not "nothing": they count only inside the task's own scope
                 why = (" — what changed is records (%s), never a task's work unless its own `--scope` names them: "
                        "`chongdae adopt %s %s --why WHY` gives them to it —" % (", ".join(recs), task["id"], " ".join(recs))) if recs else ""
+                if held_at_add(target, ts):
+                    why += " — held-at-add: %s —" % ", ".join(held_at_add(target, ts))
                 ctx["held"].append("%s has changed nothing of its own%s%s and has no `did` record: %s" % (
                     task["id"], " — %s were the task before it" % ", ".join(sorted(ctx["claimed_now"])) if ctx["claimed_now"] else "", why, cut(task.get("brief", ""), 200)))
                 offer = check_offer(target, task)
@@ -4163,8 +4317,8 @@ def decide_task(ctx, task, ts, who, path):
                 return HELD
             held = held_at_start(target, task, ts) if isinstance(ts.get("start"), dict) else []
             contents = ["%s: %s" % (label, ", ".join(files)) for label, files in
-                        (("its own records", recs), ("held-at-start files", held)) if files]
-            tree = "no work of its own in the tree — %s —" % "; ".join(contents) if contents else "nothing of its own in the tree"
+                        (("its own records", recs), ("held-at-start files", held), ("work held-at-add", held_at_add(target, ts))) if files]
+            tree = ("work held-at-add — %s —" if held_at_add(target, ts) else "no work of its own in the tree — %s —") % "; ".join(contents) if contents else "nothing of its own in the tree"
             said = "%s: done on the session's word by name (`run %s`), with %s and no `did`" % (task["id"], task["id"], tree)
             if said not in ts.setdefault("non-claims", []):
                 ts["non-claims"].append(said)
@@ -4183,14 +4337,23 @@ def decide_task(ctx, task, ts, who, path):
     # the record — not a verdict; the gate stands as declared, and the reviewer's report carries what they found.
     built = {k: (ts.get("response") or {}).get(k) for k in ("summary", "verified", "non-claims")} if ts.get("response") else None
     if "after-source" not in ts:
-        ts["after-source"] = source_tree(target, record_scope(target, task))
+        ts["after-source"] = review_source(ctx, task, ts)
         save_state(d, state)
     code = run_stage(target, d, task, ts, state, plan, prov, "after", {"touched": own_measure() or [], "tests": task.get("tests", []), "built": built})
     if code is not None:
         return code
-    current = source_tree(target, record_scope(target, task))
-    if any(ts[key] != current for key in ("checks-source", "review-source", "after-source") if key in ts):
+    current = review_source(ctx, task, ts)
+    if any(ts[key] != current for key in ("review-source", "after-source") if key in ts):
         return invalidate_review(ctx, task, ts, current, reason="source changed before the after stage finished")
+    if task.get("checks"):
+        code, failed = own_checks(ctx, task, ts)
+        if code is not None:
+            return code
+        if failed:
+            return stop("session agent: %s: checks failed" % task["id"], *failed)
+    current = review_source(ctx, task, ts)
+    if any(ts[key] != current for key in ("review-source", "after-source") if key in ts):
+        return invalidate_review(ctx, task, ts, current, reason="source changed while checks ran after review")
     ts["status"] = "produced"
     ts["checks"] = task.get("checks", [])
     ts["records"] = own_records(target, plan, state, task, ts)
@@ -4200,6 +4363,10 @@ def decide_task(ctx, task, ts, who, path):
     earlier = [f for a in ts.get("attempts", []) if a.get("reopened") for f in a.get("touched") or []]
     if earlier and ts["touched"] is not None:
         ts["touched"] = sorted(set(ts["touched"]) | set(earlier))   # reopened to amend: what it wrote before is still its own
+    if who in SESSION_HANDS:
+        uncommitted_note(target, d, plan, state, task, ts["touched"] or [])
+        record_untested(target, task, ts)
+    ts["work-at-finish"] = {f: file_hash(target, f) for f in ts["touched"] or []}
     ctx["claimed_now"].update(ts["touched"] or [])
     # a file this task measured that another open session task names, and that changed after that task was added (or was
     # already changed when it was): whose work it is the tree cannot say. It is said, not guessed — and not pinned away from
@@ -4256,10 +4423,18 @@ def produced_freshness(ctx, task, ts):
     """A confirmation judges the produced, checked artifact, not later edits."""
     if not task.get("checks") and not ts.get("review") and not ts.get("nothing-to-review"):
         return None
-    current = source_tree(ctx["target"], record_scope(ctx["target"], task))
-    missing = (task.get("checks") and "checks-source" not in ts) or (ts.get("review") and "review-source" not in ts)
-    if not missing and all(ts[key] == current for key in ("checks-source", "review-source", "after-source") if key in ts):
-        return None
+    current = review_source(ctx, task, ts)
+    missing = ts.get("review") and "review-source" not in ts
+    if not missing and all(ts[key] == current for key in ("review-source", "after-source") if key in ts):
+        if task.get("checks"):
+            code, failed = own_checks(ctx, task, ts)
+            if code is not None:
+                return code
+            if failed:
+                return stop("session agent: %s: checks failed" % task["id"], *failed)
+        current = review_source(ctx, task, ts)
+        if all(ts[key] == current for key in ("review-source", "after-source") if key in ts):
+            return None
     ts["status"] = "todo"
     ts.pop("confirmed", None)
     ts.pop("done", None)
@@ -4273,7 +4448,7 @@ def invalidate_review(ctx, task, ts, current, verdict=None, reason="source chang
     Called only after the pending reviewer ended (or for an already kept review),
     so its old response can safely be retired before the next call asks fresh eyes.
     """
-    before = ts.get("review-source", ts.get("checks-source", ts.get("after-source")))
+    before = ts.get("review-source", ts.get("after-source", ts.get("checks-source")))
     changed = sorted(p for p in set(before or {}) | set(current or {}) if (before or {}).get(p) != (current or {}).get(p))
     invalidated = {"why": reason, "changed": changed, "verdict": (verdict or ts.get("review") or {}).get("verdict"), **stamp()}
     ts.setdefault("invalidated-reviews", []).append(invalidated)
@@ -4301,7 +4476,8 @@ def invalidate_review(ctx, task, ts, current, verdict=None, reason="source chang
                 os.remove(path)
     if not waiting_after:
         ts.pop("after-source", None)
-    for key in ("nothing-to-review", "review", "review-source", "reviewed_tree", "verdict-given", "verified_by", "overruled", "checks-passed", "checks-tree", "checks-source"):
+        ts.pop("review-excluded", None)
+    for key in ("nothing-to-review", "review", "review-source", "reviewed_tree", "verdict-given", "verified_by", "overruled", "reinstated", "checks-passed", "checks-tree", "checks-source"):
         ts.pop(key, None)
     save_state(ctx["d"], ctx["state"])
     print("%s %s: source changed while its checks or reviewers were deciding it (%s); the old result does not complete this task. "
@@ -4318,10 +4494,10 @@ def place_eyes(ctx, task, ts, who, touched):
     args, target, d, state, plan, prov = ctx["args"], ctx["target"], ctx["d"], ctx["state"], ctx["plan"], ctx["providers"]
     if not prov.get("verifier"):
         return None
-    current = source_tree(target, record_scope(target, task))
+    current = review_source(ctx, task, ts)
     if ts.get("review") and ("review-source" not in ts or ts["review-source"] != current):
         return invalidate_review(ctx, task, ts, current)
-    if not ts.get("review") and "review-source" not in ts and "checks-source" in ts and ts["checks-source"] != current:
+    if not ts.get("review") and "review-source" not in ts and "checks-source" in ts and ts["checks-source"] != check_source(target):
         for key in ("checks-passed", "checks-tree", "checks-source"):
             ts.pop(key, None)
         save_state(d, state)
@@ -4345,7 +4521,8 @@ def place_eyes(ctx, task, ts, who, touched):
         # finish pinned into its start, files its own word names that were already changed when it was added. A verifier that
         # saw only `touched: []` beside a tree holding the work rejected guin-site's escape-build on every retry
         attribution = {k: v for k, v in (("adopted", sorted(adopted_files(ts))), ("pinned-at-finish-of", ts.get("pinned") or {}),
-                                         ("held-at-start", held_at_start(target, task, ts) if isinstance(ts.get("start"), dict) else [])) if v}
+                                         ("held-at-start", held_at_start(target, task, ts) if isinstance(ts.get("start"), dict) else []),
+                                         ("held-at-add", held_at_add(target, ts))) if v}
         if attribution:
             extra["attribution"] = attribution
         if by_provider is not None:
@@ -4367,13 +4544,14 @@ def place_eyes(ctx, task, ts, who, touched):
                     for r in (ts.get("checks-passed") or {}).get("ran") or []]
         if checked:
             extra["checked"] = checked
-        last = next((a for a in reversed(ts.get("attempts", [])) if (a.get("review") or {}).get("verdict") == "reject" and isinstance(a.get("reviewed_tree"), dict)), None)
+        last = next((a for a in reversed(ts.get("attempts", [])) if verdict_of(a) == "reject" and isinstance(a.get("reviewed_tree"), dict)), None)
         if last:
             # a re-verification: what the last reject found, and what changed since that verdict. Re-reading the whole slice
             # each round cost the verifier its full time again and found a new edge each time — the rounds did not converge.
             # A finding chongdae overruled is not asked about again
             gone = [o.get("finding") for o in (last.get("overruled") or {}).get("findings") or []]
-            extra["recheck"] = {"findings": [f for f in last["review"].get("findings", []) if f not in gone], "changed_since": touched_files(target, last["reviewed_tree"]) or []}
+            extra["recheck"] = {"findings": [f for f in last["review"].get("findings", []) if f not in gone] +
+                                 [o["finding"] for o in (last.get("reinstated") or {}).get("findings", [])], "changed_since": touched_files(target, last["reviewed_tree"]) or []}
         code = empty_contract_stop(target, plan, task, "the verifier")
         if code is not None:
             return code
@@ -4388,18 +4566,53 @@ def place_eyes(ctx, task, ts, who, touched):
         if code == DISPATCH:
             return stop(dispatch_text(task["id"] + " (verify)", review))
         if code == WAITING:
+            review["witness-note"] = ("; changes to its own files or files no other open task's scope holds void the verdict, including records inside its own scope; "
+                                      "files in another open task's narrower scope (%s) do not void it; any source change runs checks again" %
+                                      (", ".join(k for k, v in ts.get("review-excluded", {}).items() if v) or "none"))
             return waiting_stop(task["id"] + " (verify)", review)
-        current = source_tree(target, record_scope(target, task))
+        current = review_source(ctx, task, ts)
         if ts.get("review-source") != current:
             return invalidate_review(ctx, task, ts, current, review)
         ts["review"] = review
         ts["verdict-given"] = stamp()   # when the eyes answered: the verification's end, for `show`
         ts["reviewed_tree"] = dirty(target)   # the tree this verdict was about: the next round is measured from here
+        asked = load(work_path(d, stage_tag(task["id"], "verify", ts.get("attempts", [])) + ".request.json"))
+
+        def note(text):
+            if text not in ts.setdefault("non-claims", []):
+                ts["non-claims"].append(text)
+            print("  " + text)
+
+        dropped = [f for f in review.get("unfounded") or [] if isinstance(f, dict)]
+        reinstated, remaining = [], []
+        for f in dropped:
+            _, _, _, _, errors, found = quote_grounding(f, asked)
+            if found:
+                reinstated.append({"finding": f, "found-in": found})
+                note("%s: the verifier's runner dropped its %s finding at %s as unfounded, and chongdae found its record quote in %s — reinstated" %
+                     (task["id"], f.get("kind"), f.get("where"), found))
+            else:
+                reason = str(f.get("unfounded"))
+                if errors:
+                    reason += "; chongdae could not check " + ", ".join("%s (%s)" % e for e in errors)
+                remaining.append(finding_line(f) + " — " + reason)
+        if reinstated:
+            ts["reinstated"] = {"findings": reinstated, **stamp()}
+        if remaining and review.get("verdict") == "accept" and not review.get("findings"):
+            note("%s: the verifier's reject was counted as an accept by its runner, which dropped %d finding(s) as unfounded: %s" %
+                 (task["id"], len(remaining), "; ".join(remaining)))
         if review.get("verdict") == "reject":
             # a finding stands on its quotes: one whose record quote is not where it says, or that calls unverified a check
             # chongdae itself saw pass, is no ground to resend the work — said and kept, like a refusal the checks overruled
-            asked = load(work_path(d, stage_tag(task["id"], "verify", ts.get("attempts", [])) + ".request.json"))
-            out = [{"finding": f, "why": why} for f in review.get("findings") or [] for why in [unfounded(f, asked)] if why]
+            out = []
+            for f in review.get("findings") or []:
+                errors = []
+                why = unfounded(f, asked, errors)
+                for rel, reason in errors:
+                    note("%s: chongdae could not check the record quote of the verifier's %s finding at %s against %s (%s); the finding stands" %
+                         (task["id"], f.get("kind"), f.get("where"), rel, reason))
+                if why:
+                    out.append({"finding": f, "why": why})
             if out:
                 ts["overruled"] = {"findings": out, **stamp()}
                 for o in out:
@@ -4413,12 +4626,8 @@ def place_eyes(ctx, task, ts, who, touched):
                 print("  %s: the verifier's non-claim: %s" % (task["id"], n.strip()))
                 if said not in ts.setdefault("non-claims", []):
                     ts["non-claims"].append(said)
-        for n in review.get("unfounded") or []:
-            # what the verifier's own runner dropped as unfounded (dwitbuk 1.14.0 weighs its eyes' answer): kept in the review, said here
-            if isinstance(n, dict):
-                print("  %s: the verifier dropped an unfounded finding: %s — %s" % (task["id"], finding_line(n), n.get("unfounded")))
         ts["verified_by"] = against_run(with_trace(performer(prov["verifier"], argv=prov["verifier"] if isinstance(prov["verifier"], list) else [prov["verifier"]], response=review, target=target), review, d, target, opened_paths=True), state)
-        if review.get("verdict") == "accept" and not native_argv(target, prov["verifier"]):
+        if review.get("verdict") == "accept" and not reinstated and not native_argv(target, prov["verifier"]):
             # (not when the session wrote the verdict for a native subagent: chongdae did not observe what was read)
             # the providers' own non-claims went to the verifier with the work (`built`, `tests_non_claims`) and it accepted:
             # read by the eyes placed for exactly that, they are information now, not charges a person disposes again
@@ -4434,12 +4643,18 @@ def place_eyes(ctx, task, ts, who, touched):
     review = ts["review"]
     if review.get("verdict") not in ("accept", "reject"):
         ts.pop("review", None)
+        if review.get("answered") == "accept" and review.get("unread"):
+            ts.setdefault("unread-accepts", []).append({"unread": review["unread"], "summary": review.get("summary"), **ts["verdict-given"]})
+            save_state(d, state)
+            return stop("%s: the eyes accepted without reading %s — not a verdict — `chongdae run %s` asks them again" %
+                        (task["id"], ", ".join(review["unread"]), task["id"]))
         ts.pop("verdict-given", None)
         save_state(d, state)
         return stop("%s: the verifier did not answer (%s) — fix the verifier or its provider argv, then `chongdae run`" % (task["id"], review.get("summary") or review.get("status") or "no verdict"))
-    if review["verdict"] == "reject":
+    if review["verdict"] == "reject" or (ts.get("reinstated") or {}).get("findings"):
         gone = [o["finding"] for o in (ts.get("overruled") or {}).get("findings") or []]
         standing = [f for f in review.get("findings", []) if f not in gone]
+        standing += [o["finding"] for o in (ts.get("reinstated") or {}).get("findings", [])]
         for o in (ts.get("overruled") or {}).get("findings") or []:
             print("  %s: the verifier's finding is unfounded, overruled (recorded): %s — %s" % (task["id"], finding_line(o["finding"]), o["why"]))
         if gone and not standing:
@@ -4471,6 +4686,8 @@ def finding_line(f):
 def verdict_of(rec):
     """The verdict a task (or an attempt) stands on: the verifier's, except a reject every finding of which chongdae overruled
     (`overruled`) — that slice went on as accepted."""
+    if (rec.get("reinstated") or {}).get("findings"):
+        return "reject"
     rv = rec.get("review") or {}
     if rv.get("verdict") == "reject" and rv.get("findings"):
         gone = [o.get("finding") for o in (rec.get("overruled") or {}).get("findings") or []]
@@ -4514,7 +4731,52 @@ OTHER_HANDS = ("tests_non_claims", "checked")   # in a build's verify request, w
 NOT_RECORD = ("artifact-type", "written_by", "stage", "run", "task", "role", "target", "response")   # a request's addressing, not its record
 
 
-def unfounded(f, request):
+def quote_grounding(f, request):
+    """Use one whole-file pool for standing and runner-dropped findings; missing reads are not evidence against a quote."""
+    import stat
+    rq = str(f.get("record_quote") or "")
+    named = []
+    for m in REQUEST_FIELD.finditer(str(f.get("where") or "")):
+        if m.group(1) in request and m.group(1) not in NOT_RECORD:
+            named.append(request_field(request, m.group(1), m.group(2)))
+    spans = [s for s in re.findall(r"`([^`]+)`", rq)
+             if not (REQUEST_FIELD.fullmatch(s.strip()) and re.split(r"[.\[]", s.strip())[0] in request)]   # `built.non-claims` names a field, it quotes nothing
+    if not spans and "`" not in rq:
+        spans = [rq]
+    spans = [p for span in spans for p in re.split(r"…|\.\.\.", span)
+             if len(quote_norm(p)) >= (8 if re.search(r"…|\.\.\.", span) or "`" not in rq else 4)]
+    heads = {p.split(".")[0].split("[")[0] for p, _ in named}
+    pool = [(p, quote_norm(t)) for k, v in request.items()
+            if k not in NOT_RECORD and (k not in OTHER_HANDS or k in heads) for p, t in texts_in(v, k)]
+    root = str(request.get("target") or ".")
+    errors = []
+    paths = list(request.get("touched") or []) + list(request.get("tests") or [])
+    paths += re.findall(r"[\w.-]+(?:/[\w.-]+)*\.\w+", str(f.get("where") or ""))
+    for rel in dict.fromkeys(paths):
+        path = os.path.join(root, str(rel))
+        if not os.path.realpath(path).startswith(os.path.realpath(root) + os.sep):
+            continue
+        try:
+            if not stat.S_ISREG(os.stat(path).st_mode):
+                errors.append((rel, "not a regular file"))
+                continue
+            with io.open(path, encoding="utf-8", errors="replace") as fh:
+                pool.append((rel, quote_norm(fh.read())))
+        except FileNotFoundError:
+            continue
+        except OSError as err:
+            errors.append((rel, err.strerror or type(err).__name__))
+    found = []
+    for span in spans:
+        match = next((p for p, text in pool if quote_norm(span) in text), None)
+        if match is None:
+            break
+        found.append(match)
+    grounded = bool(spans) and len(found) == len(spans)
+    return rq, named, spans, pool, errors, ", ".join(dict.fromkeys(found)) if grounded else None
+
+
+def unfounded(f, request, cannot_check=None):
     """Why a verifier's finding is no ground for a reject, or None when it stands (or cannot be checked here). Two cases:
     its `where` names a field of the request and its record quote — each `quoted` span, or the whole when it quotes nothing —
     is not in the request's own words (the contract, the brief, the builder's report; a file `where` names or the slice
@@ -4528,15 +4790,11 @@ def unfounded(f, request):
     way (`unfounded` in its response); this is the second line."""
     if not isinstance(request, dict) or not request:
         return None
-    rq = str(f.get("record_quote") or "")
-    named = []
-    for m in REQUEST_FIELD.finditer(str(f.get("where") or "")):
-        if m.group(1) in request and m.group(1) not in NOT_RECORD:
-            named.append(request_field(request, m.group(1), m.group(2)))
-    spans = [s for s in re.findall(r"`([^`]+)`", rq)
-             if not (REQUEST_FIELD.fullmatch(s.strip()) and re.split(r"[.\[]", s.strip())[0] in request)]   # `built.non-claims` names a field, it quotes nothing
-    if not spans and "`" not in rq:
-        spans = [p for p in re.split(r"…|\.\.\.", rq) if len(quote_norm(p)) >= 8]
+    rq, named, spans, pool, errors, found = quote_grounding(f, request)
+    if errors and not found:
+        if cannot_check is not None:
+            cannot_check.extend(errors)
+        return None
     if f.get("kind") == "claim-unverified":
         contract = [quote_norm(t) for _, t in texts_in(request.get("contract"), "contract")]
         about_contract = any(quote_norm(s) and quote_norm(s) in t for s in spans for t in contract)
@@ -4548,20 +4806,9 @@ def unfounded(f, request):
                     r["command"], r.get("source") or "checked")
     if not named or not rq.strip():
         return None   # the tree, a file, a section by its title: nothing in the request to hold the quote against
-    heads = {p.split(".")[0].split("[")[0] for p, _ in named}
-    # the request's own words — the contract, the brief, the builder's report, a `where` one key off — but another hand's
-    # (the tests writer's non-claims, what chongdae checked) only when `where` names it
-    pool = [t for k, v in request.items() if k not in NOT_RECORD and (k not in OTHER_HANDS or k in heads) for _, t in texts_in(v, k)]
-    root = str(request.get("target") or ".")
-    for rel in list(request.get("touched") or []) + list(request.get("tests") or []) + re.findall(r"[\w.-]+(?:/[\w.-]+)*\.\w+", str(f.get("where") or "")):
-        path = os.path.join(root, str(rel))
-        inside = os.path.realpath(path).startswith(os.path.realpath(root) + os.sep)
-        if inside and os.path.isfile(path) and os.path.getsize(path) < 200000:
-            pool.append(io.open(path, encoding="utf-8", errors="replace").read())
-    pool = [quote_norm(t) for t in pool]
     for s in spans:
         q = quote_norm(s)
-        if len(q) < 4 or any(q in t for t in pool):
+        if len(q) < 4 or any(q in t for _, t in pool):
             continue
         elsewhere = [p for k, v in request.items() if k not in NOT_RECORD for p, t in texts_in(v, k) if q in quote_norm(t)]
         where = ", ".join(p for p, _ in named)
@@ -4712,10 +4959,77 @@ def uncommitted_work(target, plan, state):
             continue
         own = record_scope(target, t)
         mine = set(ts.get("touched") or []) | {f for f in now if scope_depth(f, t.get("scope")) is not None and (not f.startswith(rp) or in_entries(f, own))}
+        mine -= set((ts.get("held-at-add") or {}).get("claimed") or {}) - set(ts.get("touched") or [])
         for f in sorted(mine):
             if f in now:
                 out.setdefault(f, []).append(t["id"])
     return out
+
+
+def committed_version(target, path, digest):
+    """Do not call a reviewed version lost when a reachable commit still holds its content."""
+    import hashlib
+    import subprocess
+    repo, inner = repo_of(target, path, nested_repos(target))
+    cwd = os.path.join(target, repo) if repo else target
+    history = subprocess.run(["git", "log", "--all", "--format=%H", "--", inner], cwd=cwd, capture_output=True, text=True)
+    for rev in history.stdout.splitlines():
+        content = subprocess.run(["git", "show", "%s:./%s" % (rev, inner)], cwd=cwd, capture_output=True)
+        if (hashlib.sha1(content.stdout).hexdigest() if content.returncode == 0 else "gone") == digest:
+            return True
+    return False
+
+
+def uncommitted_note(target, d, plan, state, task, files=None):
+    """Warn before another task overwrites work whose finished version is still uncommitted."""
+    loose = uncommitted_work(target, plan, state)
+    groups = {}
+    for f, tids in loose.items():
+        if (f in files if files is not None else scope_depth(f, task.get("scope")) is not None or names_file(task, f)):
+            for tid in tids:
+                if tid != task["id"]:
+                    groups.setdefault(tid, []).append(f)
+    for tid, paths in sorted(groups.items()):
+        old = state["tasks"][tid].get("work-at-finish") or {}
+        lost = [f for f in paths if f in old and old[f] != file_hash(target, f) and not committed_version(target, f, old[f])]
+        print("  note: %s's work is not committed (%s) and %s holds or changes these files — commit %s's work first:%s" %
+              (tid, ", ".join(paths), task["id"], tid,
+               " %s's reviewed version of %s is no longer in the tree and no commit holds it" % (tid, ", ".join(lost)) if lost else ""))
+        for line in work_commit_lines(os.path.basename(d), plan, state, {f: [tid] for f in paths}, target):
+            print("    " + line)
+
+
+def done_line(target, plan, state, task, label="done"):
+    """Distinguish a finished judgment from a commit the session still must make."""
+    loose = uncommitted_work(target, plan, state)
+    count = sum(task["id"] in tids for tids in loose.values())
+    print("  %s %s%s" % (label, task["id"],
+          " — NOT committed: %d file(s) of its work are uncommitted; commit them now (the lines below), before another task changes them" % count if count else ""))
+    untested = state["tasks"][task["id"]].get("untested")
+    if untested:
+        print("  note: %s is untested — it changes code (%s) and no test file, and declares no tests" %
+              (task["id"], ", ".join(untested["code"])))
+
+
+def record_untested(target, task, ts):
+    """Keep the absence of tests visible even when a generic check passes."""
+    import fnmatch
+    files = set(ts.get("touched") or []) | set(held_at_start(target, task, ts)) | set(held_at_add(target, ts))
+    def test_file(f):
+        parts = f.split("/")
+        return any(p in ("test", "tests", "__tests__", "spec") for p in parts[:-1]) or any(
+            fnmatch.fnmatchcase(parts[-1], pat) for pat in ("test_*", "*_test.*", "*.test.*", "*.spec.*", "*_spec.*"))
+    extensions = ".py .js .mjs .cjs .ts .tsx .jsx .go .rs .rb .java .kt .swift .c .h .cc .cpp .hpp .cs .php .sh .lua .scala .ex .exs .vue .svelte .astro".split()
+    code = sorted(f for f in files if not test_file(f) and os.path.splitext(f)[1] in extensions and not f.startswith(record_paths(target)))
+    ts.pop("untested", None)
+    if code and not task.get("tests") and not any(test_file(f) for f in files):
+        why = "it changes code and no test file, and declares no tests"
+        ts["untested"] = {"code": code, "why": why, **stamp()}
+        note = "%s is untested — it changes code (%s) and no test file, and declares no tests" % (task["id"], ", ".join(code))
+        # Keep the exact reason as well as the paths, so close can state the limitation.
+        nc = note + "; " + why
+        if nc not in ts.setdefault("non-claims", []):
+            ts["non-claims"].append(nc)
 
 
 def work_commit_lines(run_name, plan, state, loose, target=None):
@@ -4735,8 +5049,15 @@ def work_commit_lines(run_name, plan, state, loose, target=None):
     for (tids, repo), files in groups.items():
         paths = " ".join(shlex.quote(f) for f in files)
         git = "git -C %s" % shlex.quote(repo) if repo else "git"
-        subject = "%s/%s (session): %s" % (run_name, "+".join(tids), cut(briefs.get(tids[0]) or "the work of " + ", ".join(tids), 72))
-        out += ["%s add -- %s" % (git, paths), "%s commit -m %s -- %s" % (git, shlex.quote(subject), paths)]
+        brief = briefs.get(tids[0]) or "the work of " + ", ".join(tids)
+        first = re.split(r"\. |; | — |\n", brief, maxsplit=1)[0].strip()
+        brief = " ".join(brief.split())
+        subject = "%s/%s (session)" % (run_name, "+".join(tids))
+        # A complete sentence may fit; a partial word never stands for the brief.
+        if first and len(subject + ": " + first) <= 100:
+            subject += ": " + first
+        body = " -m " + shlex.quote(brief) if subject != "%s/%s (session): %s" % (run_name, "+".join(tids), brief) else ""
+        out += ["%s add -- %s" % (git, paths), "%s commit -m %s%s -- %s" % (git, shlex.quote(subject), body, paths)]
     return out
 
 
@@ -4770,26 +5091,113 @@ def ops_patterns(target):
 _ENGINE_ON_LINE = r"(?:\S*chongdae(?:\.py)?|\$\{?\w+\}?)"
 
 
+class CommandSegment(str):
+    """Keep the executable identity for did/close without exposing quoted arguments to operation patterns."""
+    def __new__(cls, text, control):
+        value = super().__new__(cls, text)
+        value.control = control
+        return value
+
+
 def command_segments(command):
-    """A Bash line cut into its commands (at `;`, `&&`, `||`, `|` and newlines), quotes respected: an argument holding a `;`
-    is not a command boundary."""
-    out = []
-    for line in str(command or "").split("\n"):
-        try:
-            lx = shlex.shlex(line, posix=True, punctuation_chars=";&|")
-            lx.whitespace_split = True
-            toks = list(lx)
-        except ValueError:
-            out.append(line)
-            continue
-        cur = []
-        for tok in toks:
-            if tok and set(tok) <= set(";&|"):
-                out.append(" ".join(cur))
-                cur = []
+    """Read command words across lines; quoted arguments and heredoc bodies are text.
+    Keep quote provenance until shell-evaluated arguments have been expanded, so
+    operation matching and after-close use the same command boundaries.
+    """
+    if isinstance(command, CommandSegment):
+        return [command]
+    source = str(command or "")
+    out, words, pending = [], [], []
+    word, quoted, quote = "", False, None
+    ansi = False
+    delimiter = None
+    i = 0
+
+    def finish_word():
+        nonlocal word, quoted, delimiter
+        if word or quoted:
+            if delimiter is not None:
+                pending.append((word, delimiter))
+                delimiter = None
             else:
-                cur.append(tok)
-        out.append(" ".join(cur))
+                words.append((word, quoted))
+        word, quoted = "", False
+
+    def finish_segment():
+        finish_word()
+        if words:
+            visible = " ".join(w if not q else "" for w, q in words)
+            first = next((n for n, (w, _) in enumerate(words) if not re.match(r"\w+=", w)), 0)
+            name = os.path.basename(words[first][0])
+            # A quoted executable (or Python's script path) is still the command's identity.
+            identities = {first}
+            if re.fullmatch(r"python(?:\d+(?:\.\d+)*)?", name) and first + 1 < len(words):
+                identities.add(first + 1)
+            control = " ".join(w if not q or n in identities else "" for n, (w, q) in enumerate(words))
+            out.append(CommandSegment(visible, control))
+            if name in ("bash", "sh", "zsh"):
+                for n in range(first + 1, len(words) - 1):
+                    if words[n][0] == "-c":
+                        out.extend(command_segments(words[n + 1][0]))
+                        break
+            elif name == "eval":
+                out.extend(command_segments(" ".join(w for w, _ in words[first + 1:])))
+        words.clear()
+
+    while i < len(source):
+        ch = source[i]
+        if quote:
+            if ch == quote:
+                quote = None
+            elif ch == "\\" and i + 1 < len(source) and (ansi or (quote == '"' and source[i + 1] in '$`"\\\n')):
+                i += 1
+                if source[i] != "\n":
+                    word += source[i]
+            else:
+                word += ch
+            i += 1
+            continue
+        if ch in "\"'":
+            quote, quoted = ch, True
+            ansi = word == "$" and ch == "'"
+            if word == "$":
+                word = ""
+        elif ch == "\\" and i + 1 < len(source):
+            i += 1
+            if source[i] != "\n":
+                word += source[i]
+        elif ch == "#" and not word:
+            while i < len(source) and source[i] != "\n":
+                i += 1
+            continue
+        elif source.startswith("<<", i) and not source.startswith("<<<", i):
+            finish_word()
+            i += 2
+            delimiter = source[i:i + 1] == "-"
+            if delimiter:
+                i += 1
+            continue
+        elif ch in ";&|\n":
+            finish_segment()
+            if ch == "\n" and pending:
+                i += 1
+                for terminator, strip_tabs in pending:
+                    while i < len(source):
+                        end = source.find("\n", i)
+                        end = len(source) if end < 0 else end
+                        line = source[i:end]
+                        i = min(end + 1, len(source))
+                        if (line.lstrip("\t") if strip_tabs else line) == terminator:
+                            break
+                pending.clear()
+                continue
+        elif ch.isspace():
+            finish_word()
+        else:
+            word += ch
+        i += 1
+    # An unfinished quoted argument is still text; hooks must never fail a shell command.
+    finish_segment()
     return [s for s in out if s.strip()]
 
 
@@ -4797,7 +5205,7 @@ def bash_operation(target, command):
     """The part of a Bash command that reads as an operation outside the repository, or None. `chongdae.py did …` itself
     is the record, not something to record — the operation it runs is its argument."""
     for seg in command_segments(command):
-        if re.search(r"(?:^|\s)%s\s+did\b" % _ENGINE_ON_LINE, seg):
+        if re.search(r"(?:^|\s)%s\s+did\b" % _ENGINE_ON_LINE, seg.control):
             continue
         for p in ops_patterns(target):
             try:
@@ -4817,7 +5225,7 @@ def after_close(target, command):
     for seg in command_segments(command):
         if closed and bash_operation(target, seg):
             return True
-        if re.search(r"(?:^|\s)%s\s+(?:--?\S+(?:\s+[^-\s]\S*)?\s+)*close\b" % _ENGINE_ON_LINE, seg):
+        if re.search(r"(?:^|\s)%s\s+(?:--?\S+(?:\s+[^-\s]\S*)?\s+)*close\b" % _ENGINE_ON_LINE, seg.control):
             closed = True
     return False
 
@@ -4926,7 +5334,7 @@ def resend(target, d, state, task_id, retried, message=None, checked=None):
     # read of it (`seen-non-claims`), what chongdae ran
     # on it (`checked`, `checks-passed`) and which findings it overruled: a later attempt's report hid a non-claim no verifier
     # accepted for that attempt, and its verifier got old evidence
-    for key in ("review", "verified_by", "review-source", "after-source", "rejected", "reviewed_tree", "answered", "verdict-given", "seen-non-claims", "checked", "checks-passed", "checks-tree", "checks-source", "overruled"):
+    for key in ("review", "verified_by", "review-source", "review-excluded", "after-source", "rejected", "reviewed_tree", "answered", "verdict-given", "seen-non-claims", "checked", "checks-passed", "checks-tree", "checks-source", "overruled", "reinstated"):
         if key in ts:
             attempt[key] = ts.pop(key)
     if "stages" in ts:
@@ -5086,7 +5494,7 @@ def route_dispute(target, d, state, plan, task, disputed, judgment=None):
     if not made:
         attempt = {**(wts.pop("response", None) or {"status": "session"}), "reopened": {**reopened, **stamp()}, "disputed-tests": disputed,
                    **{k: wts.pop(k) for k in ("answered", "done", "touched", "seen-non-claims", "checked", "review",
-                       "review-source", "after-source", "reviewed_tree", "verdict-given", "checks-passed", "checks-tree", "checks-source") if k in wts}}
+                       "review-source", "review-excluded", "after-source", "reviewed_tree", "verdict-given", "checks-passed", "checks-tree", "checks-source") if k in wts}}
         # The amendment is new work: result witnesses and after observers belong to the old attempt.
         after = {role: rec for role, rec in wts.get("stages", {}).items() if rec.get("when") == "after"}
         if after:
@@ -5342,7 +5750,7 @@ def cmd_amend(args):
     if brief is not None:
         proposed["brief"] = brief
     if args.check:
-        proposed["checks"] = [portable_argv(shlex.split(c)) for c in args.check]
+        proposed["checks"] = [parse_check(c) for c in args.check]
         outside = check_outside_records(args.target, proposed["checks"], args.allow_outside)
         proposed.pop("checks-outside", None)
         if outside:
@@ -5354,8 +5762,8 @@ def cmd_amend(args):
              **({"delegated": delegation_record(d, args.delegated, "amend")["delegated"]} if args.delegated else {"by": signer(args)})}
     fp = contract_fingerprint(args.target, d, args.task, task=proposed)
     superseded = {}
-    for key in ("checks-passed", "checks-tree", "checks-source", "review", "review-source", "reviewed_tree",
-                "verdict-given", "verified_by", "overruled", "checked"):
+    for key in ("checks-passed", "checks-tree", "checks-source", "review", "review-source", "review-excluded", "reviewed_tree",
+                "verdict-given", "verified_by", "overruled", "reinstated", "checked"):
         if key in ts:
             superseded[key] = ts.pop(key)
     for role, answer in list((ts.get("stages") or {}).items()):
@@ -5378,6 +5786,27 @@ def cmd_amend(args):
     print("amended %s: %s; `chongdae run` sends or decides it with the amended contract; a stopped hired task still needs `retry`"
           % (args.task, "; ".join(changes)))
     return 0
+
+
+# A self-performance reason explains why the declared worker was not hired, not what the task does.
+SELF_REASONS = {
+    "owner-dialogue": "the person shapes the work turn by turn",
+    "latency": "a worker's round trip costs more than the change",
+    "capability": "the worker's sandbox lacks what the task needs — name it",
+    "provider-unavailable": "the declared provider cannot run here now",
+    "operation": "an operation outside the repository",
+    "project-rule": "the project's own rules give this work to the owning session",
+    "worker-contract": "the worker's contract cannot take it, for example tests that must pass before the build",
+}
+
+
+def self_reason(why, due):
+    """Require a class and an explanation before recording self-performance at add."""
+    because, sep, text = (why or "").partition(":")
+    if because not in SELF_REASONS or not sep or not text.strip():
+        raise SystemExit("--role session: the lock declares %r; --why requires CLASS: text explaining why the worker was not hired; " % due +
+                         "; ".join("%s: %s" % item for item in SELF_REASONS.items()))
+    return because
 
 
 def cmd_add(args):
@@ -5404,7 +5833,7 @@ def cmd_add(args):
                 dest.append(path or ".")
     elif args.evidence is not None:
         raise SystemExit("--evidence requires --inspect")
-    checks = [portable_argv(shlex.split(c)) for c in args.check or []]
+    checks = [parse_check(c) for c in args.check or []]
     outside = check_outside_records(args.target, checks, args.allow_outside)
     d = run_dir(args.target)
     if not d:
@@ -5442,10 +5871,7 @@ def cmd_add(args):
         raise SystemExit("--role nitpick with --check: a nitpick task writes the contract's tests and has no check of its own (the build that protects "
                          "them has the check); a task decided by a check is a build — leave --role out and the lock's implementer does it")
     elif role == "session" and due:
-        if not args.why:
-            raise SystemExit("--role session: the lock declares %r for a task like this — say why the session does it itself (--why), "
-                             "or leave --role out and %r does it" % (due, due))
-        own = {"instead-of": due, "why": args.why, "by": signer(args), **stamp()}
+        own = {"instead-of": due, "because": self_reason(args.why, due), "why": args.why, "by": signer(args), **stamp()}
     scope = []
     for x in args.scope or []:
         c = clean_path(x)
@@ -5508,6 +5934,7 @@ def cmd_add(args):
         ts["touched"] = []
     elif hands in SESSION_HANDS:
         ts["start"] = dirty(args.target, keep=record_scope(args.target, task))   # the session works between `add` and `run`: what changed is measured from now
+        hold_at_add(args.target, plan, state, task, ts)
         ts["records-start"] = records_snapshot(args.target)
         ts["start-head"] = head_sha(args.target)
         ts["start-heads"] = nested_heads(args.target)
@@ -5519,6 +5946,8 @@ def cmd_add(args):
         ts["no-check"] = {"why": args.why, "by": signer(args), **stamp()}
     if this_session():
         ts["added-in"] = this_session()   # whose task this is, including hired hands that may still be out after this call
+    if hands in SESSION_HANDS and not inspection:
+        uncommitted_note(args.target, d, plan, state, task)
     state["tasks"][args.id] = ts
     save_state(d, state)
     if inspection:
@@ -5577,7 +6006,7 @@ def cmd_add(args):
     if remote_mode(args.target):
         # under `sync` or `shared` a task travels when it is named: another machine cannot take a task its record has not got
         # (two clones on GitHub, 2026-10-13: `add` left tasks/ uncommitted and the other machine answered "no task T1")
-        commit_record(args.target, os.path.basename(d), "add %s — %s" % (args.id, (task.get("brief") or "")[:120]))
+        commit_record(args.target, os.path.basename(d), "add %s — %s" % (args.id, (task.get("brief") or "")))
     return 0
 
 
@@ -5601,9 +6030,8 @@ def add_checks(args, d, plan, state, checks, outside=()):
                          % (args.id, args.id, " (given: %s)" % ", ".join("--" + o for o in other) if other else ""))
     due = hire(declared, {"role": "implementer", "requires": task.get("requires")})[1] is not None and task["role"] == "session"
     if due and not ts.get("self-performed"):
-        if not args.why:
-            raise SystemExit("add %s --check: the lock declares an implementer for a task a check decides — say why the session does it itself (--why)" % args.id)
-        ts["self-performed"] = {"instead-of": "implementer", "why": args.why, "by": signer(args), **stamp()}
+        ts["self-performed"] = {"instead-of": "implementer", "because": self_reason(args.why, "implementer"),
+                                "why": args.why, "by": signer(args), **stamp()}
     task["checks"] = checks
     if outside:
         task["checks-outside"] = list(outside)
@@ -5902,10 +6330,8 @@ def cmd_did(args):
     journal["status"] = "finished"
     save(journal_path, journal)
     bad = [r for r in recs if r["exit"]]
-    subject = (short_command(recs[0]["command"]) + " -> exit %d" % recs[0]["exit"] if len(commands) == 1
-               else "%d operation(s)%s: %s" % (len(recs), " (stopped at %d of %d)" % (first_bad, len(commands)) if first_bad else "",
-                                                 short_join(["%s -> %d" % (short_command(r["command"], 60), r["exit"]) for r in recs], 150)))
-    commit_record(args.target, os.path.basename(d), "did %s: %s" % (args.task, subject))   # cut at argument boundaries already, never inside a marker
+    detail = "\n".join("%s -> exit %s" % (r["command"], r["exit"]) for r in recs)
+    commit_record(args.target, os.path.basename(d), "did %s" % args.task, body=detail)
     for r in recs:
         print("did %s: `%s` -> exit %d%s — recorded on %s, signed %s%s" % (
             args.task, r["command"], r["exit"], "" if r.get("ran", True) else " (it did not run)", args.task, signer_text(r["signer"]),
@@ -6139,7 +6565,19 @@ def kept_tail(said, n=6):
     """An output's last n meaningful lines: blank lines, rules and a tool's version banner are not what it answered —
     guin-site kept "⛅️ wrangler 4.143.1 (update available 4.149.0)" and a row of ─ as half of a deletion's tail."""
     lines = [l.rstrip() for l in str(said).strip().split("\n")]
-    meant = [l for l in lines if l.strip() and not any(p.match(l.strip()) for p in CHATTER)]
+    # Python prints a source line below warnings; Node prints a tracing hint.
+    meant, warning = [], False
+    for l in lines:
+        if re.match(r"^(?:.*:\d+: \w*Warning:|\(node:\d+\) \w*Warning:)", l):
+            warning = True
+            continue
+        if re.match(r"^\w*Warning: Enable tracemalloc", l):
+            continue
+        if warning and (l.startswith((" ", "\t")) or l.startswith("(Use `node --trace-warnings")):
+            continue
+        warning = False
+        if l.strip() and not any(p.match(l.strip()) for p in CHATTER):
+            meant.append(l)
     return (meant or lines)[-n:]
 
 
@@ -6196,7 +6634,8 @@ def take_over(target, d, state, task, ts, why, who, extra=None, checked=None):
     tid = task["id"]
     taken = {"from": task["role"], "why": why, "by": who, **(extra or {}), **stamp()}
     ts["taken"] = taken
-    ts["self-performed"] = {"instead-of": task["role"], "why": why, "by": who, "taken-over": True, **stamp()}
+    ts["self-performed"] = {"instead-of": task["role"], "why": why, "by": who, "taken-over": True,
+                            **({"because": "capability"} if (extra or {}).get("for-lack") else {}), **stamp()}
     for key in ("touched_by_provider", "checks-ran-overruled", "accepted"):
         ts.pop(key, None)
     was = ts.pop("performed_by", None)   # who made the stopped attempt goes with that attempt; the task's hands are the session's now
@@ -6548,7 +6987,7 @@ def cmd_close(args):
         if ts.get("lease-held"):
             release_result(args.target, d, tid, ts, only_mine=True)   # the run ends: what this session held goes back
     save_state(d, state)
-    commit_record(args.target, os.path.basename(d), "close — %s (%d done, %d open)" % (plan.get("goal", ""), sum(ts["status"] == "done" for ts in state["tasks"].values()), len(open_)), also=wrote)
+    commit_record(args.target, os.path.basename(d), "close (%d done, %d open)" % (sum(ts["status"] == "done" for ts in state["tasks"].values()), len(open_)), also=wrote, body=plan.get("goal", ""))
     dropped = [tid for tid, ts in state["tasks"].items() if ts["status"] == "dropped"]
     said = said_last_run(args.target, d, state)
     print("closed %s: %d task(s) done, %d open (%s)%s. non-claims: %s" % (os.path.basename(d), sum(ts["status"] == "done" for ts in state["tasks"].values()), len(open_), ", ".join(open_) or "-",
@@ -6623,6 +7062,10 @@ def cmd_retry(args):
     d = run_dir(args.target)
     state = load_state(d)
     ts = state["tasks"].get(args.task, {})
+    if (ts.get("unread-accepts") and ts.get("verdict-given")
+            and ts["unread-accepts"][-1].get("at") == ts["verdict-given"].get("at")
+            and not ts.get("review") and not ts.get("rejected")):
+        raise SystemExit("%s: the eyes accepted without reading — `chongdae run %s` asks them again" % (args.task, args.task))
     stopped = (ts.get("response") or {}).get("status") not in (None, "done") or ts.get("rejected")
     # a provider's decisions wait for `accept`; not accepting them and sending the task out again is the other answer the stop
     # offers — the work is rejected, and the attempt (decisions included) stays in the record
@@ -6779,6 +7222,7 @@ def cmd_adopt(args):
         if t2["id"] == args.task or o.get("status") in CLOSED:
             continue
         affected = bool(set(files) & (set(o.get("touched") or []) | set(o.get("shared") or {}) |
+                        set((o.get("held-at-add") or {}).get("files") or []) |
                         {f for a in o.get("adopted") or [] if isinstance(a, dict) for f in a.get("files") or []}))
         if o.get("status") == "todo" and isinstance(o.get("start"), dict):
             affected = affected or any(o["start"].get(f) != (now.get(f) or file_hash(args.target, f)) for f in files)
@@ -6802,6 +7246,9 @@ def cmd_adopt(args):
         gave = [f for f in files if f in (o.get("touched") or [])]
         if gave:
             o["touched"] = [f for f in o["touched"] if f not in files]
+        if o.get("held-at-add"):
+            gave += [f for f in o["held-at-add"]["files"] if f in files]
+            o["held-at-add"]["files"] = [f for f in o["held-at-add"]["files"] if f not in files]
         for a in o.get("adopted") or []:
             if isinstance(a, dict) and set(a.get("files") or []) & set(files):
                 gave += [f for f in a["files"] if f in files]
@@ -6966,7 +7413,7 @@ def cmd_report(args):
                 if not (ts.get("taken") or {}).get("for-lack"):   # chongdae's own reason when it took a task for lack: counted below, not a stamp
                     stamp(own.get("why"), "%s/%s" % (name, tid))
                 findings.append({"kind": "self-performed", "where": "%s/%s" % (name, tid), "layer": "observation",
-                                 "text": "the session did this itself instead of the lock's %s (decided by %s): %s" % (own.get("instead-of"), signer_text(own.get("by")), own.get("why"))})
+                                 "text": "the session did this itself instead of the lock's %s (decided by %s): %s" % (own.get("instead-of"), signer_text(own.get("by")), ("[" + own["because"] + "] " if own.get("because") else "") + (own.get("why") or ""))})
             # judgments the session signed as itself (no `--by NAME`): not a person's decision, and said so — a reviewer
             # reading delegations must not take them for the owner's
             no_check = ts.get("no-check") or {}
@@ -7214,7 +7661,8 @@ def run_times(target, d, state, commits=None):
         created, c_src = commits[0][0], "git"
     ended, e_src = (state.get("ended") or {}).get("at"), "record"
     if not ended and state.get("status") == "complete":
-        closing = [at for at, subj in commits if re.match(r"%s: (close|complete) — " % re.escape(name), subj)]
+        # Older records put the goal in the subject; newer ones put it in the body.
+        closing = [at for at, subj in commits if re.match(r"%s: (?:close(?: \(\d+ done, \d+ open\))?|complete)(?: — |$)" % re.escape(name), subj)]
         ended, e_src = (closing[-1], "git") if closing else ((commits[-1][0], "git: the run's last record commit") if commits else (None, None))
     return created, c_src, ended, e_src
 
@@ -7295,7 +7743,7 @@ def task_story(run_d, task, ts, day, run_end, tasks=None):
     # who did it: the role, and who stood in it
     own = ts.get("self-performed")
     if isinstance(own, dict):
-        out.append("  self-performed: the session instead of the lock's %s — by %s at %s: %s" % (own.get("instead-of"), signer_text(own.get("by")), when(own.get("at"), day), own.get("why")))
+        out.append("  self-performed: the session instead of the lock's %s — by %s at %s: %s" % (own.get("instead-of"), signer_text(own.get("by")), when(own.get("at"), day), ("[" + own["because"] + "] " if own.get("because") else "") + (own.get("why") or "")))
     if ts.get("no-check"):
         rec = ts["no-check"]
         out.append("  no check decides it — by %s at %s: %s" % (signer_text(rec.get("by")), when(rec.get("at"), day), rec.get("why")))
@@ -7753,7 +8201,10 @@ def cmd_show(args):
         print("parent: %s / task %s%s" % (link["run"], link.get("task", "?"), " (held at gen %s)" % link["gen"] if link.get("gen") else ""))
     for cid, clink, cstatus, counts, where in child_runs(target, os.path.basename(d)):
         print("child %s — task %s: %s (%s) [%s]" % (cid, clink.get("task", "?"), cstatus, ", ".join("%d %s" % (n, k) for k, n in sorted(counts.items())) or "no tasks", where))
-    print(tally_text(run_tally(d, plan, state)))
+    # Include reason classes in the overview as well as each task's self-performed line.
+    reasons = sorted({ts["self-performed"]["because"] for ts in state["tasks"].values()
+                      if (ts.get("self-performed") or {}).get("because")})
+    print(tally_text(run_tally(d, plan, state)) + (" · reasons: " + ", ".join(reasons) if reasons else ""))
     tasks = all_tasks(plan, state)
     for task in tasks:
         for l in task_story(d, task, state["tasks"].get(task["id"], {}), day, ended, state["tasks"]):
@@ -7947,7 +8398,7 @@ def main(argv=None):
             p.add_argument("--prune", action="store_true", help="with --list: delete released markers older than lease-ceiling (a take of such a key then counts its generation from the record)")
         if name == "add":
             p.add_argument("id")
-            p.add_argument("--role", default=None, help="who does it. Left out, the lock says: a task with --check goes to its `implementer`, one that writes --tests to its `nitpick`, anything else to this session. `session` where the lock declares a provider needs --why (recorded); `subagent`: the session's own sub-agent (the host's Agent tool) — declared hands, not self-performed (a lock role may name `subagent` as its provider too); any role the lock declares can be named outright")
+            p.add_argument("--role", default=None, help="Self-performance --why classes: " + "; ".join("%s: %s" % item for item in SELF_REASONS.items()) + ". Who does it. Left out, the lock says: a task with --check goes to its `implementer`, one that writes --tests to its `nitpick`, anything else to this session. `session` where the lock declares a provider needs --why (recorded); `subagent`: the session's own sub-agent (the host's Agent tool) — declared hands, not self-performed (a lock role may name `subagent` as its provider too); any role the lock declares can be named outright")
             p.add_argument("--inspect", nargs="+", metavar="PATH", help="read-only inspection: paths it reads, owns nothing")
             p.add_argument("--evidence", nargs="+", metavar="PATH", help="record paths whose new or changed files decide the inspection")
             p.add_argument("--scope", nargs="+", default=None, metavar="PATH", help="the files and directories this task's hands own (project-relative). While scoped tasks are open, a changed file is the open task's whose scope holds it most narrowly, not whichever finishes first; a file in two scopes, or in none, is said at the finish with the `adopt` that settles it. Unscoped tasks keep the window rule")

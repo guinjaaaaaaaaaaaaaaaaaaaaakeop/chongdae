@@ -413,7 +413,9 @@ def test_judgments_are_notarized_as_record_only_commits_with_utc_times():
         assert run("close", "--target", pj.dir)[0] == 0
 
         log = subprocess.run(["git", "log", "--format=§%s", "--name-only"], cwd=pj.dir, capture_output=True, text=True).stdout
-        assert "init (session) — g" in log and "confirm T1 (by kim)" in log and "close — g (1 done, 0 open)" in log, log   # a judgment's commit names the run's goal: the log reads without opening the record
+        assert "init (session)" in log and "confirm T1 (by kim)" in log and "close (1 done, 0 open)" in log, log   # a judgment's commit names its action and task in the subject, never cut
+        bodies = subprocess.run(["git", "log", "--format=%s%n%b"], cwd=pj.dir, capture_output=True, text=True).stdout
+        assert "close (1 done, 0 open)\ng" in bodies, bodies   # the run's goal is in the close commit's body: the log reads without opening the record
         for block in log.split("§"):   # per commit: the notary commits (run-*) carry record files only
             lines = [l for l in block.splitlines() if l.strip()]
             if lines and lines[0].startswith("run-"):
@@ -1511,9 +1513,9 @@ def test_the_record_carries_what_replays_a_run_and_nothing_of_this_machine():
             plugin_check = "%s/.claude/plugins/cache/m/mangsang/1.5.0/mangsang.py" % home
             code, out = run("add", "T1", "--check", "python3 -c pass " + plugin_check + " " + home + "/x", "--role", "session", "--target", pj.dir)
             assert code != 0 and "--why" in out, out   # the lock has an implementer: the session doing a build itself is a decision, with a reason
-            assert run("add", "T1", "--check", "python3 -c pass " + plugin_check + " " + home + "/x", "--role", "session", "--why", "one line, quicker than a call", "--target", pj.dir)[0] == 0
+            assert run("add", "T1", "--check", "python3 -c pass " + plugin_check + " " + home + "/x", "--role", "session", "--why", "latency: one line, quicker than a call", "--target", pj.dir)[0] == 0
             ts = pj.state()["tasks"]["T1"]
-            assert ts["self-performed"]["instead-of"] == "implementer" and ts["self-performed"]["why"] == "one line, quicker than a call", ts["self-performed"]
+            assert ts["self-performed"]["instead-of"] == "implementer" and ts["self-performed"]["why"] == "latency: one line, quicker than a call" and ts["self-performed"]["because"] == "latency", ts["self-performed"]
             assert ts["def"]["checks"] == [["python3", "-c", "pass", "{plugin:mangsang}/mangsang.py", "~/x"]], ts["def"]["checks"]
             assert chongdae.resolve_argv(pj.dir, ["~/x"]) == [home + "/x"]
             write(os.path.join(pj.dir, "a.py"), "x = 1\n")
@@ -1989,8 +1991,8 @@ def test_the_lock_says_who_does_a_task_and_the_session_says_why_when_it_does_it_
         assert code == 0 and "implementer does it (the lock's provider)" in out, out
         code, out = run("add", "own", "--check", sys.executable + " -c pass", "--role", "session", "--target", pj.dir)
         assert code != 0 and "--why" in out and "'implementer'" in out, out
-        assert run("add", "own", "--check", sys.executable + " -c pass", "--role", "session", "--why", "a one-line fix", "--target", pj.dir)[0] == 0
-        assert run("add", "own2", "--check", sys.executable + " -c pass", "--role", "session", "--why", "a one-line fix", "--by", "kim", "--target", pj.dir)[0] == 0
+        assert run("add", "own", "--check", sys.executable + " -c pass", "--role", "session", "--why", "latency: a one-line fix", "--target", pj.dir)[0] == 0
+        assert run("add", "own2", "--check", sys.executable + " -c pass", "--role", "session", "--why", "latency: a one-line fix", "--by", "kim", "--target", pj.dir)[0] == 0
         defs = {tid: ts["def"]["role"] for tid, ts in pj.state()["tasks"].items()}
         assert defs == {"plan": "session", "model": "session", "tests": "nitpick", "build": "implementer", "own": "session", "own2": "session"}, defs
         assert run("run", "plan", "model", "tests", "build", "own", "own2", "--target", pj.dir)[0] == 0
@@ -2055,7 +2057,7 @@ def test_the_runner_places_the_reviewer_when_a_run_ends():
         assert st["reviewed"]["said"] == "review-1: 2 objection(s)" and st["reviewed"]["wrote"] == ["reviews/review-1.json"] and st["reviewed"]["by"]["argv"][1] == reviewer, st["reviewed"]
         assert json.load(open(os.path.join(pj.dir, "reviews", "review-1.json")))["runs"] == [os.path.basename(chongdae.run_dir(pj.dir))], "the reviewer saw the run complete"
         shown = subprocess.run(["git", "show", "--name-only", "--format=%s", "HEAD"], cwd=pj.dir, capture_output=True, text=True).stdout
-        assert shown.startswith(os.path.basename(chongdae.run_dir(pj.dir)) + ": close — g") and "reviews/review-1.json" in shown, shown
+        assert shown.startswith(os.path.basename(chongdae.run_dir(pj.dir)) + ": close (1 done, 0 open)") and "reviews/review-1.json" in shown, shown
         assert not subprocess.run(["git", "status", "--porcelain", "--", "reviews", ".chongdae"], cwd=pj.dir, capture_output=True, text=True).stdout.strip(), "the review and the record are committed, nothing of them left over"
     with Project() as pj:
         # no reviewer declared: the run closes, and the record says nobody reviewed it
@@ -2315,7 +2317,7 @@ def test_the_session_disputes_its_own_builds_tests_and_the_fix_survives_the_next
             write(os.path.join(pj.dir, "test_a.py"), "# wrong\n")
             assert run("run", "--target", pj.dir)[0] == 0
             check = sys.executable + " -c \"import sys; sys.exit(0 if open('test_a.py').read() == '# right\\n' and open('src.py').read() else 1)\""
-            code, out = run("add", "build", "--role", "session", "--why", "the worker's sandbox cannot bind a port", "--tests", "test_a.py", "--check", check, "--target", pj.dir)
+            code, out = run("add", "build", "--role", "session", "--why", "capability: the worker's sandbox cannot bind a port", "--tests", "test_a.py", "--check", check, "--target", pj.dir)
             assert code == 0 and "--tests: files build may not change — its judgment restores any change it makes to them" in out and "chongdae dispute build" in out, out
             write(os.path.join(pj.dir, "src.py"), "x = 1\n")
             write(os.path.join(pj.dir, "test_a.py"), "# right\n")   # the session fixes the test while building
@@ -2323,7 +2325,7 @@ def test_the_session_disputes_its_own_builds_tests_and_the_fix_survives_the_next
             assert code == chongdae.DECISION and "changed the contract's tests" in out, out
             assert open(os.path.join(pj.dir, "test_a.py")).read() == "# wrong\n", "the judgment restored the contract's tests"
             # the self-defeating fix: a task with a check that protects the very tests it would correct
-            code, out = run("add", "tests-fix", "--role", "session", "--why", "fix", "--tests", "test_a.py", "--check", check, "--target", pj.dir)
+            code, out = run("add", "tests-fix", "--role", "session", "--why", "latency: fix", "--tests", "test_a.py", "--check", check, "--target", pj.dir)
             assert code != 0 and "build's judgment restored test_a.py" in out and "chongdae dispute build --tests test_a.py" in out, out
             assert run("dispute", "build", "--tests", "nope.py", "--why", "x", "--target", pj.dir)[0] != 0, "only the build's protected tests"
             assert run("dispute", "tests", "--tests", "test_a.py", "--why", "x", "--target", pj.dir)[0] != 0, "a tests task protects nothing"
@@ -2633,8 +2635,8 @@ def test_an_omitted_by_is_the_session_and_readers_say_so():
         write(os.path.join(pj.dir, "hunsu.lock.json"), {"roles": {"implementer": pj.fake_provider(RESPONSE_BLOCKED)}})
         assert chongdae.agent_signer(pj.dir) == agent == {"agent": "claude-code claude-opus-5-5"}
         assert run("init", "--session", "--goal", "g", "--target", pj.dir)[0] == 0
-        assert run("add", "own", "--check", sys.executable + " -c pass", "--role", "session", "--why", "a one-line fix", "--target", pj.dir)[0] == 0
-        assert run("add", "own2", "--check", sys.executable + " -c pass", "--role", "session", "--why", "the owner said so", "--by", "kim", "--target", pj.dir)[0] == 0
+        assert run("add", "own", "--check", sys.executable + " -c pass", "--role", "session", "--why", "latency: a one-line fix", "--target", pj.dir)[0] == 0
+        assert run("add", "own2", "--check", sys.executable + " -c pass", "--role", "session", "--why", "owner-dialogue: the owner said so", "--by", "kim", "--target", pj.dir)[0] == 0
         assert run("add", "c", "--why", "a note leaves nothing a check can read", "--brief", "a note", "--target", pj.dir)[0] == 0
         code, out = run("claim", "c", "--target", pj.dir)
         assert code == 0 and "c claimed by the session (claude-code claude-opus-5-5)" in out, out
@@ -2663,8 +2665,8 @@ def test_an_omitted_by_is_the_session_and_readers_say_so():
         assert "by the session (claude-code claude-opus-5-5)" in [l for l in shown.splitlines() if "retried at" in l][0], shown
         doc = json.loads(run("report", "--target", pj.dir)[1])
         own = sorted(f["text"] for f in doc["findings"] if f["kind"] == "self-performed")
-        assert own == ["the session did this itself instead of the lock's implementer (decided by kim): the owner said so",
-                       "the session did this itself instead of the lock's implementer (decided by the session (claude-code claude-opus-5-5)): a one-line fix"], own
+        assert own == ["the session did this itself instead of the lock's implementer (decided by kim): [owner-dialogue] owner-dialogue: the owner said so",
+                       "the session did this itself instead of the lock's implementer (decided by the session (claude-code claude-opus-5-5)): [latency] latency: a one-line fix"], own
         judged = {f["text"].split(" decided by")[0] for f in doc["findings"] if f["kind"] == "session-judged"}
         assert judged == {"no check", "drop", "claim", "retry after attempt 1"}, doc["findings"]   # a no-check reason the session gave is its judgment too
         assert all(f["by"]["agent"] == agent["agent"] and f["layer"] == "observation" and "not a person" in f["text"] for f in doc["findings"] if f["kind"] == "session-judged")
@@ -2800,10 +2802,10 @@ def test_tests_the_contract_deleted_are_sent_as_deleted_tests_never_demanded_and
         assert not os.path.exists(os.path.join(pj.dir, "tests", "test_old.py")), "nothing recreates it"
         assert "deleted by the contract: tests/test_old.py (t deleted it)" in run("show", "--target", pj.dir)[1]
         # a session build accepts the deleted file at `add` (it would refuse any other absent test), and is refused when it recreates it
-        code, out = run("add", "c", "--role", "session", "--why", "one line", "--check", sys.executable + " -c pass",
+        code, out = run("add", "c", "--role", "session", "--why", "latency: one line", "--check", sys.executable + " -c pass",
                         "--tests", "tests/test_old.py", "tests/test_keep.py", "--target", pj.dir)
         assert code == 0 and "deleted by the contract" in out, out
-        assert run("add", "e", "--role", "session", "--why", "x", "--check", sys.executable + " -c pass", "--tests", "tests/nowhere.py", "--target", pj.dir)[0] != 0
+        assert run("add", "e", "--role", "session", "--why", "latency: x", "--check", sys.executable + " -c pass", "--tests", "tests/nowhere.py", "--target", pj.dir)[0] != 0
         write(os.path.join(pj.dir, "tests", "test_old.py"), "# back again\n")
         write(os.path.join(pj.dir, "c.py"), "x = 1\n")
         code, out = run("run", "--target", pj.dir)
@@ -2850,8 +2852,8 @@ def test_did_runs_one_operation_records_it_whatever_the_exit_and_report_lists_it
         assert first == {"command": did_command([sys.executable, "-c", "import sys; print('deployed ' + sys.argv[1])", "--why"], pj.dir), "exit": 0,
                          "tail": ["deployed --why"], "why": "deploy the site", "approved-in": "source:at-63", "signer": agent}, first
         assert did[1]["exit"] == 3 and did[1]["signer"] == "kim" and "approved-in" not in did[1]
-        log = subprocess.run(["git", "log", "--format=%s"], cwd=pj.dir, capture_output=True, text=True).stdout
-        assert "did ops:" in log, log
+        log = subprocess.run(["git", "log", "--format=%s%n%b"], cwd=pj.dir, capture_output=True, text=True).stdout
+        assert ": did ops\n" in log and "-> exit 0" in log, log
         out = run("show", "--target", pj.dir)[1]
         assert "did at" in out and "-> exit 0 — deploy the site; approved in source:at-63" in out and "| no such bucket" in out, out
         found = [f for f in json.loads(run("report", "--target", pj.dir)[1])["findings"] if f["kind"] == "did"]
@@ -3590,8 +3592,8 @@ def test_did_keeps_a_script_outside_the_project_a_sensible_subject_a_meaningful_
             o = rec["outside"][0]
             assert o["arg"] == 1 and o["sha256"] == hashlib.sha256(body.encode("utf-8")).hexdigest() and o["content"] == body and o["size"] == len(body.encode("utf-8")), o
             assert rec["tail"] == ["before: 41 objects", "deleted 41; after: 0 objects"], rec["tail"]
-            subject = subprocess.run(["git", "log", "-1", "--format=%s"], cwd=pj.dir, capture_output=True, text=True).stdout
-            assert "'<outside:empty_r2.py>' -> exit 0" in subject, subject
+            subject, _, body = subprocess.run(["git", "log", "-1", "--format=%s%n%b"], cwd=pj.dir, capture_output=True, text=True).stdout.partition("\n")
+            assert subject.endswith(": did ops") and "'<outside:empty_r2.py>' -> exit 0" in body, (subject, body)
             f = [x for x in json.loads(run("report", "--target", pj.dir)[1])["findings"] if x["kind"] == "did"][0]
             assert "the program it ran (empty_r2.py) is outside the project: sha256" in f["text"], f
             assert "(empty_r2.py) is outside the project" in run("show", "--target", pj.dir)[1]
@@ -3606,8 +3608,8 @@ def test_did_keeps_a_script_outside_the_project_a_sensible_subject_a_meaningful_
             assert int(after) == int(before) + 1, (before, after)
             did = pj.state()["tasks"]["ops"]["did"]
             assert [(r["exit"], r["batch"]) for r in did[1:]] == [(0, {"of": 3, "n": 1}), (2, {"of": 3, "n": 2})], did
-            subject = subprocess.run(["git", "log", "-1", "--format=%s"], cwd=pj.dir, capture_output=True, text=True).stdout
-            assert subject.startswith(os.path.basename(chongdae.run_dir(pj.dir)) + ": did ops: 2 operation(s) (stopped at 2 of 3)"), subject
+            subject, _, body = subprocess.run(["git", "log", "-1", "--format=%s%n%b"], cwd=pj.dir, capture_output=True, text=True).stdout.partition("\n")
+            assert subject == os.path.basename(chongdae.run_dir(pj.dir)) + ": did ops" and [l.rsplit(" -> ", 1)[1] for l in body.strip().splitlines()] == ["exit 0", "exit 2"], (subject, body)
             assert run("did", "ops", "--each", each, "--target", pj.dir, "--", "echo")[0] != 0, "a command or a file, not both"
         finally:
             shutil.rmtree(scratch, ignore_errors=True)
@@ -3802,8 +3804,8 @@ def test_done_is_committed_when_it_is_made():
         assert run("add", "contract", "--why", "a test task: no check decides it", "--brief", "write the contract", "--target", pj.dir)[0] == 0
         write(os.path.join(pj.dir, "PLAN.md"), "# p\n")
         assert run("run", "--target", pj.dir)[0] == 0
-        log = subprocess.run(["git", "log", "-1", "--format=%s", "--name-only"], cwd=pj.dir, capture_output=True, text=True).stdout
-        assert log.startswith(os.path.basename(chongdae.run_dir(pj.dir)) + ": done contract — write the contract") and "tasks/contract.json" in log, log
+        log = subprocess.run(["git", "log", "-1", "--format=%s%n%b", "--name-only"], cwd=pj.dir, capture_output=True, text=True).stdout
+        assert log.startswith(os.path.basename(chongdae.run_dir(pj.dir)) + ": done contract\nwrite the contract") and "tasks/contract.json" in log, log
         assert not subprocess.run(["git", "status", "--porcelain", "--", ".chongdae"], cwd=pj.dir, capture_output=True, text=True).stdout.strip()
 
 
@@ -4032,7 +4034,7 @@ def test_close_stops_on_uncommitted_work_and_on_what_the_reviewer_finds_the_tree
         assert st["status"] == "complete" and st["closed-anyway"]["standing"] == [{"kind": "cq-failed", "where": "records-kept", "text": "record-table lost a projection"}], st.get("closed-anyway")
         assert any("1 reviewer objection(s) the tree could answer (cq-failed 1)" in n for n in st["non-claims"]), st["non-claims"]
         shown = subprocess.run(["git", "show", "--name-only", "--format=%s", "HEAD"], cwd=pj.dir, capture_output=True, text=True).stdout
-        assert ": close — g" in shown and "reviews/review-1.json" in shown, shown
+        assert ": close (1 done, 0 open)" in shown and "reviews/review-1.json" in shown, shown
     with Project() as pj:   # nothing the tree can answer: close goes through as before
         subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "base"], cwd=pj.dir)
         write(os.path.join(pj.dir, "hunsu.lock.json"), {"roles": {"reviewer": [sys.executable, "-c", "import json, os; os.makedirs('reviews', exist_ok=True); "
@@ -4406,6 +4408,7 @@ if __name__ == "__main__":
         "test_verifier_reads", "test_close_review", "test_worktree_host", "test_adopt_record",
         "test_amend", "test_outside_checks", "test_check_plan", "test_inspection",
         "test_task_reader", "test_task_records", "test_checked_red", "test_red_evidence", "test_freshness_speed",
+        "test_verifier_answers", "test_command_text", "test_task_work", "test_check_witness",
     ])
     concurrent = unittest.TextTestRunner(verbosity=2).run(suite)
     failed += len(concurrent.failures) + len(concurrent.errors)

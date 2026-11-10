@@ -1,5 +1,7 @@
 """PreToolUse hook on Bash — an operation outside the repository (a deploy, a push, a deletion) is recorded with `did`.
 
+Only command words match: heredoc bodies and quoted arguments are text; shell-evaluated arguments are read as commands.
+
 Payload (stdin JSON): {"cwd": ..., "tool_name": "Bash", "tool_input": {"command": ...}}. Never refuses: when a run is in
 progress and the command reads as an operation (chongdae.bash_operation: `git push`, `npm run deploy`, `wrangler deploy`,
 …; hunsu.json settings.chongdae.ops-patterns replaces the list), it adds one line of context naming the `did` that records

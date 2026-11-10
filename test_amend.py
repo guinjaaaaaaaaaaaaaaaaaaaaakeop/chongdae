@@ -545,17 +545,17 @@ class C10_TestsRouting(Base):
     def test_C10_2_role_session_with_why_is_recorded_self_performed_instead_of_nitpick(self):
         with Project() as pj:
             self.project(pj)
-            self.add(pj, "t", "--role", "session", "--why", "one case, quicker than a call", "--tests", "test_a.py", "--brief", "add a case")
+            self.add(pj, "t", "--role", "session", "--why", "latency: one case, quicker than a call", "--tests", "test_a.py", "--brief", "add a case")
             ts = self.task(pj)
             self.assertEqual(ts["def"]["role"], "session")
             self.assertIn("self-performed", ts, "the session's take of a tests task is not on record")
             self.assertEqual(ts["self-performed"]["instead-of"], "nitpick", ts["self-performed"])
-            self.assertEqual(ts["self-performed"]["why"], "one case, quicker than a call")
+            self.assertEqual(ts["self-performed"]["why"], "latency: one case, quicker than a call")
 
     def test_C10_2_role_session_with_why_new_tests_is_self_performed_instead_of_nitpick(self):
         with Project() as pj:
             self.project(pj)
-            self.add(pj, "t", "--role", "session", "--why", "the sandbox has no port", "--tests", "test_new.py", "--brief", "new suite")
+            self.add(pj, "t", "--role", "session", "--why", "capability: the sandbox has no port", "--tests", "test_new.py", "--brief", "new suite")
             ts = self.task(pj)
             self.assertEqual(ts["self-performed"]["instead-of"], "nitpick", ts.get("self-performed"))
 
@@ -595,11 +595,11 @@ class C10_TestsRouting(Base):
     def test_C10_3_dispute_reopens_a_session_taken_tests_task_with_the_writer_it_has(self):
         with Project() as pj:
             self.project(pj)
-            self.add(pj, "tests", "--role", "session", "--why", "one case", "--tests", "test_a.py", "--brief", "add a case")
+            self.add(pj, "tests", "--role", "session", "--why", "latency: one case", "--tests", "test_a.py", "--brief", "add a case")
             write(os.path.join(pj.dir, "test_a.py"), "# wrong\n")
             code, out = run("run", "tests", "--target", pj.dir)
             self.assertEqual(code, 0, out)
-            self.add(pj, "build", "--role", "session", "--why", "no port", "--tests", "test_a.py", "--check", PASS, "--brief", "build")
+            self.add(pj, "build", "--role", "session", "--why", "capability: no port", "--tests", "test_a.py", "--check", PASS, "--brief", "build")
             code, out = run("dispute", "build", "--tests", "test_a.py", "--why", "the fixture is wrong", "--target", pj.dir)
             self.assertEqual(code, 0, out)
             ts = self.task(pj, "tests")
