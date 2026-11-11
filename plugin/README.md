@@ -688,6 +688,20 @@ Any source change runs checks again, even when the verdict stands. This applies 
 task waits at its human gate. `still working:` for a pending verifier names the other tasks and says this boundary;
 for pending checks it says any source change while they run runs them again.
 
+A task runs the lock's scoped `coherence` argvs after its own checks, in the same tracked process and call budget.
+An argv is scoped by `{files}` or `{base}`: `{base}` becomes the task's start head, and a word exactly `{files}`
+expands to the verifier's work set: touched files, adopted and held-at-add files, held-at-start files, the builder's
+counted files and later changes, and its own records. Paths are sorted, unique, project-relative with `/` separators;
+nested repository files use `<nested>/<path>`, deleted files count, and an empty set adds no words. No shell or quoting
+is involved: spaces and non-ASCII letters stay in one word. Expanded paths stay literal through execution, the
+recorded command and the reuse key, including `~` and `{plugin:NAME}` in filenames. Only declared words resolve
+plugin and home paths, with the usual Python fallback for the executable. `{files}` inside a larger word fails the check.
+Tasks finished on the session's word run it too, once finishable; inspections and artifacts at a path do not.
+Without git there is no measure, so it is skipped with a task non-claim. Failure is answered inside the task:
+re-read the relations, reconfirm what holds, revise or retire what does not, then run the task again. A hired build
+is not resent for this failure. A pass reaches the verifier under `checked`; identical-tree reuse includes the resolved
+argv, files and base, while `repeat-checks` disables reuse. The plan's own checks stay unchanged, as do recheck and landing.
+
 Within a run, a passing check on an identical tree is reused for the same resolved argv, including `--checked`
 commands. The identity includes every git-visible file, records and nested repositories, excluding `.chongdae/`.
 The cache stays in the run's local directory. The task's check record carries `reused` (`{task, at}`) and `run` says
@@ -980,7 +994,14 @@ files it left out, so a reviewer sees the boundary rather than a silence.
 
 A merge run's plan has one task — chongdae's own `recheck`, plus whatever the lock's `coherence` role names (argv with
 `{base}`; e.g. mangsang's `observe --reset --at {base}` and `impact`) — behind a human gate. No `coherence` role: the
-plan says so as a non-claim.
+plan says so as a non-claim. In the merge plan, `{files}` expands to the tracked project files differing from the merge
+base, including both sides of a rename. These paths are relative to the project directory, even when the project
+is a repository subdirectory, just as for tasks. A `{files}` inside a larger word, or git failing to list those files from
+the base, refuses init with a usage message before a run is created. Argvs without `{files}` keep their behaviour
+whatever the base. An unscoped coherence argv names neither `{files}` nor `{base}` and judges the whole model:
+no task of this run is held to it; only a merge run runs it. The first init, add or run that sees it in a running
+run records and prints that limit with the argvs once; a merge run does not say it. A run that is no longer running
+keeps its record unchanged, and close does not repeat a standing notice carried by the preceding run.
 
 `recheck` re-runs every completed run's checks on the merged tree; a run's `done` was true on its own branch and must
 be true again. Red normally means fix the tree, not the record. The one other reading: a red check whose contract was
@@ -1052,7 +1073,10 @@ own diff goes to it, with or without checks and whoever did the work. An empty d
 with its reason and time, shown by run and show; no request or verifier is spawned. A recorded operation is read through
 report. Inspections and artifacts at a `path` keep their own decision rules. Without a declared verifier nothing changes.
 The verifier gets the contract, what the task touched (and what changed after the builder answered, told apart),
-and only its own records under `excluded.record-paths` (`records`, excluding files already in `touched`).
+and its records as work in `touched` and under `records` (its `files` list); `excluded.record-paths` is empty.
+When records are present, `records.judge` asks the verifier to check a record asserting a judgment — a confirmation,
+a re-read, an approval — as a claim, not context: what it stores must support the judgment it asserts, and it must
+not cite a person who did not say so.
 Records already changed and unchanged at start stay out unless the task carries them as `held-at-add`.
 Another open task's scope and unchanged files pinned by another task's finish stay out. The window includes committed changes; older records without a snapshot use `start-head`.
 It also gets the builder's report, and what chongdae itself ran on the tree and saw (`checked`: `{command, exit,

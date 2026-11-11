@@ -46,3 +46,6 @@ the owning session), or `worker-contract` (the worker's contract cannot take it,
 The class and explanation are required when an implementer or tests writer is due; with no role due the free no-check reason remains.
 A scoped task carries unclaimed work changed before add as `held-at-add`; it reaches the verifier and the commit lines.
 These files alone do not finish a no-check task on an unnamed `run`; select the task after its work is finished.
+
+The coherence check receives `{files}` as literal project-relative paths; plugin placeholders and home expansion apply only to declared command words.
+A failed coherence check is answered inside the task that staled the relations: re-read them there, reconfirm what still holds, and revise or retire what does not before running the task again.

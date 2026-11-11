@@ -168,16 +168,31 @@ def merge_plan(target, base):
     One task — recheck and coherence are one job on one tree — behind one human gate. chongdae names its own recheck; the
     coherence checks come from the `coherence` role (hunsu.lock.json `roles`, argv with `{base}`) — a runner never names a provider."""
     checks = [["python3", "{plugin:chongdae}/chongdae.py", "recheck"]]   # run_checks falls back to `python` where only that exists
+    literals = [[]]   # Expanded paths stay literal when this stored plan is run or rechecked.
     brief = "Every completed run's checks, green again on the merged tree. Red means fix the tree, not the record."
-    coherence = providers(target, {}).get("coherence")
+    coherence = coherence_argvs(target, {})
     non_claims = []
     if coherence:
-        checks += [[a.replace("{base}", base) for a in argv] for argv in (coherence if isinstance(coherence[0], list) else [coherence])]
+        # Validate every declaration before listing files; a failed listing is not an empty scope.
+        for argv in coherence:
+            expand_coherence(argv, base, [])
+        files = []
+        if any("{files}" in argv for argv in coherence):
+            import subprocess
+            diff = subprocess.run(["git", "diff", "--name-only", "-z", "--no-renames", "--relative", base, "--", "."], cwd=target,
+                                  capture_output=True, text=True, encoding="utf-8", errors="surrogateescape")
+            if diff.returncode:
+                raise ValueError("git could not list files from merge base %s" % base)
+            files = sorted(set(filter(None, diff.stdout.split("\0"))))
+        for argv in coherence:
+            indices = []
+            checks.append(expand_coherence(argv, base, files, indices))
+            literals.append(indices)
         brief += " Relations one branch confirmed on what the other changed: re-read each; retire or re-confirm, until the coherence check is green."
     else:
         non_claims.append("no `coherence` role in the lock: what a semantic model would have said about this merge is not said")
     return {"artifact-type": "chongdae/plan@1", "goal": "merge (base %s)" % base, "kind": "merge", "base": base, "providers": {"merger": "session"},
-            "non-claims": non_claims, "tasks": [{"id": "merge", "role": "merger", "needs": [], "gate": "human", "checks": checks, "brief": brief}]}
+            "non-claims": non_claims, "tasks": [{"id": "merge", "role": "merger", "needs": [], "gate": "human", "checks": checks, "checks-literal": literals, "brief": brief}]}
 
 
 # ---------------------------------------------------------------- the record and the work: what a run writes, and where
@@ -437,7 +452,7 @@ def non_claims(state, unseen=False):
     return out
 
 
-LOCK_STANDING = ("no `reviewer` role in the lock", "the lock's `reviewer` names no `{since}`")   # a non-claim about the lock, not the run: the same at every close until the lock changes
+LOCK_STANDING = ("unscoped coherence:", "no `reviewer` role in the lock", "the lock's `reviewer` names no `{since}`")   # a non-claim about the lock, not the run: the same at every close until the lock changes
 
 
 def said_last_run(target, d, state):
@@ -1506,19 +1521,19 @@ def review_source(ctx, task, ts):
     return {p: h for p, h in tree.items() if included(p)}
 
 
-def cached_check(target, d, tid, given, repeat=False, output=None):
+def cached_check(target, d, tid, given, repeat=False, output=None, literal=()):
     """Serialize cache lookup and execution across detached workers in this run."""
     import time
     while True:
         with CommandLock(target, work_path(d, "check-passes.lock")) as lock:
             if lock.acquired:
-                return cached_check_locked(target, d, tid, given, repeat, output)
+                return cached_check_locked(target, d, tid, given, repeat, output, literal)
         time.sleep(0.05)
 
 
-def cached_check_locked(target, d, tid, given, repeat, output):
+def cached_check_locked(target, d, tid, given, repeat, output, literal=()):
     """Keep passing execution evidence and full output local, keyed by argv and all visible files."""
-    argv = resolve_check_argv(target, given)
+    argv = resolve_check_argv(target, given, literal)
     before = check_source(target)
     key = CheckPlan.digest([argv, before])
     path = work_path(d, "check-passes.json")
@@ -1578,6 +1593,78 @@ def own_records(target, plan, state, task, ts):
         if other["id"] != task["id"] and state["tasks"].get(other["id"], {}).get("status") not in ("done", "dropped", "skipped"):
             scopes.extend(other.get("scope") or [])
     return sorted(p for p in changed if scope_depth(p, scopes) is None)
+
+
+def task_work(target, plan, state, task, ts):
+    """One attribution for the reader and coherence, so neither misses the other's work."""
+    measured_now = scoped_measure(target, plan, state, task["id"], ts, providers(target, plan))[0] or []
+    built = ts.get("touched_by_provider")
+    touched = sorted(set(built if built is not None else measured_now))
+    since = sorted(set(measured_now) - set(touched)) if built is not None else []
+    held = held_at_start(target, task, ts) if isinstance(ts.get("start"), dict) else []
+    records = sorted(set(own_records(target, plan, state, task, ts)) |
+                     {f for f in touched + since + held if f.startswith(record_paths(target))})
+    return {"touched": touched, "touched_since": since, "held-at-start": held, "records": records,
+            "files": sorted(set(touched + since + held + records))}
+
+
+def coherence_argvs(target, plan):
+    """Only argv providers are executable checks; session and native roles are not."""
+    role = providers(target, plan).get("coherence")
+    if not isinstance(role, list) or not role:
+        return []
+    argvs = role if isinstance(role[0], list) else [role]
+    return [argv for argv in argvs if argv and all(isinstance(w, str) for w in argv)]
+
+
+def scoped_coherence(argv):
+    """Include malformed file placeholders so they fail rather than silently escape."""
+    return any("{files}" in w or "{base}" in w for w in argv)
+
+
+def expand_coherence(argv, base, files, literal=None):
+    """Expand declared words first: a path containing a placeholder remains a literal path."""
+    for word in argv:
+        if "{files}" in word and word != "{files}":
+            raise ValueError("%s: {files} must be a word of its own" % word)
+    expanded = []
+    for word in argv:
+        if word == "{files}":
+            # Carry provenance across the checks process: filenames are not resolver syntax.
+            if literal is not None:
+                literal.extend(range(len(expanded), len(expanded) + len(files)))
+            expanded.extend(files)
+        else:
+            expanded.append(word.replace("{base}", base))
+    return expanded
+
+
+def task_coherence(ctx, task, ts):
+    """No repository window means no scoped judgment; keep that limit with the task."""
+    if task.get("path") or task.get("kind") == "inspection":
+        return []
+    argvs = [a for a in coherence_argvs(ctx["target"], ctx["plan"]) if scoped_coherence(a)]
+    if not argvs:
+        return []
+    if not ts.get("start-head"):
+        note = "coherence not run: without git there is no start head and no measure of this task's work"
+        if note not in ts.setdefault("non-claims", []):
+            ts["non-claims"].append(note)
+        return []
+    return argvs
+
+
+def coherence_notice(target, plan, state):
+    """Record the lock's unscoped limit once when this run first sees it."""
+    if plan.get("kind") == "merge":
+        return
+    argvs = [a for a in coherence_argvs(target, plan) if not scoped_coherence(a)]
+    if argvs:
+        note = ("unscoped coherence: these argvs name neither {files} nor {base}, so they judge the whole model; "
+                "tasks of this run are not held to them; only a merge run runs them: " + "; ".join(shlex.join(a) for a in argvs))
+        if note not in state.setdefault("non-claims", []):
+            state["non-claims"].append(note)
+            print("  non-claim: " + note)
 
 
 def file_hash(target, path):
@@ -1887,10 +1974,12 @@ def check_runs(target, checks):
     return failed, ran
 
 
-def resolve_check_argv(target, given):
-    """Share resolution with the execution plan so its key names exactly what runs."""
-    argv = resolve_argv(target, given)
-    if argv and argv[0] in ("python", "python3") and not shutil.which(argv[0]):
+def resolve_check_argv(target, given, literal=()):
+    """Resolve declarations only: expanded paths must also remain literal in the cache key."""
+    literal = set(literal)
+    resolved = iter(resolve_argv(target, [word for i, word in enumerate(given) if i not in literal]))
+    argv = [word if i in literal else next(resolved) for i, word in enumerate(given)]
+    if argv and 0 not in literal and argv[0] in ("python", "python3") and not shutil.which(argv[0]):
         alt = next((c for c in ("python3", "python") if shutil.which(c)), None)
         argv = [alt or sys.executable] + argv[1:]
     return argv
@@ -1937,8 +2026,12 @@ class CheckPlan:
         if changed:
             return changed
         failed = []
+        # Recheck may omit the self-recheck command; retain the original word indices.
+        declarations = iter(enumerate(task.get("checks", checks)))
+        literals = task.get("checks-literal") or []
         for given in checks:
-            argv = resolve_check_argv(self.target, given)
+            index = next(i for i, command in declarations if command == given) if literals else 0
+            argv = resolve_check_argv(self.target, given, literals[index] if index < len(literals) else ())
             env = dict(os.environ)
             key = (tuple(argv), os.path.realpath(self.target), self.digest(env), self.source)
             repeat = task.get("repeat-checks") is True or self.source is None
@@ -1969,8 +2062,10 @@ def checks_worker(target, job):
     failed = changed_check_files(target, spec)
     ran = []
     if not failed:
-        for given in spec.get("checks") or []:
-            bad, rec = cached_check(target, spec["run-dir"], spec["id"], given, spec.get("repeat-checks", False))
+        literals = spec.get("checks-literal") or []
+        for i, given in enumerate(spec.get("checks") or []):
+            bad, rec = cached_check(target, spec["run-dir"], spec["id"], given, spec.get("repeat-checks", False),
+                                    literal=literals[i] if i < len(literals) else ())
             failed += bad
             ran.append(rec)
     save(job[:-len(".json")] + ".result.json", {"failed": failed, "ran": ran, "tree": dirty(target) or {},
@@ -1995,7 +2090,9 @@ def budget_checks(target, d, task, again=True, result_source=None):
     cleanup_completion_acks(d, load_state(d))
     pending = load(pend_path)
     checks = task.get("checks") or []
-    if pending and pending.get("checks") != checks:
+    literals = task.get("checks-literal") or []
+    literals = literals if any(literals) else []
+    if pending and (pending.get("checks") != checks or pending.get("checks-literal", []) != literals):
         # the task's checks changed since (a dispute, a re-plan): what runs answers other checks — the one stop that is needed
         if pid_alive(pending.get("pid")):
             try:
@@ -2009,9 +2106,9 @@ def budget_checks(target, d, task, again=True, result_source=None):
         if os.path.exists(res_path):
             os.remove(res_path)
         os.makedirs(os.path.dirname(job), exist_ok=True)
-        save(job, {"checks": checks, "id": task["id"], "checks-outside": task.get("checks-outside", []), "keep": record_scope(target, task), "run-dir": d, "repeat-checks": task.get("repeat-checks", False)})
+        save(job, {"checks": checks, "checks-literal": literals, "id": task["id"], "checks-outside": task.get("checks-outside", []), "keep": record_scope(target, task), "run-dir": d, "repeat-checks": task.get("repeat-checks", False)})
         pending = launch_pending(pend_path, [sys.executable, os.path.abspath(__file__), "_checks", os.path.abspath(target), job],
-                                 target, base + ".log", checks=checks)
+                                 target, base + ".log", checks=checks, **{"checks-literal": literals})
     else:
         resume_launch(pend_path, pending)   # recover an intent whose caller died before/just after Popen
     global _CALL_DEADLINE
@@ -3655,6 +3752,8 @@ def run_pass(args):
     if state["status"] != "running":
         print("run %s is %s" % (os.path.basename(d), state["status"]))
         return 0
+    coherence_notice(target, plan, state)
+    save_state(d, state)
     ctx = {"args": args, "target": target, "d": d, "plan": plan, "state": state, "providers": providers(target, plan),
            "me": me(target), "claimed_now": set(), "waited": False,   # claimed_now: files the tasks completed in this call recorded as theirs
            "named": set(getattr(args, "tasks", None) or []), "held": [], "theirs": [], "blocked": [], "subagents": []}
@@ -3915,7 +4014,7 @@ def run_hands(ctx, task, ts, who):
         # not the tree: a worker ran `sh -c '…'` and reported it as the host's shell wrapper spelled it, twice, and
         # each refusal cost a build and a wait. Green here: the report stands as the worker's word, with the
         # mismatch on record. Red here: back to the hands, as before.
-        code, failed = own_checks(ctx, task, ts) if task.get("checks") else (None, ["no checks"])
+        code, failed = own_checks(ctx, task, ts, coherence=False) if task.get("checks") else (None, ["no checks"])
         if code is not None:
             return code
         if not failed:
@@ -4203,7 +4302,7 @@ def hiring_stop(ctx, task, ts, response, caps, lines):
                 % (tid, response.get("summary") or "the member cannot do this task here", used, why), *(list(lines) + ([task["brief"]] if task.get("brief") else [])))
 
 
-def own_checks(ctx, task, ts):
+def own_checks(ctx, task, ts, coherence=True):
     """(code, failed): the task's checks as chongdae runs them, inside the call's budget (budget_checks). Passed on this very
     tree already — an earlier call of this attempt ran them, and the call handed back before the verifier answered — they
     are not run again: the next call resumes from the stage it stopped at. What passed is kept (`checks-passed`) and goes to
@@ -4212,21 +4311,39 @@ def own_checks(ctx, task, ts):
     changed = changed_check_files(target, task)
     if changed:
         return None, changed
-    commands = [shlex.join(str(a) for a in c) for c in task.get("checks") or []]
+    extra = task_coherence(ctx, task, ts) if coherence else []
+    try:
+        work = task_work(target, ctx["plan"], state, task, ts) if extra else {}
+        literals = list(task.get("checks-literal") or [[] for _ in task.get("checks") or []])
+        expanded = []
+        for argv in extra:
+            indices = []
+            expanded.append(expand_coherence(argv, ts["start-head"], work["files"], indices))
+            literals.append(indices)
+        extra = expanded
+        # No inserted words keeps the existing pending and passed-check identity.
+        literals = literals if any(literals) else []
+    except ValueError as err:
+        return None, [str(err)]
+    checked_task = {**task, "checks": list(task.get("checks") or []) + extra, "checks-literal": literals}
+    commands = [shlex.join(str(a) for a in c) for c in checked_task["checks"]]
     passed = ts.get("checks-passed")
-    if (isinstance(passed, dict) and [r.get("command") for r in passed.get("ran") or []] == commands
+    if (isinstance(passed, dict) and passed.get("checks-literal", []) == literals
+            and [r.get("command") for r in passed.get("ran") or []] == commands
             and "checks-source" in ts and ts["checks-source"] == check_source(target)):
         return None, []
     witness = {}
-    code, failed, ran = budget_checks(target, d, task, result_source=witness)
+    code, failed, ran = budget_checks(target, d, checked_task, result_source=witness)
     if code is not None:
         return waiting_stop("%s (its checks)" % task["id"], failed), None
     if failed:
+        if extra and any(r.get("exit") for r in ran[len(task.get("checks") or []):]):
+            failed.append("The relations on this task's work owe a re-read inside this task: reconfirm what still holds, revise or retire what does not, then `chongdae run %s`." % task["id"])
         ts.pop("checks-passed", None)
         ts.pop("checks-tree", None)
         ts.pop("checks-source", None)
     else:
-        ts["checks-passed"] = {"ran": ran, **stamp()}
+        ts["checks-passed"] = {"ran": ran, "checks-literal": literals, **stamp()}
         ts["checks-tree"] = dirty(target) or {}
         ts["checks-source"] = witness.get("source")
     save_state(d, state)
@@ -4328,6 +4445,12 @@ def decide_task(ctx, task, ts, who, path):
         problems = CHECKS[task["produces"]](path, state)
         if problems:
             return stop("%s does not pass its shape check — fix it, then `chongdae run`" % task["produces"], *problems)
+    if not task.get("checks") and task_coherence(ctx, task, ts):
+        code, failed = own_checks(ctx, task, ts)
+        if code is not None:
+            return code
+        if failed:
+            return stop("session agent: %s: checks failed" % task["id"], *failed)
     # Every decided task uses the same reader rule, including tasks decided by their hands' word.
     if not task.get("path"):
         code = place_eyes(ctx, task, ts, who, own_measure() or [])
@@ -4345,7 +4468,7 @@ def decide_task(ctx, task, ts, who, path):
     current = review_source(ctx, task, ts)
     if any(ts[key] != current for key in ("review-source", "after-source") if key in ts):
         return invalidate_review(ctx, task, ts, current, reason="source changed before the after stage finished")
-    if task.get("checks"):
+    if task.get("checks") or task_coherence(ctx, task, ts):
         code, failed = own_checks(ctx, task, ts)
         if code is not None:
             return code
@@ -4421,12 +4544,12 @@ def decide_task(ctx, task, ts, who, path):
 
 def produced_freshness(ctx, task, ts):
     """A confirmation judges the produced, checked artifact, not later edits."""
-    if not task.get("checks") and not ts.get("review") and not ts.get("nothing-to-review"):
+    if not task.get("checks") and not task_coherence(ctx, task, ts) and not ts.get("review") and not ts.get("nothing-to-review"):
         return None
     current = review_source(ctx, task, ts)
     missing = ts.get("review") and "review-source" not in ts
     if not missing and all(ts[key] == current for key in ("review-source", "after-source") if key in ts):
-        if task.get("checks"):
+        if task.get("checks") or task_coherence(ctx, task, ts):
             code, failed = own_checks(ctx, task, ts)
             if code is not None:
                 return code
@@ -4503,8 +4626,8 @@ def place_eyes(ctx, task, ts, who, touched):
         save_state(d, state)
         print("still working: %s: source changed after its checks passed; `chongdae run %s` reruns them before asking the verifier." % (task["id"], task["id"]))
         return WAITING
-    records = own_records(target, plan, state, task, ts)
-    held = held_at_start(target, task, ts) if isinstance(ts.get("start"), dict) else []
+    work = task_work(target, plan, state, task, ts)
+    records, held = work["records"], work["held-at-start"]
     if not (touched or ts.get("touched_by_provider") or records or held):
         ts.setdefault("nothing-to-review", {"why": "Nothing in the tree changed in this task's window; there is nothing for a reader to review. Any did is read through report.",
                                            **stamp()})
@@ -4515,18 +4638,20 @@ def place_eyes(ctx, task, ts, who, touched):
     if not ts.get("review"):
         built = {k: (ts.get("response") or {}).get(k) for k in ("summary", "verified", "non-claims")} if ts.get("response") else None
         by_provider = ts.get("touched_by_provider")
-        extra = {"touched": by_provider if by_provider is not None else touched, "tests": task.get("tests", []), "built": built,
-                 "excluded": {"record-paths": [p for p in records if p not in (touched or [])]}}
+        extra = {"touched": sorted(set(work["touched"] + records)), "tests": task.get("tests", []), "built": built,
+                 "excluded": {"record-paths": []}}
+        if records:
+            extra["records"] = {"files": records, "judge": "A record asserting a judgment — a confirmation, a re-read, an approval — is a claim to check, not context. Check that what the record stores supports the judgment it asserts, and that it does not cite a person who did not say so."}
         # how `touched` was attributed, when not by the measure alone: files a judgment gave this task, files another task's
         # finish pinned into its start, files its own word names that were already changed when it was added. A verifier that
         # saw only `touched: []` beside a tree holding the work rejected guin-site's escape-build on every retry
         attribution = {k: v for k, v in (("adopted", sorted(adopted_files(ts))), ("pinned-at-finish-of", ts.get("pinned") or {}),
-                                         ("held-at-start", held_at_start(target, task, ts) if isinstance(ts.get("start"), dict) else []),
+                                         ("held-at-start", work["held-at-start"]),
                                          ("held-at-add", held_at_add(target, ts))) if v}
         if attribution:
             extra["attribution"] = attribution
         if by_provider is not None:
-            extra["touched_since"] = sorted(set(touched) - set(by_provider))   # changed after the builder answered: a person's plan edits, say — not the builder's
+            extra["touched_since"] = work["touched_since"]   # changed after the builder answered: a person's plan edits, say — not the builder's
         if ts.get("start-head") or ts.get("start-heads"):
             # the commits the work is measured from, the project's (".") and each nested repository's: a diff from there holds
             # work committed during the task, which `git diff HEAD` shows as nothing (sagoforce 10-26: every task committed)
@@ -5646,11 +5771,16 @@ def cmd_init(args):
         base = args.base or subprocess.run(["git", "merge-base", "HEAD^1", "HEAD^2"], cwd=target, capture_output=True, text=True).stdout.strip()[:12]
         if not base:
             raise SystemExit("--merge needs --base REV (HEAD is not a merge commit, so no merge base can be found)")
-        plan = merge_plan(target, base)
+        try:
+            plan = merge_plan(target, base)
+        except ValueError as err:
+            # Invalid substitutions refuse init before it writes a run, like an invalid plan.
+            raise SystemExit(str(err))
     else:
         plan = {"artifact-type": "chongdae/plan@1", "goal": args.goal, "kind": "bootstrap", "tasks": BOOTSTRAP,
                 "providers": {"questions": "session", "plan": "session"}}   # the plan says who provides; chongdae assumes nothing
     state = {"status": "running", "tasks": {t["id"]: {"status": "todo"} for t in plan["tasks"]}, "non-claims": list(plan.get("non-claims", []))}
+    coherence_notice(target, plan, state)
     state["created"] = {**stamp(), "based_on": head_sha(target), **({"nested": nested_heads(target)} if nested_repos(target) else {})}   # the commit this run starts from: its place in history is ancestry, not its id's timestamp
     locked = locked_versions(target)
     if locked:
@@ -5841,6 +5971,8 @@ def cmd_add(args):
     plan, state = load_plan(d), load_state(d)
     if state.get("status") != "running":
         raise SystemExit("no run in progress — `chongdae init --session`")
+    coherence_notice(args.target, plan, state)
+    save_state(d, state)
     if plan.get("kind") != "session":
         raise SystemExit("tasks are added to session runs only; a plan run's tasks are the plan's")
     if remote_mode(args.target) == "shared":

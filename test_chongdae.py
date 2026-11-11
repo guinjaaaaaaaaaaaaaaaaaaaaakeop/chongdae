@@ -290,10 +290,11 @@ def test_verifier_before_the_gate_protected_tests_and_delegation_policy():
         assert os.path.exists(os.path.join(chongdae.run_dir(pj.dir), "local", "S1.verify.request.json")), "the verifier's request as sent is kept in local/"
         req = json.load(open(os.path.join(chongdae.run_dir(pj.dir), "local", "S1.verify.request.json"), encoding="utf-8"))
         assert req["stage"] == "verify" and req["role"] == "verifier" and req["built"]["summary"] == "added count" and req["tests"] == ["test_x.py"]
-        assert req["touched"] == ["count.txt"] and "touched_since" in req, req   # what the builder changed; a human's edits would be in touched_since
-        # what the record paths left out is said, so `touched` beside a changed hunsu.json is not a record that lies (guin-site, 2026-09-28):
-        # the builder rewrote it in its call, so it is this task's own record
-        assert req["excluded"] == {"record-paths": ["hunsu.json"]}, req.get("excluded")
+        assert req["touched"] == ["count.txt", "hunsu.json"] and "touched_since" in req, req   # what the builder changed, its own record with it; a human's edits would be in touched_since
+        # the builder rewrote hunsu.json in its call, so it is this task's own record: work the verifier judges, named again under
+        # `records` with the rule for a record that asserts a judgment; nothing the task changed is left out by rule
+        assert req["excluded"] == {"record-paths": []}, req.get("excluded")
+        assert req["records"]["files"] == ["hunsu.json"] and "claim" in req["records"]["judge"], req.get("records")
         assert run("confirm", "S1", "--by", "kim", "--target", pj.dir)[0] != 0, "nothing produced yet"
         code, out = run("status", "--target", pj.dir)
         assert code == 0 and "is running" in out and "1 open: S1" in out, out
@@ -4409,6 +4410,7 @@ if __name__ == "__main__":
         "test_amend", "test_outside_checks", "test_check_plan", "test_inspection",
         "test_task_reader", "test_task_records", "test_checked_red", "test_red_evidence", "test_freshness_speed",
         "test_verifier_answers", "test_command_text", "test_task_work", "test_check_witness",
+        "test_task_coherence", "test_verifier_records",
     ])
     concurrent = unittest.TextTestRunner(verbosity=2).run(suite)
     failed += len(concurrent.failures) + len(concurrent.errors)

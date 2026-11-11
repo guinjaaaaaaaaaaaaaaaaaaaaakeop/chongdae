@@ -8,13 +8,13 @@ This entry records this checkout's environment and maintenance constraints.
 ## Installed release and working source
 
 [hunsu.json](hunsu.json) declares the environment; [hunsu.lock.json](hunsu.lock.json)
-locks hunsu 2.6.0, chongdae 2.3.0, mangsang 2.4.0, jokbo 2.2.0,
-hacheong 2.3.0, and dwitbuk 2.3.0, installed at project scope for Claude Code.
+locks hunsu 2.7.0, chongdae 2.4.1, mangsang 2.5.0, jokbo 2.3.0,
+hacheong 2.3.0, and dwitbuk 2.4.0, installed at project scope for Claude Code.
 Use each locked plugin's `<root>` from the SessionStart line to call its engine;
 never select an engine with a glob over the plugin cache.
 
 This checkout is the source of the next chongdae. The installed locked release N
-(currently the locked chongdae 2.3.0) orchestrates every change to it, producing N+1;
+(currently the locked chongdae 2.4.1) orchestrates every change to it, producing N+1;
 never orchestrate with this checkout's `plugin/chongdae.py` (or the root shim that runs it).
 N+1 manages nothing, not even the next change, until it is bumped in every manifest,
 published, installed, re-locked by hunsu, and loaded by a new session.

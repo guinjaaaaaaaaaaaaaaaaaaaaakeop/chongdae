@@ -2,9 +2,10 @@
 
 A record file (under the lock's `record-paths`, or hunsu's files) is nobody's work unless a task's own `--scope` names it.
 Still, the records a task wrote in its window are its own facts: they are listed on the task as `records` (beside `touched`,
-never inside it), shown by `show`, named by the `run` that finishes the task, and the verifier's request lists only them
-under `excluded.record-paths` — never another open task's scoped records, never a record another task's finish already
-listed, never a record that already differed, unchanged, when the task started.
+never inside it), shown by `show`, named by the `run` that finishes the task, and the verifier's request carries only them
+as work to judge — in its `touched` and under `records` (`excluded.record-paths` stays empty) — never another open task's
+scoped records, never a record another task's finish already listed, never a record that already differed, unchanged, when
+the task started.
 
   python -m unittest test_task_records
 """
@@ -192,7 +193,7 @@ class SessionTaskRecords(unittest.TestCase):
 
 
 class HiredBuildPacket(unittest.TestCase):
-    """D3 — the verifier's request carries only the build's own records under excluded.record-paths."""
+    """D3 — the verifier's request carries only the build's own records, as work: in `touched` and under `records`."""
 
     def test_D3_verify_request_lists_only_the_builds_own_records(self):
         with Project() as pj:
@@ -224,11 +225,13 @@ class HiredBuildPacket(unittest.TestCase):
             seen = glob.glob(os.path.join(c.run_dir(pj.dir), "local", "build.verify*.request.json.seen"))
             self.assertEqual(len(seen), 1, "the verifier was sent one request: %r" % seen)
             req = json.load(open(seen[0], encoding="utf-8"))
-            self.assertEqual(req.get("touched"), ["src.py"], req.get("touched"))
+            self.assertEqual(req.get("touched"), ["mangsang/own.json", "src.py"], "the build's code and its own record, the work to judge: %r" % req.get("touched"))
             self.assertEqual(req.get("touched_since"), [], req.get("touched_since"))
-            self.assertIn("excluded", req, sorted(req))
-            self.assertIn("record-paths", req["excluded"], req["excluded"])
-            listed = req["excluded"]["record-paths"]
+            self.assertEqual(req.get("excluded"), {"record-paths": []}, "no record the build changed is left out by rule: %r" % req.get("excluded"))
+            self.assertIn("records", req, sorted(req))
+            listed = req["records"].get("files")
+            for other in ("mangsang/other.json", "mangsang/pre.json"):
+                self.assertNotIn(other, req["touched"], "a record that is not the build's is not in its work: %r" % req["touched"])
             self.assertIn("mangsang/own.json", listed, "the build's own record goes to its reader")
             self.assertNotIn("mangsang/other.json", listed, "another open task's scoped record is not this build's: %r" % listed)
             self.assertNotIn("mangsang/pre.json", listed, "a record that already differed, unchanged, when the build started is not its own: %r" % listed)
@@ -262,7 +265,9 @@ class HiredBuildPacket(unittest.TestCase):
             self.assertEqual(len(seen), 1, seen)
             req = json.load(open(seen[0], encoding="utf-8"))
             self.assertIn("excluded", req, sorted(req))
-            self.assertEqual(req["excluded"].get("record-paths"), [], "a record the earlier task's finish listed, unchanged since, is not this build's: %r" % req["excluded"])
+            self.assertEqual(req["excluded"].get("record-paths"), [], req["excluded"])
+            self.assertEqual(req.get("touched"), ["src.py"], "a record the earlier task's finish listed, unchanged since, is not this build's work: %r" % req.get("touched"))
+            self.assertNotIn("records", req, "a build that changed no record of its own names none: %r" % req.get("records"))
 
 
 class EarlierVersionsTask(unittest.TestCase):

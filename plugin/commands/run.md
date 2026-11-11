@@ -9,3 +9,5 @@ The line above is the run's state (no run, or which run and what is open). To ad
 A no-check task whose only changes are its own records, held-at-start or held-at-add files stays open unnamed. Its held line names only its own records, with `adopt`; records count as work only inside its own `--scope`. Finished by name, its non-claim names those records and held-at-start files. Its non-empty own diff reaches the declared verifier; with nothing at all, the existing non-claim stands and the task records `nothing-to-review`.
 
 A done or produced line saying NOT committed leaves the work to be committed with the printed lines before another task changes it. Overlap notes name the earlier task and any overwritten reviewed version. Untested code is printed and kept as a non-claim.
+
+Scoped coherence checks follow the task's checks. Their `{files}` paths stay literal, including `~` and `{plugin:NAME}` in filenames; only declared words resolve.

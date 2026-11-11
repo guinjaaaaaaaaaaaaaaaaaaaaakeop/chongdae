@@ -5,3 +5,5 @@ argument-hint: --session [--goal "..."] | --goal "..." | --plan FILE | --merge [
 !`python3 "${CLAUDE_PLUGIN_ROOT}/chongdae.py" init $ARGUMENTS`
 
 Show the output above to the user as is. Do not interpret or act on it unless asked.
+
+The merge plan expands coherence `{files}` to paths relative to the project directory, including when it is a repository subdirectory. Those paths remain literal when the checks run.
